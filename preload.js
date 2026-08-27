@@ -21,10 +21,14 @@ contextBridge.exposeInMainWorld('api', {
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
 
-  // Fired when the user picks Undo/Redo from the Edit menu - see main.js.
+  // Fired when the user picks Undo/Redo/Save/Save As from the app menu - see main.js.
   onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),
   onMenuRedo: (callback) => ipcRenderer.on('menu:redo', callback),
+  onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
+  onMenuSaveAs: (callback) => ipcRenderer.on('menu:save-as', callback),
 
   savePdf: (docId, suggestedName) =>
     ipcRenderer.invoke('dialog:save-pdf', { docId, suggestedName }),
+  saveToPath: (docId, path) =>
+    ipcRenderer.invoke('tags:save-to-path', { docId, path }),
 });

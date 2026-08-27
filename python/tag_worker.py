@@ -263,7 +263,9 @@ def _rebuild_registry(doc_id):
 # --- command handlers --------------------------------------------------
 
 def open_document(path):
-    pdf = pikepdf.open(path)
+    # Save (as opposed to Save As) can write back over this same path, so
+    # pikepdf needs to be told up front that overwriting the input is okay.
+    pdf = pikepdf.open(path, allow_overwriting_input=True)
     doc_id = str(uuid.uuid4())
     documents[doc_id] = {
         "pdf": pdf, "elements": {}, "parent_map": {}, "counter": 0,

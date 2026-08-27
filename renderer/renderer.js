@@ -16,6 +16,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 const state = {
   docId: null,
   fileName: null,
+  savedFilePath: null,  // path last used to save this doc (Save As sets it; Save reuses it), reset per document
   tree: null,           // current full tag tree, as returned by the worker
   nodesById: new Map(), // id -> node, rebuilt every time `tree` is replaced
   mcidIndex: new Map(), // page (0-based) -> Map(mcid -> owning element node id), rebuilt with nodesById
@@ -40,7 +41,6 @@ const el = {
   btnOpen: document.getElementById('btn-open'),
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
-  btnSave: document.getElementById('btn-save'),
   btnKillDivs: document.getElementById('btn-kill-divs'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
@@ -737,6 +737,51 @@ window.addEventListener('keydown', (e) => {
   else performRedo();
 });
 
+// Up/Down arrows step the current selection through the tree in visible
+// order - i.e. the same order rows appear in the DOM, since a collapsed
+// element's children simply aren't rendered (see renderTreeNode).
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (!state.selectedNodeId) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const currentIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectedNodeId);
+  if (currentIndex === -1) return;
+
+  const nextIndex = e.key === 'ArrowUp' ? currentIndex - 1 : currentIndex + 1;
+  if (nextIndex < 0 || nextIndex >= rows.length) return;
+
+  e.preventDefault();
+  selectNode(rows[nextIndex].dataset.nodeId);
+});
+
+// Left/Right arrows collapse/expand the current selection, when it's an
+// element with children to hide.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (!state.selectedNodeId) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  const entry = state.nodesById.get(state.selectedNodeId);
+  if (!entry || entry.node.type !== 'element') return;
+  const node = entry.node;
+  if (!node.children || node.children.length === 0) return;
+
+  const collapsed = isNodeCollapsed(node);
+  if (e.key === 'ArrowRight' && collapsed) {
+    e.preventDefault();
+    toggleNodeCollapsed(node);
+  } else if (e.key === 'ArrowLeft' && !collapsed) {
+    e.preventDefault();
+    toggleNodeCollapsed(node);
+  }
+});
+
 // --- PDF.js viewer -------------------------------------------------------
 
 function base64ToUint8Array(base64) {
@@ -809,8 +854,8 @@ el.btnOpen.addEventListener('click', async () => {
 
     state.docId = opened.docId;
     state.fileName = opened.filePath.split(/[\\/]/).pop();
+    state.savedFilePath = opened.filePath; // Save overwrites the file it was opened from until Save As picks a new one
     el.fileName.textContent = state.fileName;
-    el.btnSave.disabled = false;
     el.btnKillDivs.disabled = !opened.hasStructTree;
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
@@ -825,17 +870,43 @@ el.btnOpen.addEventListener('click', async () => {
   }
 });
 
-el.btnSave.addEventListener('click', async () => {
+// Save overwrites the current file (the path it was opened from, or
+// wherever Save As last pointed it). Falls back to the Save As dialog in
+// the (normally unreachable) case there's no known path yet.
+async function performSave() {
+  if (!state.docId) return;
+  if (!state.savedFilePath) {
+    await performSaveAs();
+    return;
+  }
+  try {
+    setStatus('Saving\u2026');
+    await window.api.saveToPath(state.docId, state.savedFilePath);
+    setStatus(`Saved to ${state.savedFilePath}`);
+  } catch (err) {
+    reportError('Could not save PDF', err);
+  }
+}
+
+async function performSaveAs() {
   if (!state.docId) return;
   try {
     setStatus('Saving\u2026');
     const suggested = state.fileName ? state.fileName.replace(/\.pdf$/i, '-tagged.pdf') : 'tagged.pdf';
     const savedPath = await window.api.savePdf(state.docId, suggested);
+    if (savedPath) {
+      state.savedFilePath = savedPath;
+      state.fileName = savedPath.split(/[\\/]/).pop();
+      el.fileName.textContent = state.fileName;
+    }
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
   } catch (err) {
     reportError('Could not save PDF', err);
   }
-});
+}
+
+window.api.onMenuSave(() => performSave());
+window.api.onMenuSaveAs(() => performSaveAs());
 
 el.btnKillDivs.addEventListener('click', async () => {
   if (!state.docId) return;
