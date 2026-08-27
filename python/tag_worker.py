@@ -341,6 +341,54 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+def _count_divs(struct_obj):
+    count = 0
+    for kid in _iter_kids(struct_obj):
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            if str(kid["/S"]).lstrip("/") == "Div":
+                count += 1
+            count += _count_divs(kid)
+    return count
+
+
+def _flatten_divs(struct_obj):
+    """Recursively removes /Div struct elements from struct_obj's subtree,
+    splicing each one's own kids into its parent's /K in its place (so the
+    Div's contents are kept, just un-nested by one level). Mutates /K on
+    every ancestor whose kids changed, and reparents (/P) any surviving
+    struct-element grandkids to their new direct parent."""
+    changed = False
+    new_kids = []
+    for kid in _iter_kids(struct_obj):
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            _flatten_divs(kid)  # post-order: flatten nested Divs first
+            if str(kid["/S"]).lstrip("/") == "Div":
+                changed = True
+                for grandkid in _iter_kids(kid):
+                    if isinstance(grandkid, pikepdf.Dictionary) and "/S" in grandkid:
+                        grandkid["/P"] = struct_obj
+                    new_kids.append(grandkid)
+                continue
+        new_kids.append(kid)
+    if changed:
+        if new_kids:
+            struct_obj["/K"] = pikepdf.Array(new_kids)
+        elif "/K" in struct_obj:
+            del struct_obj["/K"]
+
+
+def kill_divs(doc_id):
+    doc = documents[doc_id]
+    struct_root = doc["elements"]["root"]
+    removed = _count_divs(struct_root)
+    if removed == 0:
+        return {"tree": _rebuild_registry(doc_id), "removed": 0, **_undo_state(doc)}
+
+    _push_undo_snapshot(doc)
+    _flatten_divs(struct_root)
+    return {"tree": _rebuild_registry(doc_id), "removed": removed, **_undo_state(doc)}
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
@@ -398,6 +446,8 @@ def main():
                     request["docId"], request["nodeId"],
                     request["newParentId"], request["newIndex"],
                 )
+            elif cmd == "kill_divs":
+                result = kill_divs(request["docId"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":

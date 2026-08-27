@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('api', {
   reorderNode: (docId, nodeId, newParentId, newIndex) =>
     ipcRenderer.invoke('tags:reorder-node', { docId, nodeId, newParentId, newIndex }),
 
+  killDivs: (docId) => ipcRenderer.invoke('tags:kill-divs', { docId }),
+
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
 

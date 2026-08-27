@@ -41,6 +41,7 @@ const el = {
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
   btnSave: document.getElementById('btn-save'),
+  btnKillDivs: document.getElementById('btn-kill-divs'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
   statusBar: document.getElementById('status-bar'),
@@ -810,6 +811,7 @@ el.btnOpen.addEventListener('click', async () => {
     state.fileName = opened.filePath.split(/[\\/]/).pop();
     el.fileName.textContent = state.fileName;
     el.btnSave.disabled = false;
+    el.btnKillDivs.disabled = !opened.hasStructTree;
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     applyFreshTree(opened.tree || null);
@@ -832,6 +834,19 @@ el.btnSave.addEventListener('click', async () => {
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
   } catch (err) {
     reportError('Could not save PDF', err);
+  }
+});
+
+el.btnKillDivs.addEventListener('click', async () => {
+  if (!state.docId) return;
+  try {
+    setStatus('Removing Div tags…');
+    const result = await window.api.killDivs(state.docId);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    setStatus(result.removed > 0 ? `Removed ${result.removed} Div tag${result.removed === 1 ? '' : 's'}.` : 'No Div tags found.');
+  } catch (err) {
+    reportError('Could not remove Div tags', err);
   }
 });
 

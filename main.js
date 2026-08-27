@@ -217,6 +217,10 @@ ipcMain.handle('tags:reorder-node', async (_event, { docId, nodeId, newParentId,
   return callWorker('reorder', { docId, nodeId, newParentId, newIndex });
 });
 
+ipcMain.handle('tags:kill-divs', async (_event, { docId }) => {
+  return callWorker('kill_divs', { docId });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });
