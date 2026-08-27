@@ -1,0 +1,430 @@
+/*
+  Design notes:
+  PDF structure roles (/H1, /P, /Table, /Figure...) are literal spec tokens,
+  the same way HTML tags are - so tag names are set in monospace and treated
+  as the one deliberately colorful element in an otherwise quiet, dark
+  workbench UI meant for long focused editing sessions. Categories of role
+  (heading / container / list / table / figure / inline / content-leaf) get
+  distinct hues so the tree is scannable at a glance without reading every
+  label.
+*/
+
+:root {
+  --bg: #1b1c21;
+  --panel: #24262d;
+  --panel-alt: #2b2e37;
+  --border: #383b46;
+  --text: #e8e9ec;
+  --text-dim: #9a9ea9;
+  --text-faint: #6d717c;
+
+  --accent: #5fb3a3;
+  --accent-strong: #86d9c7;
+
+  --cat-heading: #6fc7b6;
+  --cat-container: #7d97d9;
+  --cat-list: #a58bd0;
+  --cat-table: #d9a24a;
+  --cat-figure: #d97a94;
+  --cat-inline: #9bb0c9;
+  --cat-leaf: #6d717c;
+
+  --warn-bg: #3a2c1c;
+  --warn-border: #6b4a24;
+  --warn-text: #e3b578;
+
+  --font-ui: -apple-system, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+  --radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* --- focus visibility (this app is *about* accessibility - it should walk the walk) --- */
+:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* --- toolbar --- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.brand-mark {
+  font-family: var(--font-mono);
+  color: var(--accent-strong);
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.toolbar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.file-name {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.status-message {
+  color: var(--text-dim);
+}
+
+.btn {
+  background: var(--panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10201c;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+/* --- banner --- */
+
+.banner {
+  padding: 8px 16px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.banner-warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-bottom-color: var(--warn-border);
+}
+
+/* --- workbench layout --- */
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.6fr) minmax(280px, 1fr) 300px;
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.details-pane {
+  border-right: none;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+/* --- viewer pane --- */
+
+.page-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+.canvas-wrap {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  background: #131418;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 20px;
+}
+
+#pdf-canvas {
+  background: white;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  max-width: 100%;
+  height: auto;
+  cursor: pointer;
+}
+
+.viewer-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+/* `.viewer-placeholder`'s own `display: flex` otherwise outranks the
+   default UA `[hidden] { display: none }` rule (same specificity, but
+   author styles always beat user-agent ones) - so toggling the `hidden`
+   property alone never actually hid it, leaving an invisible-ish but
+   click-blocking layer sitting over the canvas even once a PDF was loaded. */
+.viewer-placeholder[hidden] {
+  display: none;
+}
+
+/* --- selected-tag content highlight, overlaid on the canvas --- */
+
+.highlight-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.highlight-box {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent-strong) 28%, transparent);
+  border: 1.5px solid var(--accent-strong);
+  border-radius: 2px;
+}
+
+/* --- tag tree --- */
+
+.tag-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+.tree-placeholder {
+  color: var(--text-faint);
+  padding: 8px;
+  margin: 0;
+}
+
+.tree-node {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree-node > .tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  cursor: default;
+  border: 1px solid transparent;
+}
+
+.tree-row.selectable {
+  cursor: grab;
+}
+
+.tree-row:hover {
+  background: var(--panel-alt);
+}
+
+.tree-row.selected {
+  background: var(--panel-alt);
+  border-color: var(--accent);
+}
+
+.tree-row.drag-over {
+  border-color: var(--accent-strong);
+  background: var(--panel-alt);
+}
+
+.tag-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.tag-chip[data-category="heading"] { color: var(--cat-heading); border-color: color-mix(in srgb, var(--cat-heading) 40%, transparent); }
+.tag-chip[data-category="container"] { color: var(--cat-container); border-color: color-mix(in srgb, var(--cat-container) 40%, transparent); }
+.tag-chip[data-category="list"] { color: var(--cat-list); border-color: color-mix(in srgb, var(--cat-list) 40%, transparent); }
+.tag-chip[data-category="table"] { color: var(--cat-table); border-color: color-mix(in srgb, var(--cat-table) 40%, transparent); }
+.tag-chip[data-category="figure"] { color: var(--cat-figure); border-color: color-mix(in srgb, var(--cat-figure) 40%, transparent); }
+.tag-chip[data-category="inline"] { color: var(--cat-inline); border-color: color-mix(in srgb, var(--cat-inline) 40%, transparent); }
+.tag-chip[data-category="leaf"] {
+  color: var(--cat-leaf);
+  font-style: italic;
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.tree-node-meta {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.tree-children {
+  margin: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+.missing-alt-flag {
+  color: var(--warn-text);
+  font-size: 11px;
+  border: 1px solid var(--warn-border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* --- details pane --- */
+
+.details-empty {
+  color: var(--text-faint);
+  padding: 14px;
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.details-form {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.field input,
+.field textarea {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--accent);
+}
+
+#field-role {
+  font-family: var(--font-mono);
+}
+
+.field-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* --- status bar --- */
+
+.statusbar {
+  padding: 5px 16px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}

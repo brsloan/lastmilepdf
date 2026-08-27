@@ -1,0 +1,16 @@
+{
+  "name": "pdf-tag-editor",
+  "version": "0.1.0",
+  "description": "Standalone Electron app for viewing and editing PDF accessibility (tag) structure trees.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.6.82"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Electron serves this file over file://, and Chromium's handling of
+       'self' for file:// origins is inconsistent across versions, so this
+       explicitly allows file: alongside 'self' rather than risking a
+       CSP-blocked pdf.worker.mjs load on first run. Tighten this if you
+       later serve the app over http(s) instead. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' file: blob:;" />
+  <title>PDF Tag Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="toolbar">
+    <div class="brand">
+      <span class="brand-mark">/&gt;</span>
+      <span class="brand-name">PDF Tag Editor</span>
+    </div>
+
+    <div class="toolbar-actions">
+      <button id="btn-open" class="btn btn-primary">Open PDF&hellip;</button>
+      <button id="btn-undo" class="btn btn-ghost" disabled title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btn-redo" class="btn btn-ghost" disabled title="Redo (Ctrl+Y)">Redo</button>
+      <button id="btn-save" class="btn" disabled>Save As&hellip;</button>
+    </div>
+
+    <div class="toolbar-status">
+      <span id="file-name" class="file-name"></span>
+      <span id="status-message" class="status-message"></span>
+    </div>
+  </header>
+
+  <div id="no-struct-banner" class="banner banner-warn" hidden>
+    This PDF has no accessibility structure tree (it isn't tagged). You can
+    still view it, but there is nothing to edit here yet.
+  </div>
+
+  <main class="workbench">
+
+    <section class="pane viewer-pane">
+      <div class="pane-header">
+        <span>Page Preview</span>
+        <div class="page-nav">
+          <button id="btn-prev-page" class="btn btn-ghost" disabled>&larr;</button>
+          <span id="page-indicator">&mdash;</span>
+          <button id="btn-next-page" class="btn btn-ghost" disabled>&rarr;</button>
+        </div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="pdf-canvas"></canvas>
+        <div id="highlight-layer" class="highlight-layer" aria-hidden="true"></div>
+        <div id="viewer-placeholder" class="viewer-placeholder">Open a PDF to preview it here.</div>
+      </div>
+    </section>
+
+    <section class="pane tree-pane">
+      <div class="pane-header">
+        <span>Tag Tree</span>
+      </div>
+      <div id="tag-tree" class="tag-tree">
+        <p class="tree-placeholder">No document loaded.</p>
+      </div>
+    </section>
+
+    <section class="pane details-pane">
+      <div class="pane-header">
+        <span>Tag Properties</span>
+      </div>
+
+      <p id="details-empty" class="details-empty">Select a tag in the tree to edit it.</p>
+
+      <form id="details-form" class="details-form" hidden>
+        <input type="hidden" id="field-node-id" />
+
+        <label class="field">
+          <span class="field-label">Role</span>
+          <input id="field-role" list="role-options" autocomplete="off" spellcheck="false" />
+          <datalist id="role-options">
+            <option value="Document"></option>
+            <option value="Part"></option>
+            <option value="Sect"></option>
+            <option value="Div"></option>
+            <option value="P"></option>
+            <option value="H1"></option>
+            <option value="H2"></option>
+            <option value="H3"></option>
+            <option value="H4"></option>
+            <option value="H5"></option>
+            <option value="H6"></option>
+            <option value="L"></option>
+            <option value="LI"></option>
+            <option value="Lbl"></option>
+            <option value="LBody"></option>
+            <option value="Table"></option>
+            <option value="THead"></option>
+            <option value="TBody"></option>
+            <option value="TFoot"></option>
+            <option value="TR"></option>
+            <option value="TH"></option>
+            <option value="TD"></option>
+            <option value="Caption"></option>
+            <option value="Figure"></option>
+            <option value="Formula"></option>
+            <option value="Link"></option>
+            <option value="Span"></option>
+            <option value="Quote"></option>
+            <option value="Note"></option>
+            <option value="TOC"></option>
+            <option value="TOCI"></option>
+          </datalist>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Alt text</span>
+          <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Actual text</span>
+          <textarea id="field-actual-text" rows="2" placeholder="Replacement text read instead of the visible content"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Language</span>
+          <input id="field-lang" placeholder="e.g. en-US" autocomplete="off" spellcheck="false" />
+        </label>
+
+        <div class="field-actions">
+          <button type="submit" class="btn btn-primary">Apply</button>
+          <button type="button" id="btn-cancel-edit" class="btn btn-ghost">Cancel</button>
+        </div>
+      </form>
+    </section>
+
+  </main>
+
+  <footer class="statusbar" id="status-bar">Ready.</footer>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>

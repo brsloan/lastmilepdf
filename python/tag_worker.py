@@ -1,0 +1,415 @@
+"""
+tag_worker.py
+
+Long-running sidecar process spawned by Electron's main process (see
+../main.js). Speaks newline-delimited JSON over stdin/stdout:
+
+    request:  {"id": 1, "cmd": "open", "path": "/some/file.pdf"}
+    response: {"id": 1, "result": {...}}
+              or
+              {"id": 1, "error": "message"}
+
+Why a sidecar instead of a Node-native library: pikepdf (a wrapper around
+qpdf) is the most reliable way to read and mutate a PDF's logical structure
+tree (the /StructTreeRoot object graph that PDF/UA accessibility tags live
+in), and it's Python-only. There is no equivalent low-level structure-tree
+API in the Node ecosystem, so we keep one Python process alive for the life
+of the app and talk to it over stdio rather than shelling out per-call
+(which would mean re-parsing the PDF every time).
+
+Scope / known limitations (read this before extending):
+  - Only StructElem <-> StructElem reparenting is supported by `reorder`.
+    Moving a marked-content leaf (a bare MCID or an /MCR dict) between
+    parents would also require rewriting MCIDs in the page content stream,
+    which this scaffold does not attempt.
+  - Every mutating call rebuilds and returns the *entire* tree rather than
+    patching it incrementally. This trades some efficiency for correctness:
+    node ids are just a fresh depth-first counter assigned on each rebuild,
+    so the renderer can't ever hold a stale id that silently points at the
+    wrong node after an edit.
+  - RoleMap, ParentTree, and ClassMap (optional StructTreeRoot extras) are
+    not read or written. Custom (non-standard) role names will round-trip
+    as opaque strings, but nothing here resolves them against a RoleMap.
+  - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
+    bytes) before each mutation, rather than recording inverse edits. Simple
+    and correct by construction, at the cost of an O(document size) copy per
+    edit - acceptable given every edit already rebuilds the whole tree, but
+    worth knowing if this ever needs to scale to very large PDFs edited
+    rapidly. `MAX_UNDO_DEPTH` bounds how many snapshots we hold onto.
+"""
+
+import io
+import json
+import sys
+import uuid
+
+MAX_UNDO_DEPTH = 50
+
+try:
+    import pikepdf
+except ImportError:
+    sys.stdout.write(json.dumps({
+        "id": None,
+        "error": (
+            "The 'pikepdf' package is not installed in this Python "
+            "environment. Run: pip install -r python/requirements.txt"
+        ),
+    }) + "\n")
+    sys.stdout.flush()
+    sys.exit(1)
+
+
+# doc_id -> {"pdf": pikepdf.Pdf, "elements": {node_id: Dictionary}, "parent_map": {node_id: parent_id}, "counter": int}
+documents = {}
+
+
+# --- helpers ---------------------------------------------------------------
+
+def _next_id(doc):
+    doc["counter"] += 1
+    return f"n{doc['counter']}"
+
+
+def _as_leaf_mcid(kid):
+    """If `kid` is a bare marked-content-id integer (not a Dictionary/Array/
+    etc.), return it as a Python int. Otherwise return None."""
+    if isinstance(kid, (pikepdf.Dictionary, pikepdf.Array, pikepdf.String, pikepdf.Name)):
+        return None
+    try:
+        return int(kid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_kids(struct_obj):
+    """Normalize /K into a flat Python list. /K may be absent, a single
+    Dictionary, a single bare integer, or an Array mixing all of those."""
+    kids = struct_obj.get("/K")
+    if kids is None:
+        return []
+    if isinstance(kids, pikepdf.Array):
+        return list(kids)
+    return [kids]
+
+
+def _get_string(obj, key):
+    if key not in obj:
+        return None
+    try:
+        return str(obj[key])
+    except Exception:
+        return None
+
+
+def _set_or_clear_string(obj, key, value):
+    if value:
+        obj[key] = pikepdf.String(value)
+    elif key in obj:
+        del obj[key]
+
+
+def _same_object(a, b):
+    """Identity comparison that works for indirect PDF objects, where two
+    Python-side wrapper instances can refer to the same underlying object."""
+    a_indirect = getattr(a, "is_indirect", False)
+    b_indirect = getattr(b, "is_indirect", False)
+    if a_indirect and b_indirect:
+        return a.objgen == b.objgen
+    try:
+        return a == b
+    except Exception:
+        return a is b
+
+
+def _remove_kid(parent_obj, node_obj):
+    kids = parent_obj.get("/K")
+    if kids is None:
+        return
+    if isinstance(kids, pikepdf.Array):
+        remaining = [k for k in kids if not _same_object(k, node_obj)]
+        if len(remaining) == 0:
+            del parent_obj["/K"]
+        else:
+            parent_obj["/K"] = pikepdf.Array(remaining)
+    elif _same_object(kids, node_obj):
+        del parent_obj["/K"]
+
+
+def _insert_kid(parent_obj, node_obj, index):
+    kids = parent_obj.get("/K")
+    if kids is None:
+        items = []
+    elif isinstance(kids, pikepdf.Array):
+        items = list(kids)
+    else:
+        items = [kids]
+    index = max(0, min(index, len(items)))
+    items.insert(index, node_obj)
+    parent_obj["/K"] = pikepdf.Array(items)
+
+
+def _snapshot_bytes(pdf):
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def _undo_state(doc):
+    return {"canUndo": len(doc["undo_stack"]) > 0, "canRedo": len(doc["redo_stack"]) > 0}
+
+
+def _push_undo_snapshot(doc):
+    """Call before mutating `doc["pdf"]`, once validation has passed - a
+    new edit always clears the redo stack, same as any standard editor."""
+    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
+    if len(doc["undo_stack"]) > MAX_UNDO_DEPTH:
+        doc["undo_stack"].pop(0)
+    doc["redo_stack"].clear()
+
+
+def _resolve_page_index(doc, page_obj):
+    """Map a /Pg reference (an indirect Page dictionary) to its 0-based
+    index in the document's page list, or None if it can't be resolved
+    (e.g. missing, or pointing at a page that no longer exists)."""
+    if page_obj is None:
+        return None
+    try:
+        objgen = page_obj.objgen
+    except AttributeError:
+        return None
+    return doc["page_index_by_objgen"].get(objgen)
+
+
+def _walk(doc, struct_obj, node_id, inherited_page=None):
+    role = None
+    if "/S" in struct_obj:
+        role = str(struct_obj["/S"]).lstrip("/")
+
+    # /Pg (the page a struct element's content lives on) is inheritable:
+    # if this element doesn't set it, it takes its nearest ancestor's page.
+    # Needed so the renderer can find and highlight a tag's marked content
+    # on the PDF preview.
+    own_page = inherited_page
+    resolved = _resolve_page_index(doc, struct_obj.get("/Pg"))
+    if resolved is not None:
+        own_page = resolved
+
+    node = {
+        "id": node_id,
+        "type": "root" if node_id == "root" else "element",
+        "role": role,
+        "alt": _get_string(struct_obj, "/Alt"),
+        "actualText": _get_string(struct_obj, "/ActualText"),
+        "lang": _get_string(struct_obj, "/Lang"),
+        "page": own_page,
+        "children": [],
+    }
+
+    for kid in _iter_kids(struct_obj):
+        mcid = _as_leaf_mcid(kid)
+        if mcid is not None:
+            # A bare MCID has no dict of its own to carry /Pg, so it always
+            # uses the page established by its containing struct element.
+            node["children"].append({
+                "id": _next_id(doc), "type": "content", "role": None,
+                "mcid": mcid, "page": own_page, "children": [],
+            })
+            continue
+
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            child_id = _next_id(doc)
+            doc["elements"][child_id] = kid
+            doc["parent_map"][child_id] = node_id
+            node["children"].append(_walk(doc, kid, child_id, own_page))
+        else:
+            # /MCR (marked-content reference) or /OBJR (object reference,
+            # e.g. an annotation) - a leaf we can display but not edit here.
+            kid_type = str(kid.get("/Type")) if isinstance(kid, pikepdf.Dictionary) else None
+            mcid_val = None
+            if isinstance(kid, pikepdf.Dictionary) and "/MCID" in kid:
+                try:
+                    mcid_val = int(kid["/MCID"])
+                except (TypeError, ValueError):
+                    mcid_val = None
+            kid_page = own_page
+            if isinstance(kid, pikepdf.Dictionary):
+                # An /MCR may target a different page than its containing
+                # element (e.g. content split across a page boundary).
+                resolved_kid_page = _resolve_page_index(doc, kid.get("/Pg"))
+                if resolved_kid_page is not None:
+                    kid_page = resolved_kid_page
+            node["children"].append({
+                "id": _next_id(doc),
+                "type": "object-ref" if kid_type == "/OBJR" else "content",
+                "role": None,
+                "mcid": mcid_val,
+                "page": kid_page,
+                "children": [],
+            })
+
+    return node
+
+
+def _rebuild_registry(doc_id):
+    doc = documents[doc_id]
+    doc["elements"] = {}
+    doc["parent_map"] = {}
+    doc["counter"] = 0
+    struct_root = doc["pdf"].Root["/StructTreeRoot"]
+    doc["elements"]["root"] = struct_root
+    return _walk(doc, struct_root, "root")
+
+
+# --- command handlers --------------------------------------------------
+
+def open_document(path):
+    pdf = pikepdf.open(path)
+    doc_id = str(uuid.uuid4())
+    documents[doc_id] = {
+        "pdf": pdf, "elements": {}, "parent_map": {}, "counter": 0,
+        "page_index_by_objgen": {page.objgen: i for i, page in enumerate(pdf.pages)},
+        "undo_stack": [], "redo_stack": [],
+    }
+    doc = documents[doc_id]
+
+    if "/StructTreeRoot" not in pdf.Root:
+        return {"docId": doc_id, "hasStructTree": False, "tree": None, **_undo_state(doc)}
+
+    tree = _rebuild_registry(doc_id)
+    return {"docId": doc_id, "hasStructTree": True, "tree": tree, **_undo_state(doc)}
+
+
+def update_node(doc_id, node_id, changes):
+    doc = documents[doc_id]
+    if node_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {node_id}")
+    if node_id == "root":
+        raise ValueError("The document root has no editable attributes")
+
+    _push_undo_snapshot(doc)
+    elem = doc["elements"][node_id]
+
+    if changes.get("role"):
+        role = changes["role"]
+        role = role if role.startswith("/") else "/" + role
+        elem["/S"] = pikepdf.Name(role)
+
+    if "alt" in changes:
+        _set_or_clear_string(elem, "/Alt", changes["alt"])
+    if "actualText" in changes:
+        _set_or_clear_string(elem, "/ActualText", changes["actualText"])
+    if "lang" in changes:
+        _set_or_clear_string(elem, "/Lang", changes["lang"])
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def reorder_node(doc_id, node_id, new_parent_id, new_index):
+    doc = documents[doc_id]
+    if node_id == "root":
+        raise ValueError("Cannot move the document root")
+    if node_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {node_id}")
+    if new_parent_id not in doc["elements"]:
+        raise ValueError(f"Unknown target parent id: {new_parent_id}")
+
+    if new_parent_id == node_id:
+        raise ValueError("A node cannot become its own parent")
+
+    # Refuse a move that would create a cycle (dropping a node onto one of
+    # its own descendants). Walk up from the proposed new parent; if we hit
+    # node_id before running out of ancestors, it's a descendant.
+    walker = new_parent_id
+    while walker is not None:
+        if walker == node_id:
+            raise ValueError("Cannot move a node into its own descendant")
+        walker = doc["parent_map"].get(walker)
+
+    current_parent_id = doc["parent_map"].get(node_id)
+    if current_parent_id is None:
+        raise ValueError(f"Node {node_id} has no tracked parent - cannot move it")
+
+    _push_undo_snapshot(doc)
+    node_obj = doc["elements"][node_id]
+    old_parent_obj = doc["elements"][current_parent_id]
+    new_parent_obj = doc["elements"][new_parent_id]
+
+    _remove_kid(old_parent_obj, node_obj)
+    _insert_kid(new_parent_obj, node_obj, new_index)
+    node_obj["/P"] = new_parent_obj
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def undo_edit(doc_id):
+    doc = documents[doc_id]
+    if not doc["undo_stack"]:
+        raise ValueError("Nothing to undo")
+    doc["redo_stack"].append(_snapshot_bytes(doc["pdf"]))
+    doc["pdf"].close()
+    doc["pdf"] = pikepdf.open(io.BytesIO(doc["undo_stack"].pop()))
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def redo_edit(doc_id):
+    doc = documents[doc_id]
+    if not doc["redo_stack"]:
+        raise ValueError("Nothing to redo")
+    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
+    doc["pdf"].close()
+    doc["pdf"] = pikepdf.open(io.BytesIO(doc["redo_stack"].pop()))
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def save_document(doc_id, path):
+    doc = documents[doc_id]
+    doc["pdf"].save(path)
+    return {"savedPath": path}
+
+
+# --- main loop -----------------------------------------------------------
+
+def _send(message):
+    sys.stdout.write(json.dumps(message) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as exc:
+            _send({"id": None, "error": f"Invalid JSON from host: {exc}"})
+            continue
+
+        req_id = request.get("id")
+        cmd = request.get("cmd")
+        try:
+            if cmd == "open":
+                result = open_document(request["path"])
+            elif cmd == "update_node":
+                result = update_node(request["docId"], request["nodeId"], request.get("changes", {}))
+            elif cmd == "reorder":
+                result = reorder_node(
+                    request["docId"], request["nodeId"],
+                    request["newParentId"], request["newIndex"],
+                )
+            elif cmd == "undo":
+                result = undo_edit(request["docId"])
+            elif cmd == "redo":
+                result = redo_edit(request["docId"])
+            elif cmd == "save":
+                result = save_document(request["docId"], request["path"])
+            else:
+                raise ValueError(f"Unknown command: {cmd}")
+            _send({"id": req_id, "result": result})
+        except Exception as exc:  # noqa: BLE001 - report to host, never crash the loop
+            _send({"id": req_id, "error": f"{type(exc).__name__}: {exc}"})
+
+
+if __name__ == "__main__":
+    main()

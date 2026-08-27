@@ -1,0 +1,28 @@
+// preload.js
+//
+// Runs in an isolated context with access to Node/Electron APIs, but the
+// renderer (index.html/renderer.js) does not get nodeIntegration - it only
+// sees whatever we explicitly attach to `window.api` here. Keep this surface
+// small and specific to what the UI actually needs.
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('api', {
+  openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
+
+  updateNode: (docId, nodeId, changes) =>
+    ipcRenderer.invoke('tags:update-node', { docId, nodeId, changes }),
+
+  reorderNode: (docId, nodeId, newParentId, newIndex) =>
+    ipcRenderer.invoke('tags:reorder-node', { docId, nodeId, newParentId, newIndex }),
+
+  undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
+  redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
+
+  // Fired when the user picks Undo/Redo from the Edit menu - see main.js.
+  onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),
+  onMenuRedo: (callback) => ipcRenderer.on('menu:redo', callback),
+
+  savePdf: (docId, suggestedName) =>
+    ipcRenderer.invoke('dialog:save-pdf', { docId, suggestedName }),
+});
