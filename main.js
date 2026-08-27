@@ -17,9 +17,19 @@ const readline = require('readline');
 
 // --- Python sidecar -------------------------------------------------------
 
-// Override with the PYTHON_BIN env var if your interpreter isn't on PATH
-// under these default names (e.g. a venv, or "py" on some Windows setups).
-const PYTHON_BIN = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
+// Prefer a project-local .venv (see README setup) if one exists - it's
+// self-contained and side-steps system/user-site-packages resolution being
+// unreliable on some machines. Falls back to PYTHON_BIN, then to "python"/
+// "python3" on PATH.
+function defaultPythonBin() {
+  const venvPython = process.platform === 'win32'
+    ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+    : path.join(__dirname, '.venv', 'bin', 'python');
+  if (fs.existsSync(venvPython)) return venvPython;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+const PYTHON_BIN = process.env.PYTHON_BIN || defaultPythonBin();
 const WORKER_SCRIPT = path.join(__dirname, 'python', 'tag_worker.py');
 
 let workerProcess = null;
@@ -27,6 +37,13 @@ let requestCounter = 0;
 const pendingRequests = new Map(); // id -> { resolve, reject }
 
 function startWorker() {
+  // Set when the worker reports an error with no id to match against a
+  // pending request (e.g. it fails at startup, before any request was
+  // sent - see tag_worker.py's pikepdf import check). Surfaced as the
+  // rejection reason if the process then exits, instead of the generic
+  // "exited unexpectedly" message.
+  let lastUnmatchedError = null;
+
   workerProcess = spawn(PYTHON_BIN, [WORKER_SCRIPT], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -42,7 +59,13 @@ function startWorker() {
       return;
     }
     const pending = pendingRequests.get(message.id);
-    if (!pending) return; // stray/duplicate response, ignore
+    if (!pending) {
+      if (message.error) {
+        lastUnmatchedError = message.error;
+        console.error('[tag_worker] error with no matching request:', message.error);
+      }
+      return; // stray/duplicate response, ignore
+    }
     pendingRequests.delete(message.id);
     if (message.error) {
       pending.reject(new Error(message.error));
@@ -58,8 +81,9 @@ function startWorker() {
 
   workerProcess.on('exit', (code) => {
     console.error(`[tag_worker] exited with code ${code}`);
+    const reason = lastUnmatchedError || 'PDF worker process exited unexpectedly.';
     for (const { reject } of pendingRequests.values()) {
-      reject(new Error('PDF worker process exited unexpectedly.'));
+      reject(new Error(reason));
     }
     pendingRequests.clear();
     workerProcess = null;
