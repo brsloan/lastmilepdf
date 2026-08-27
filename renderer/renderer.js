@@ -193,19 +193,21 @@ function renderTreeNode(node) {
   } else {
     // 'content' (bare MCID / MCR) or 'object-ref' (OBJR) - read-only leaves
     row.className = 'tree-row';
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.dataset.category = 'leaf';
-    chip.textContent = node.type === 'object-ref' ? 'objref' : 'content';
-    row.appendChild(chip);
-    if (node.mcid !== null && node.mcid !== undefined) {
-      const meta = document.createElement('span');
-      meta.className = 'tree-node-meta';
-      meta.textContent = `mcid ${node.mcid}`;
-      row.appendChild(meta);
-    }
-    if (node.type === 'content' && node.mcid !== null && node.mcid !== undefined
-        && node.page !== null && node.page !== undefined) {
+    const hasTextPreview = node.type === 'content' && node.mcid !== null && node.mcid !== undefined
+      && node.page !== null && node.page !== undefined;
+    if (!hasTextPreview) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.dataset.category = 'leaf';
+      chip.textContent = node.type === 'object-ref' ? 'objref' : 'content';
+      row.appendChild(chip);
+      if (node.mcid !== null && node.mcid !== undefined) {
+        const meta = document.createElement('span');
+        meta.className = 'tree-node-meta';
+        meta.textContent = `mcid ${node.mcid}`;
+        row.appendChild(meta);
+      }
+    } else {
       const textSpan = document.createElement('span');
       textSpan.className = 'tree-node-text';
       row.appendChild(textSpan);
