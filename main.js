@@ -140,10 +140,11 @@ function createWindow() {
 // Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z itself and steps aside when a text field is
 // focused so native field-undo still works there - a menu accelerator
 // would fire regardless of focus and bypass that.
-// Save/Save As are driven the same way as Undo/Redo above: forwarded as IPC
-// events to the renderer, which owns the docId and decides (via
-// performSave()/performSaveAs() in renderer.js) whether Save can write
-// straight to the last-used path or needs to fall back to a Save As dialog.
+// Open/Save/Save As are driven the same way as Undo/Redo above: forwarded
+// as IPC events to the renderer, which owns the docId and does the actual
+// work (performOpen()/performSave()/performSaveAs() in renderer.js) -
+// Save picks between writing straight to the last-used path or falling
+// back to a Save As dialog.
 function buildAppMenu() {
   const isMac = process.platform === 'darwin';
   const template = [
@@ -151,6 +152,8 @@ function buildAppMenu() {
     {
       label: 'File',
       submenu: [
+        { label: 'Open PDF…', accelerator: 'CmdOrCtrl+O', click: (_item, win) => win?.webContents.send('menu:open') },
+        { type: 'separator' },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => win?.webContents.send('menu:save') },
         { label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => win?.webContents.send('menu:save-as') },
         { type: 'separator' },

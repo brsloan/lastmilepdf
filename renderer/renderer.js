@@ -843,7 +843,7 @@ el.btnNextPage.addEventListener('click', async () => {
 
 // --- open / save ----------------------------------------------------------
 
-el.btnOpen.addEventListener('click', async () => {
+async function performOpen() {
   try {
     setStatus('Opening\u2026');
     const opened = await window.api.openPdf();
@@ -868,7 +868,10 @@ el.btnOpen.addEventListener('click', async () => {
   } catch (err) {
     reportError('Could not open PDF', err);
   }
-});
+}
+
+el.btnOpen.addEventListener('click', () => performOpen());
+window.api.onMenuOpen(() => performOpen());
 
 // Save overwrites the current file (the path it was opened from, or
 // wherever Save As last pointed it). Falls back to the Save As dialog in
