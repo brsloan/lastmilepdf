@@ -210,6 +210,23 @@ button {
   flex: none;
 }
 
+.tree-filter {
+  background: var(--panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  font-size: 11.5px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.tree-filter:hover {
+  border-color: var(--accent);
+}
+
 /* --- viewer pane --- */
 
 .page-nav {

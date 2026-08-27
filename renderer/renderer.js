@@ -29,6 +29,7 @@ const state = {
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
+  filter: 'all',                // 'all' | 'headings' | 'figures' - see renderFilteredTree()
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -42,6 +43,7 @@ const el = {
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
   btnKillDivs: document.getElementById('btn-kill-divs'),
+  tagFilter: document.getElementById('tag-filter'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
   statusBar: document.getElementById('status-bar'),
@@ -137,6 +139,10 @@ function renderTree() {
     el.tagTree.appendChild(p);
     return;
   }
+  if (state.filter !== 'all') {
+    renderFilteredTree();
+    return;
+  }
   const ul = document.createElement('ul');
   ul.className = 'tree-node';
   ul.style.listStyle = 'none';
@@ -144,6 +150,69 @@ function renderTree() {
   ul.style.margin = '0';
   ul.appendChild(renderTreeNode(state.tree));
   el.tagTree.appendChild(ul);
+}
+
+// --- tag tree: filtering ---------------------------------------------------
+//
+// "Headings"/"Figures" swap the nested tree for a flat, document-order list
+// of just the matching tags (any heading level counts as a match, ignoring
+// how deep they're nested) - handy for skimming an outline or auditing alt
+// text without wading through containers. Since it's a flat list, drag
+// reordering doesn't apply here: filtered rows are plain, non-draggable, and
+// get no drop handlers, which is what disables moving tags while filtered.
+// Up/down arrow navigation keeps working unchanged, since it just walks
+// whatever `.tree-row.selectable` rows are currently in the DOM.
+
+function nodeMatchesFilter(node) {
+  if (state.filter === 'all') return true;
+  if (node.type !== 'element') return false;
+  if (state.filter === 'headings') return categoryForRole(node.role) === 'heading';
+  if (state.filter === 'figures') return node.role === 'Figure';
+  return true;
+}
+
+function collectFilteredNodes(node, matches) {
+  if (nodeMatchesFilter(node)) matches.push(node);
+  for (const child of node.children || []) collectFilteredNodes(child, matches);
+}
+
+function renderFilteredTree() {
+  const matches = [];
+  collectFilteredNodes(state.tree, matches);
+
+  if (matches.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'tree-placeholder';
+    p.textContent = 'No matching tags.';
+    el.tagTree.appendChild(p);
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'tree-node';
+  ul.style.listStyle = 'none';
+  ul.style.padding = '0';
+  ul.style.margin = '0';
+  for (const node of matches) {
+    ul.appendChild(renderFilteredRow(node));
+  }
+  el.tagTree.appendChild(ul);
+}
+
+function renderFilteredRow(node) {
+  const li = document.createElement('li');
+  li.className = 'tree-node';
+
+  const row = document.createElement('div');
+  row.dataset.nodeId = node.id;
+  row.className = 'tree-row selectable';
+  if (node.id === state.selectedNodeId) row.classList.add('selected');
+
+  appendElementChipAndFlag(row, node);
+  row.addEventListener('click', () => selectNode(node.id));
+
+  li.appendChild(row);
+  return li;
 }
 
 // Document (root) and Div/Document elements default to expanded; every
@@ -161,6 +230,21 @@ function isNodeCollapsed(node) {
 function toggleNodeCollapsed(node) {
   state.collapseOverrides.set(node.id, !isNodeCollapsed(node));
   renderTree();
+}
+
+function appendElementChipAndFlag(row, node) {
+  const chip = document.createElement('span');
+  chip.className = 'tag-chip';
+  chip.dataset.category = categoryForRole(node.role);
+  chip.textContent = `/${node.role}`;
+  row.appendChild(chip);
+
+  if ((node.role === 'Figure' || node.role === 'Formula') && !node.alt) {
+    const flag = document.createElement('span');
+    flag.className = 'missing-alt-flag';
+    flag.textContent = 'no alt text';
+    row.appendChild(flag);
+  }
 }
 
 function renderTreeNode(node) {
@@ -206,18 +290,7 @@ function renderTreeNode(node) {
       row.appendChild(spacer);
     }
 
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.dataset.category = categoryForRole(node.role);
-    chip.textContent = `/${node.role}`;
-    row.appendChild(chip);
-
-    if ((node.role === 'Figure' || node.role === 'Formula') && !node.alt) {
-      const flag = document.createElement('span');
-      flag.className = 'missing-alt-flag';
-      flag.textContent = 'no alt text';
-      row.appendChild(flag);
-    }
+    appendElementChipAndFlag(row, node);
 
     row.addEventListener('click', () => selectNode(node.id));
     row.addEventListener('dragstart', (e) => {
@@ -922,6 +995,11 @@ el.btnKillDivs.addEventListener('click', async () => {
   } catch (err) {
     reportError('Could not remove Div tags', err);
   }
+});
+
+el.tagFilter.addEventListener('change', () => {
+  state.filter = el.tagFilter.value;
+  renderTree();
 });
 
 setStatus('Ready.');
