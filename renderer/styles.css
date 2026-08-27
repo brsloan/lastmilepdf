@@ -348,6 +348,15 @@ button {
   font-size: 11px;
 }
 
+.tree-node-text {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .tree-children {
   margin: 0;
   padding-left: 20px;

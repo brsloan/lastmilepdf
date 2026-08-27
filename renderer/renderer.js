@@ -25,6 +25,7 @@ const state = {
   currentPage: 1,
   pageCount: 0,
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
+  mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
 };
 
@@ -203,6 +204,13 @@ function renderTreeNode(node) {
       meta.textContent = `mcid ${node.mcid}`;
       row.appendChild(meta);
     }
+    if (node.type === 'content' && node.mcid !== null && node.mcid !== undefined
+        && node.page !== null && node.page !== undefined) {
+      const textSpan = document.createElement('span');
+      textSpan.className = 'tree-node-text';
+      row.appendChild(textSpan);
+      loadContentText(node.page, node.mcid, textSpan);
+    }
   }
 
   li.appendChild(row);
@@ -338,6 +346,52 @@ async function getPageTextContent(pageNumber) {
   const entry = { textContent, viewport };
   state.textContentCache.set(pageNumber, entry);
   return entry;
+}
+
+// Builds a page's mcid -> text lookup once (cached) rather than re-walking
+// textContent.items per leaf node - a page's content leaves all share one
+// walk instead of paying O(items) per node.
+async function getPageMcidTextMap(pageNumber) {
+  if (state.mcidTextCache.has(pageNumber)) return state.mcidTextCache.get(pageNumber);
+  const { textContent } = await getPageTextContent(pageNumber);
+  const map = new Map();
+  const mcidStack = [];
+  for (const item of textContent.items) {
+    if (item.str === undefined) {
+      if (item.type === 'beginMarkedContentProps' || item.type === 'beginMarkedContent') {
+        mcidStack.push(extractMcidFromItemId(item.id));
+      } else if (item.type === 'endMarkedContent') {
+        mcidStack.pop();
+      }
+      continue;
+    }
+    const currentMcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
+    if (currentMcid === null || !item.str) continue;
+    const existing = map.get(currentMcid) || '';
+    map.set(currentMcid, existing + item.str + (item.hasEOL ? '\n' : ''));
+  }
+  for (const [mcid, text] of map) map.set(mcid, text.trim());
+  state.mcidTextCache.set(pageNumber, map);
+  return map;
+}
+
+// Fills in a content leaf's text preview once pdf.js has parsed its page.
+// Async and fired off from renderTreeNode(), which is otherwise synchronous
+// - guards against the tree having been replaced/re-rendered by the time
+// the lookup resolves by checking the target span is still in the DOM.
+async function loadContentText(page0, mcid, targetEl) {
+  if (!state.pdfDoc) return; // preview hasn't loaded yet; re-triggered by loadPdfPreview()
+  const pageNumber = page0 + 1;
+  if (pageNumber < 1 || pageNumber > state.pageCount) return;
+  try {
+    const map = await getPageMcidTextMap(pageNumber);
+    if (!targetEl.isConnected) return;
+    const text = map.get(mcid);
+    targetEl.textContent = text ? `“${text}”` : '';
+    targetEl.title = text || '';
+  } catch (err) {
+    console.error('Could not load content text for mcid', mcid, err);
+  }
 }
 
 function extractMcidFromItemId(id) {
@@ -651,9 +705,15 @@ async function loadPdfPreview(base64Data) {
   state.pageCount = state.pdfDoc.numPages;
   state.currentPage = 1;
   state.textContentCache.clear();
+  state.mcidTextCache.clear();
   el.viewerPlaceholder.hidden = true;
   await renderCurrentPage();
   updatePageNavUI();
+  // The tag tree was already rendered (from applyFreshTree(), before this
+  // resolved) with no pdfDoc yet, so content leaves' loadContentText() calls
+  // bailed out immediately - re-render now that pdf.js can actually resolve
+  // marked-content text.
+  renderTree();
 }
 
 async function renderCurrentPage() {
