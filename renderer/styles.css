@@ -321,6 +321,34 @@ button {
   background: var(--panel-alt);
 }
 
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.tree-toggle-spacer {
+  display: inline-block;
+  width: 14px;
+  flex: none;
+}
+
 .tag-chip {
   font-family: var(--font-mono);
   font-size: 12px;

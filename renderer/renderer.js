@@ -27,6 +27,7 @@ const state = {
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
+  collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -144,6 +145,23 @@ function renderTree() {
   el.tagTree.appendChild(ul);
 }
 
+// Document (root) and Div/Document elements default to expanded; every
+// other element defaults to collapsed, with a +/- toggle to reveal its
+// nested contents.
+function isCollapsedByDefault(node) {
+  return node.type === 'element' && node.role !== 'Div' && node.role !== 'Document';
+}
+
+function isNodeCollapsed(node) {
+  if (state.collapseOverrides.has(node.id)) return state.collapseOverrides.get(node.id);
+  return isCollapsedByDefault(node);
+}
+
+function toggleNodeCollapsed(node) {
+  state.collapseOverrides.set(node.id, !isNodeCollapsed(node));
+  renderTree();
+}
+
 function renderTreeNode(node) {
   const li = document.createElement('li');
   li.className = 'tree-node';
@@ -169,6 +187,23 @@ function renderTreeNode(node) {
     row.className = 'tree-row selectable';
     if (node.id === state.selectedNodeId) row.classList.add('selected');
     row.draggable = true;
+
+    const hasChildren = !!(node.children && node.children.length > 0);
+    const collapsed = hasChildren && isNodeCollapsed(node);
+    if (hasChildren) {
+      const toggle = document.createElement('span');
+      toggle.className = 'tree-toggle';
+      toggle.textContent = collapsed ? '+' : '−';
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleNodeCollapsed(node);
+      });
+      row.appendChild(toggle);
+    } else {
+      const spacer = document.createElement('span');
+      spacer.className = 'tree-toggle-spacer';
+      row.appendChild(spacer);
+    }
 
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
@@ -217,7 +252,8 @@ function renderTreeNode(node) {
 
   li.appendChild(row);
 
-  if (node.children && node.children.length > 0) {
+  const isCollapsedElement = node.type === 'element' && isNodeCollapsed(node);
+  if (node.children && node.children.length > 0 && !isCollapsedElement) {
     const ul = document.createElement('ul');
     ul.className = 'tree-children';
     for (const child of node.children) {
@@ -277,9 +313,18 @@ function applyFreshTree(tree) {
 
 // --- details panel --------------------------------------------------------
 
+function expandAncestors(nodeId) {
+  let entry = state.nodesById.get(nodeId);
+  while (entry && entry.parentId !== null) {
+    entry = state.nodesById.get(entry.parentId);
+    if (entry && entry.node.type === 'element') state.collapseOverrides.set(entry.node.id, false);
+  }
+}
+
 function selectNode(nodeId) {
   state.selectedNodeId = nodeId;
   const entry = state.nodesById.get(nodeId);
+  expandAncestors(nodeId);
   renderTree(); // re-render so the 'selected' class moves
   if (!entry || entry.node.type !== 'element') {
     closeDetails();
