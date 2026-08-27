@@ -935,13 +935,22 @@ async function moveSelectedSibling(direction) {
 }
 
 // Left/Right arrows collapse/expand the current selection, when it's an
-// element with children to hide.
+// element with children to hide. While filtered to Headings, there's
+// nothing to collapse/expand (it's a flat list), so plain Left/Right steps
+// the heading level directly instead of requiring Ctrl/Cmd - see
+// attemptHeadingLevelChange().
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (e.ctrlKey || e.metaKey) return; // handled by the Ctrl/Cmd+Left/Right listener below
   if (!state.selectedNodeId) return;
 
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if (state.filter === 'headings') {
+    if (attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+    return;
+  }
 
   const entry = state.nodesById.get(state.selectedNodeId);
   if (!entry || entry.node.type !== 'element') return;
@@ -957,6 +966,49 @@ window.addEventListener('keydown', (e) => {
     toggleNodeCollapsed(node);
   }
 });
+
+// Ctrl/Cmd+Right/Left steps a heading tag (H1-H6) down/up a level. No-op on
+// anything else, including the bare "H" role, which has no numbered level.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!state.selectedNodeId) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if (attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+});
+
+// Changes the selected node's heading level by `direction` (+1/-1) if it's
+// currently H1-H6, clamped to that range. Returns true if the tag is a
+// heading at all (regardless of whether it was already at the clamp), so
+// callers know to treat the key as handled either way.
+function attemptHeadingLevelChange(direction) {
+  const entry = state.nodesById.get(state.selectedNodeId);
+  if (!entry || entry.node.type !== 'element') return false;
+  const match = /^H([1-6])$/.exec(entry.node.role || '');
+  if (!match) return false;
+
+  const level = Number(match[1]);
+  const newLevel = level + direction;
+  if (newLevel >= 1 && newLevel <= 6) changeHeadingLevel(state.selectedNodeId, newLevel);
+  return true;
+}
+
+async function changeHeadingLevel(nodeId, newLevel) {
+  try {
+    const result = await window.api.updateNode(state.docId, nodeId, { role: `H${newLevel}` });
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    // A role-only change doesn't touch the tree's structure, so the
+    // depth-first id assignment (see tag_worker.py) reproduces the same id.
+    selectNode(nodeId);
+    setStatus(`Changed to H${newLevel}.`);
+  } catch (err) {
+    reportError('Could not change heading level', err);
+  }
+}
 
 // --- PDF.js viewer -------------------------------------------------------
 
