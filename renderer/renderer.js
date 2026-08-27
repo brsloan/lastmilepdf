@@ -849,6 +849,7 @@ window.addEventListener('keydown', (e) => {
 // element's children simply aren't rendered (see renderTreeNode).
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (e.ctrlKey || e.metaKey) return; // Ctrl/Cmd+Up/Down reorders instead - see below
   if (!state.selectedNodeId) return;
 
   const tag = document.activeElement?.tagName;
@@ -864,6 +865,74 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   selectNode(rows[nextIndex].dataset.nodeId);
 });
+
+// Ctrl/Cmd+Up/Down moves the selected tag one place earlier/later among its
+// siblings (a keyboard equivalent of dragging it past its neighbor). At the
+// first/last child slot it instead outdents the tag to just before/after
+// its own parent - see moveSelectedSibling(). Disabled while a
+// Headings/Figures filter is active, same as drag-and-drop - the flat
+// filtered list doesn't reflect sibling adjacency in the real tree.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!state.selectedNodeId || state.filter !== 'all') return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  e.preventDefault();
+  moveSelectedSibling(e.key === 'ArrowUp' ? -1 : 1);
+});
+
+async function moveSelectedSibling(direction) {
+  const nodeId = state.selectedNodeId;
+  const entry = state.nodesById.get(nodeId);
+  if (!entry || entry.node.type !== 'element' || entry.parentId === null) return;
+  const parentId = entry.parentId;
+  const parentEntry = state.nodesById.get(parentId);
+  if (!parentEntry) return;
+
+  const siblings = parentEntry.node.children || [];
+  const currentIndex = siblings.findIndex((child) => child.id === nodeId);
+  if (currentIndex === -1) return;
+
+  let newParentId = parentId;
+  let newIndex = currentIndex + direction;
+
+  if (newIndex < 0 || newIndex >= siblings.length) {
+    // At the edge of its sibling list - outdent past the parent instead of
+    // doing nothing: moving up out of the first child slot drops the tag
+    // just before its (former) parent; moving down out of the last child
+    // slot drops it just after. Only possible if the parent itself has a
+    // parent to become a sibling under (i.e. it isn't the struct root).
+    if (parentEntry.parentId === null) return;
+    const grandParentId = parentEntry.parentId;
+    const grandParentEntry = state.nodesById.get(grandParentId);
+    if (!grandParentEntry) return;
+    const parentSiblings = grandParentEntry.node.children || [];
+    const parentIndex = parentSiblings.findIndex((child) => child.id === parentId);
+    if (parentIndex === -1) return;
+    newParentId = grandParentId;
+    newIndex = direction < 0 ? parentIndex : parentIndex + 1;
+  }
+
+  try {
+    const result = await window.api.reorderNode(state.docId, nodeId, newParentId, newIndex);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    // Node ids are reassigned by depth-first position on every rebuild (see
+    // tag_worker.py), so the moved tag's id changes - but an ancestor's own
+    // id doesn't (it's assigned before its children are visited, and this
+    // move never changes an ancestor's position among *its* siblings), so
+    // we can still find the tag by its known new (parent, index) and keep
+    // it selected.
+    const movedNode = state.nodesById.get(newParentId)?.node.children?.[newIndex];
+    if (movedNode) selectNode(movedNode.id);
+    setStatus('Moved tag.');
+  } catch (err) {
+    reportError('Could not move tag', err);
+  }
+}
 
 // Left/Right arrows collapse/expand the current selection, when it's an
 // element with children to hide.
