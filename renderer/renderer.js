@@ -892,7 +892,7 @@ async function performSaveAs() {
   if (!state.docId) return;
   try {
     setStatus('Saving\u2026');
-    const suggested = state.fileName ? state.fileName.replace(/\.pdf$/i, '-tagged.pdf') : 'tagged.pdf';
+    const suggested = state.fileName ? state.fileName : '.pdf';
     const savedPath = await window.api.savePdf(state.docId, suggested);
     if (savedPath) {
       state.savedFilePath = savedPath;
