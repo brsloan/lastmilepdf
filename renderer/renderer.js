@@ -63,6 +63,7 @@ const el = {
   fieldActualText: document.getElementById('field-actual-text'),
   fieldLang: document.getElementById('field-lang'),
   btnCancelEdit: document.getElementById('btn-cancel-edit'),
+  btnPullContent: document.getElementById('btn-pull-content'),
 };
 
 function setStatus(message) {
@@ -496,6 +497,22 @@ async function getPageMcidTextMap(pageNumber) {
   return map;
 }
 
+// Collects a tag's own content text (its content-leaf descendants' text,
+// per collectTargetMcids), joined with a single space between blocks - used
+// by the "Pull Content" button to seed Actual Text.
+async function pullContentText(nodeId) {
+  const targets = collectTargetMcids(nodeId);
+  const parts = [];
+  for (const target of targets) {
+    const pageNumber = target.page + 1;
+    if (pageNumber < 1 || pageNumber > state.pageCount) continue;
+    const map = await getPageMcidTextMap(pageNumber);
+    const text = map.get(target.mcid);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
 // Fills in a content leaf's text preview once pdf.js has parsed its page.
 // Async and fired off from renderTreeNode(), which is otherwise synchronous
 // - guards against the tree having been replaced/re-rendered by the time
@@ -753,6 +770,23 @@ el.detailsForm.addEventListener('submit', async (e) => {
 });
 
 el.btnCancelEdit.addEventListener('click', () => closeDetails());
+
+el.btnPullContent.addEventListener('click', async () => {
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId) return;
+  if (!state.pdfDoc) {
+    setStatus('Open a PDF preview before pulling content text.');
+    return;
+  }
+  try {
+    setStatus('Pulling content text…');
+    const text = await pullContentText(nodeId);
+    el.fieldActualText.value = text;
+    setStatus(text ? 'Pulled content text into Actual Text.' : 'No content text found in this tag.');
+  } catch (err) {
+    reportError('Could not pull content text', err);
+  }
+});
 
 // --- undo / redo -----------------------------------------------------------
 //

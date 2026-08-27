@@ -446,6 +446,30 @@ button {
   color: var(--text-dim);
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.field-label-btn {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 7px;
+  font-size: 10.5px;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.field-label-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .field input,
 .field textarea {
   background: var(--panel-alt);
