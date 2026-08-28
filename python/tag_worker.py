@@ -306,6 +306,39 @@ def update_node(doc_id, node_id, changes):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+def update_nodes(doc_id, node_ids, changes):
+    """Bulk variant of update_node - applies the same `changes` to every
+    listed node as one undo step (used by the tag tree's multi-select Role
+    edit: change one field for every selected tag in a single action rather
+    than one undo entry per tag)."""
+    doc = documents[doc_id]
+    targets = []
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("The document root has no editable attributes")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        targets.append(doc["elements"][node_id])
+    if not targets:
+        raise ValueError("No nodes to update")
+
+    _push_undo_snapshot(doc)
+    for elem in targets:
+        if changes.get("role"):
+            role = changes["role"]
+            role = role if role.startswith("/") else "/" + role
+            elem["/S"] = pikepdf.Name(role)
+
+        if "alt" in changes:
+            _set_or_clear_string(elem, "/Alt", changes["alt"])
+        if "actualText" in changes:
+            _set_or_clear_string(elem, "/ActualText", changes["actualText"])
+        if "lang" in changes:
+            _set_or_clear_string(elem, "/Lang", changes["lang"])
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
 def reorder_node(doc_id, node_id, new_parent_id, new_index):
     doc = documents[doc_id]
     if node_id == "root":
@@ -339,6 +372,68 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
     _remove_kid(old_parent_obj, node_obj)
     _insert_kid(new_parent_obj, node_obj, new_index)
     node_obj["/P"] = new_parent_obj
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def reorder_many(doc_id, node_ids, new_parent_id, new_index):
+    """Block variant of reorder_node - moves several nodes to consecutive
+    slots starting at new_index, in the order given (the renderer sends
+    them in current document order), as one undo step. Used by the tag
+    tree's multi-select drag-and-drop and Ctrl+Up/Down block move."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No nodes to move")
+    if new_parent_id not in doc["elements"]:
+        raise ValueError(f"Unknown target parent id: {new_parent_id}")
+
+    seen = set()
+    unique_ids = []
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot move the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        if node_id == new_parent_id:
+            raise ValueError("A node cannot become its own parent")
+        if node_id not in seen:
+            seen.add(node_id)
+            unique_ids.append(node_id)
+
+    # Refuse a move that would create a cycle (the new parent is one of the
+    # moved nodes' own descendants) - same walk-up check as reorder_node,
+    # just repeated per moved node.
+    for node_id in unique_ids:
+        walker = new_parent_id
+        while walker is not None:
+            if walker == node_id:
+                raise ValueError("Cannot move a node into its own descendant")
+            walker = doc["parent_map"].get(walker)
+
+    _push_undo_snapshot(doc)
+    new_parent_obj = doc["elements"][new_parent_id]
+
+    # Remove every moved node from its current parent *before* inserting
+    # any of them. Interleaving remove+insert per node (the naive approach)
+    # breaks for a block moving down within the same parent: each earlier
+    # sibling's removal shifts everything after it left, so new_index -
+    # taken at face value for later nodes in the block - no longer points
+    # where it did when only the first node had been removed. Doing every
+    # removal up front means new_index only ever has to be interpreted
+    # once, against the parent's final (fully-reduced) children list.
+    for node_id in unique_ids:
+        node_obj = doc["elements"][node_id]
+        current_parent_id = doc["parent_map"].get(node_id)
+        old_parent_obj = doc["elements"].get(current_parent_id) if current_parent_id else None
+        if old_parent_obj is not None:
+            _remove_kid(old_parent_obj, node_obj)
+
+    insertion_index = new_index
+    for node_id in unique_ids:
+        node_obj = doc["elements"][node_id]
+        _insert_kid(new_parent_obj, node_obj, insertion_index)
+        node_obj["/P"] = new_parent_obj
+        insertion_index += 1
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
@@ -443,9 +538,16 @@ def main():
                 result = open_document(request["path"])
             elif cmd == "update_node":
                 result = update_node(request["docId"], request["nodeId"], request.get("changes", {}))
+            elif cmd == "update_nodes":
+                result = update_nodes(request["docId"], request["nodeIds"], request.get("changes", {}))
             elif cmd == "reorder":
                 result = reorder_node(
                     request["docId"], request["nodeId"],
+                    request["newParentId"], request["newIndex"],
+                )
+            elif cmd == "reorder_many":
+                result = reorder_many(
+                    request["docId"], request["nodeIds"],
                     request["newParentId"], request["newIndex"],
                 )
             elif cmd == "kill_divs":

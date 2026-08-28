@@ -333,6 +333,16 @@ button {
   border-color: var(--accent);
 }
 
+/* Other members of a multi-tag selection (shift/ctrl+click) - a lighter
+   tint than .selected so the active/focused tag still stands out. */
+.tree-row.multi-selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.tree-row.multi-selected.selected {
+  background: var(--panel-alt);
+}
+
 .tree-row.drag-over {
   border-color: var(--accent-strong);
   background: var(--panel-alt);
@@ -470,6 +480,11 @@ button {
   border-color: var(--accent);
 }
 
+.field-label-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .field input,
 .field textarea {
   background: var(--panel-alt);
@@ -485,6 +500,12 @@ button {
 .field input:focus,
 .field textarea:focus {
   border-color: var(--accent);
+}
+
+.field input:disabled,
+.field textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 #field-role {

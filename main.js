@@ -228,8 +228,16 @@ ipcMain.handle('tags:update-node', async (_event, { docId, nodeId, changes }) =>
   return callWorker('update_node', { docId, nodeId, changes });
 });
 
+ipcMain.handle('tags:update-nodes', async (_event, { docId, nodeIds, changes }) => {
+  return callWorker('update_nodes', { docId, nodeIds, changes });
+});
+
 ipcMain.handle('tags:reorder-node', async (_event, { docId, nodeId, newParentId, newIndex }) => {
   return callWorker('reorder', { docId, nodeId, newParentId, newIndex });
+});
+
+ipcMain.handle('tags:reorder-many', async (_event, { docId, nodeIds, newParentId, newIndex }) => {
+  return callWorker('reorder_many', { docId, nodeIds, newParentId, newIndex });
 });
 
 ipcMain.handle('tags:kill-divs', async (_event, { docId }) => {

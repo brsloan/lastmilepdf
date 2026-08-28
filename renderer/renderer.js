@@ -20,8 +20,11 @@ const state = {
   tree: null,           // current full tag tree, as returned by the worker
   nodesById: new Map(), // id -> node, rebuilt every time `tree` is replaced
   mcidIndex: new Map(), // page (0-based) -> Map(mcid -> owning element node id), rebuilt with nodesById
-  selectedNodeId: null,
+  selectedNodeId: null,      // the "active"/most-recently-clicked tag - drives the details panel, highlight, scroll
+  selectedNodeIds: new Set(), // full multi-selection (shift/ctrl+click); always a superset containing selectedNodeId
+  selectionAnchorId: null,   // fixed point shift+click range-selects from; updated by plain/ctrl clicks, not by shift+click
   draggedNodeId: null,
+  draggedNodeIds: null,
   pdfDoc: null,          // pdf.js document proxy
   currentPage: 1,
   pageCount: 0,
@@ -207,13 +210,22 @@ function renderFilteredRow(node) {
   const row = document.createElement('div');
   row.dataset.nodeId = node.id;
   row.className = 'tree-row selectable';
-  if (node.id === state.selectedNodeId) row.classList.add('selected');
+  applySelectionClasses(row, node.id);
 
   appendElementChipAndFlag(row, node);
-  row.addEventListener('click', () => selectNode(node.id));
+  row.addEventListener('click', (e) => handleRowClick(node.id, e));
 
   li.appendChild(row);
   return li;
+}
+
+// Shared by both tree-render paths: 'selected' marks the active/focused tag
+// (the one the details panel, highlight, and scroll follow); 'multi-selected'
+// marks every OTHER member of a >1-tag selection with a lighter tint, so the
+// active tag still reads as visually distinct from the rest of the block.
+function applySelectionClasses(row, nodeId) {
+  if (state.selectedNodeIds.size > 1 && state.selectedNodeIds.has(nodeId)) row.classList.add('multi-selected');
+  if (nodeId === state.selectedNodeId) row.classList.add('selected');
 }
 
 // Document (root) and Div/Document elements default to expanded; every
@@ -271,7 +283,7 @@ function renderTreeNode(node) {
     attachDropHandlers(row, node.id);
   } else if (node.type === 'element') {
     row.className = 'tree-row selectable';
-    if (node.id === state.selectedNodeId) row.classList.add('selected');
+    applySelectionClasses(row, node.id);
     row.draggable = true;
 
     const hasChildren = !!(node.children && node.children.length > 0);
@@ -293,8 +305,13 @@ function renderTreeNode(node) {
 
     appendElementChipAndFlag(row, node);
 
-    row.addEventListener('click', () => selectNode(node.id));
+    row.addEventListener('click', (e) => handleRowClick(node.id, e));
     row.addEventListener('dragstart', (e) => {
+      // Dragging a tag that's part of the current multi-selection drags the
+      // whole block; dragging any other tag is just a single-tag drag,
+      // regardless of what else happens to be selected.
+      const isBlockDrag = state.selectedNodeIds.size > 1 && state.selectedNodeIds.has(node.id);
+      state.draggedNodeIds = isBlockDrag ? new Set(state.selectedNodeIds) : new Set([node.id]);
       state.draggedNodeId = node.id;
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', node.id);
@@ -351,27 +368,55 @@ function attachDropHandlers(row, targetNodeId) {
   row.addEventListener('drop', async (e) => {
     e.preventDefault();
     row.classList.remove('drag-over');
-    const draggedId = state.draggedNodeId;
+    const draggedIds = state.draggedNodeIds ? Array.from(state.draggedNodeIds) : [];
     state.draggedNodeId = null;
-    if (!draggedId || draggedId === targetNodeId) return;
+    state.draggedNodeIds = null;
+    if (draggedIds.length === 0) return;
 
-    if (isDescendant(draggedId, targetNodeId)) {
-      setStatus("Can't move a tag into its own descendant.");
+    // v1 drop semantics: dropping onto a node appends the dragged tag(s) as
+    // its new last child/children. Precise above/below sibling positioning
+    // would need a drop-position indicator; left as a follow-up.
+    const targetEntry = state.nodesById.get(targetNodeId);
+    const newIndex = targetEntry.node.children ? targetEntry.node.children.length : 0;
+
+    if (draggedIds.length === 1) {
+      const draggedId = draggedIds[0];
+      if (draggedId === targetNodeId) return;
+      if (isDescendant(draggedId, targetNodeId)) {
+        setStatus("Can't move a tag into its own descendant.");
+        return;
+      }
+      try {
+        const result = await window.api.reorderNode(state.docId, draggedId, targetNodeId, newIndex);
+        applyFreshTree(result.tree);
+        applyUndoState(result);
+        setStatus('Moved tag.');
+      } catch (err) {
+        reportError('Could not move tag', err);
+      }
+      return;
+    }
+
+    // Block move: only the outermost dragged tags actually move - a
+    // dragged descendant of another dragged tag just comes along inside
+    // its (also-moving) ancestor - ordered by their current document
+    // position regardless of click/drag order.
+    const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+    const orderedIds = rows.map((r) => r.dataset.nodeId).filter((id) => draggedIds.includes(id));
+    const topLevelIds = orderedIds.filter((id) => !orderedIds.some((other) => other !== id && isDescendant(other, id)));
+
+    if (topLevelIds.some((id) => isDescendant(id, targetNodeId))) {
+      setStatus("Can't move tags into their own selection or descendants.");
       return;
     }
 
     try {
-      // v1 drop semantics: dropping onto a node appends the dragged node as
-      // its new last child. Precise above/below sibling positioning would
-      // need a drop-position indicator; left as a follow-up.
-      const targetEntry = state.nodesById.get(targetNodeId);
-      const newIndex = targetEntry.node.children ? targetEntry.node.children.length : 0;
-      const result = await window.api.reorderNode(state.docId, draggedId, targetNodeId, newIndex);
+      const result = await window.api.reorderMany(state.docId, topLevelIds, targetNodeId, newIndex);
       applyFreshTree(result.tree);
       applyUndoState(result);
-      setStatus('Moved tag.');
+      setStatus(`Moved ${topLevelIds.length} tags.`);
     } catch (err) {
-      reportError('Could not move tag', err);
+      reportError('Could not move tags', err);
     }
   });
 }
@@ -380,13 +425,29 @@ function applyFreshTree(tree) {
   state.tree = tree;
   state.nodesById = indexTree(tree);
   state.mcidIndex = tree ? buildMcidIndex(tree) : new Map();
+
+  if (state.selectedNodeIds.size > 0) {
+    state.selectedNodeIds = new Set(Array.from(state.selectedNodeIds).filter((id) => state.nodesById.has(id)));
+  }
   if (state.selectedNodeId && !state.nodesById.has(state.selectedNodeId)) {
-    closeDetails();
+    if (state.selectedNodeIds.size > 0) {
+      state.selectedNodeId = Array.from(state.selectedNodeIds).pop();
+    } else {
+      closeDetails();
+    }
   }
   renderTree();
 }
 
 // --- details panel --------------------------------------------------------
+//
+// Multi-select (shift/ctrl+click - see handleRowClick) keeps a single
+// "active" tag (state.selectedNodeId) alongside the full selection
+// (state.selectedNodeIds, always a superset containing the active one). The
+// active tag drives the details panel's displayed values, page highlight,
+// and scroll; the full selection drives which rows get the 'multi-selected'
+// look, which tags a block drag/move carries, and which tags a Role change
+// applies to (see the details form's submit handler).
 
 function expandAncestors(nodeId) {
   let entry = state.nodesById.get(nodeId);
@@ -396,16 +457,86 @@ function expandAncestors(nodeId) {
   }
 }
 
+// Plain click (and keyboard nav / page-click selection): replaces any
+// existing selection with just this one tag.
 function selectNode(nodeId) {
+  state.selectedNodeIds = new Set([nodeId]);
+  state.selectionAnchorId = nodeId;
   state.selectedNodeId = nodeId;
-  const entry = state.nodesById.get(nodeId);
   expandAncestors(nodeId);
-  renderTree(); // re-render so the 'selected' class moves
+  renderTree();
+  refreshDetailsForSelection();
+}
+
+function handleRowClick(nodeId, e) {
+  if (e.shiftKey) {
+    extendSelectionTo(nodeId);
+  } else if (e.ctrlKey || e.metaKey) {
+    toggleSelectionMember(nodeId);
+  } else {
+    selectNode(nodeId);
+  }
+}
+
+// Shift+click: selects every visible row between the fixed anchor (the last
+// plain or ctrl+click) and the clicked tag, inclusive - same DOM-order list
+// arrow-key navigation uses, so it naturally follows collapse/filter state.
+function extendSelectionTo(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry || entry.node.type !== 'element') return;
+
+  if (!state.selectionAnchorId || !state.nodesById.has(state.selectionAnchorId)) {
+    selectNode(nodeId);
+    return;
+  }
+
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const anchorIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectionAnchorId);
+  const targetIndex = rows.findIndex((row) => row.dataset.nodeId === nodeId);
+  if (anchorIndex === -1 || targetIndex === -1) {
+    selectNode(nodeId);
+    return;
+  }
+
+  const [start, end] = anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+  state.selectedNodeIds = new Set(rows.slice(start, end + 1).map((row) => row.dataset.nodeId));
+  state.selectedNodeId = nodeId;
+  renderTree();
+  refreshDetailsForSelection();
+}
+
+// Ctrl/Cmd+click: adds/removes just the clicked tag, leaving the rest of
+// the selection alone, and becomes the new shift+click anchor.
+function toggleSelectionMember(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry || entry.node.type !== 'element') return;
+
+  const next = new Set(state.selectedNodeIds);
+  if (next.has(nodeId)) next.delete(nodeId);
+  else next.add(nodeId);
+
+  state.selectedNodeIds = next;
+  state.selectionAnchorId = nodeId;
+
+  if (next.size === 0) {
+    closeDetails();
+    return;
+  }
+  state.selectedNodeId = next.has(nodeId) ? nodeId : Array.from(next).pop();
+  renderTree();
+  refreshDetailsForSelection();
+}
+
+function refreshDetailsForSelection() {
+  const nodeId = state.selectedNodeId;
+  const entry = nodeId ? state.nodesById.get(nodeId) : null;
   if (!entry || entry.node.type !== 'element') {
     closeDetails();
     return;
   }
   const node = entry.node;
+  const multi = state.selectedNodeIds.size > 1;
+
   el.detailsEmpty.hidden = true;
   el.detailsForm.hidden = false;
   el.fieldNodeId.value = node.id;
@@ -413,6 +544,14 @@ function selectNode(nodeId) {
   el.fieldAlt.value = node.alt || '';
   el.fieldActualText.value = node.actualText || '';
   el.fieldLang.value = node.lang || '';
+
+  // With multiple tags selected, only Role applies as a block edit (see the
+  // submit handler) - disable the other fields rather than let an edit look
+  // like it covers the whole selection when it would only touch this one.
+  el.fieldAlt.disabled = multi;
+  el.fieldActualText.disabled = multi;
+  el.fieldLang.disabled = multi;
+  el.btnPullContent.disabled = multi;
 
   const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
   row?.scrollIntoView({ block: 'nearest' });
@@ -422,9 +561,15 @@ function selectNode(nodeId) {
 
 function closeDetails() {
   state.selectedNodeId = null;
+  state.selectedNodeIds = new Set();
+  state.selectionAnchorId = null;
   el.detailsForm.hidden = true;
   el.detailsEmpty.hidden = false;
   el.detailsForm.reset();
+  el.fieldAlt.disabled = false;
+  el.fieldActualText.disabled = false;
+  el.fieldLang.disabled = false;
+  el.btnPullContent.disabled = false;
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
 }
@@ -749,21 +894,39 @@ el.detailsForm.addEventListener('submit', async (e) => {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
 
-  const changes = {
-    role: el.fieldRole.value.trim(),
-    alt: el.fieldAlt.value.trim(),
-    actualText: el.fieldActualText.value.trim(),
-    lang: el.fieldLang.value.trim(),
-  };
+  const multi = state.selectedNodeIds.size > 1;
 
   try {
-    const result = await window.api.updateNode(state.docId, nodeId, changes);
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    setStatus('Updated tag.');
-    // Keep the same node selected/visible after the tree re-renders.
-    state.selectedNodeId = nodeId;
-    selectNode(nodeId);
+    let result;
+    if (multi) {
+      // With multiple tags selected, only Role applies as a block edit -
+      // the other fields are disabled in the form for this reason (see
+      // refreshDetailsForSelection()).
+      const role = el.fieldRole.value.trim();
+      if (!role) {
+        setStatus('Enter a role to apply it to the selected tags.');
+        return;
+      }
+      const selectedIds = Array.from(state.selectedNodeIds);
+      result = await window.api.updateNodes(state.docId, selectedIds, { role });
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      setStatus(`Updated role for ${selectedIds.length} tags.`);
+      refreshDetailsForSelection();
+    } else {
+      const changes = {
+        role: el.fieldRole.value.trim(),
+        alt: el.fieldAlt.value.trim(),
+        actualText: el.fieldActualText.value.trim(),
+        lang: el.fieldLang.value.trim(),
+      };
+      result = await window.api.updateNode(state.docId, nodeId, changes);
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      setStatus('Updated tag.');
+      // Keep the same node selected/visible after the tree re-renders.
+      selectNode(nodeId);
+    }
   } catch (err) {
     reportError('Could not update tag', err);
   }
@@ -885,6 +1048,11 @@ window.addEventListener('keydown', (e) => {
 });
 
 async function moveSelectedSibling(direction) {
+  if (state.selectedNodeIds.size > 1) {
+    await moveSelectedBlock(direction);
+    return;
+  }
+
   const nodeId = state.selectedNodeId;
   const entry = state.nodesById.get(nodeId);
   if (!entry || entry.node.type !== 'element' || entry.parentId === null) return;
@@ -931,6 +1099,61 @@ async function moveSelectedSibling(direction) {
     setStatus('Moved tag.');
   } catch (err) {
     reportError('Could not move tag', err);
+  }
+}
+
+// Ctrl/Cmd+Up/Down with multiple tags selected: steps the whole block one
+// slot earlier/later, same as the single-tag case, but only when the
+// selection is a single contiguous run of siblings under one parent - no
+// outdent generalization for blocks, since "just before/after the parent"
+// isn't well-defined once more than one tag is moving.
+async function moveSelectedBlock(direction) {
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const orderedIds = rows.map((r) => r.dataset.nodeId).filter((id) => state.selectedNodeIds.has(id));
+  const topLevelIds = orderedIds.filter((id) => !orderedIds.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  const parentIds = new Set(topLevelIds.map((id) => state.nodesById.get(id)?.parentId));
+  if (parentIds.size !== 1) {
+    setStatus("Can't move: selected tags don't share a parent.");
+    return;
+  }
+  const parentId = Array.from(parentIds)[0];
+  const parentEntry = state.nodesById.get(parentId);
+  if (!parentEntry) return;
+
+  const siblings = parentEntry.node.children || [];
+  const siblingIds = siblings.map((s) => s.id);
+  const blockIndices = topLevelIds.map((id) => siblingIds.indexOf(id)).sort((a, b) => a - b);
+  if (blockIndices.some((i) => i === -1)) return;
+  for (let i = 1; i < blockIndices.length; i++) {
+    if (blockIndices[i] !== blockIndices[i - 1] + 1) {
+      setStatus("Can't move: selected tags aren't contiguous.");
+      return;
+    }
+  }
+
+  const firstIndex = blockIndices[0];
+  const newFirstIndex = firstIndex + direction;
+  if (newFirstIndex < 0 || newFirstIndex + blockIndices.length > siblings.length) return;
+  const orderedBlockIds = blockIndices.map((i) => siblingIds[i]);
+
+  try {
+    const result = await window.api.reorderMany(state.docId, orderedBlockIds, parentId, newFirstIndex);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    const newSiblings = state.nodesById.get(parentId)?.node.children || [];
+    const movedIds = newSiblings.slice(newFirstIndex, newFirstIndex + orderedBlockIds.length).map((c) => c.id);
+    if (movedIds.length > 0) {
+      state.selectedNodeIds = new Set(movedIds);
+      state.selectedNodeId = movedIds[movedIds.length - 1];
+      state.selectionAnchorId = movedIds[0];
+      renderTree();
+      refreshDetailsForSelection();
+    }
+    setStatus('Moved tags.');
+  } catch (err) {
+    reportError('Could not move tags', err);
   }
 }
 
@@ -983,8 +1206,12 @@ window.addEventListener('keydown', (e) => {
 // Changes the selected node's heading level by `direction` (+1/-1) if it's
 // currently H1-H6, clamped to that range. Returns true if the tag is a
 // heading at all (regardless of whether it was already at the clamp), so
-// callers know to treat the key as handled either way.
+// callers know to treat the key as handled either way. Only acts on a
+// single selected tag - unlike Role, heading level isn't specified as a
+// block operation, so applying it to just the active tag out of several
+// selected would be a silent partial edit.
 function attemptHeadingLevelChange(direction) {
+  if (state.selectedNodeIds.size > 1) return false;
   const entry = state.nodesById.get(state.selectedNodeId);
   if (!entry || entry.node.type !== 'element') return false;
   const match = /^H([1-6])$/.exec(entry.node.role || '');

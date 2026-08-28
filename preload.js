@@ -12,9 +12,13 @@ contextBridge.exposeInMainWorld('api', {
 
   updateNode: (docId, nodeId, changes) =>
     ipcRenderer.invoke('tags:update-node', { docId, nodeId, changes }),
+  updateNodes: (docId, nodeIds, changes) =>
+    ipcRenderer.invoke('tags:update-nodes', { docId, nodeIds, changes }),
 
   reorderNode: (docId, nodeId, newParentId, newIndex) =>
     ipcRenderer.invoke('tags:reorder-node', { docId, nodeId, newParentId, newIndex }),
+  reorderMany: (docId, nodeIds, newParentId, newIndex) =>
+    ipcRenderer.invoke('tags:reorder-many', { docId, nodeIds, newParentId, newIndex }),
 
   killDivs: (docId) => ipcRenderer.invoke('tags:kill-divs', { docId }),
 
