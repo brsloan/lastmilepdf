@@ -17,7 +17,9 @@ renderer/ (Chromium, no Node access)
   renderer.js   - PDF.js viewer, tag tree rendering + drag/drop, wiring to window.api
   styles.css
 
-preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,reorderNode,savePdf}
+preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,updateNodes,
+                  shiftHeadingLevels,reorderNode,reorderMany,killDivs,undo,redo,
+                  savePdf,saveToPath,onMenu*}
 main.js         - BrowserWindow, native dialogs, owns the Python sidecar process
 
 python/
@@ -41,8 +43,10 @@ reassigned on every rebuild, so the renderer always throws away its old
 tree and re-renders from the fresh one - there's no way for the UI to hold
 a stale id that silently points at the wrong node after an edit.
 
-PDF.js renders the page preview independently of the tag tree; the two
-aren't yet linked (see limitations).
+PDF.js renders the page preview and is linked to the tag tree in both
+directions: selecting a tag highlights its marked content on the page
+(text only - see limitations), and clicking marked content on the page
+selects its owning tag.
 
 ## Setup
 
@@ -87,12 +91,10 @@ Things this scaffold deliberately does not solve yet:
   inserting a node between two specific siblings; dropping onto a node
   always appends to the end of its children. Worth adding before this is
   a real editing tool.
-- **No undo/redo.** Edits mutate the in-memory `pikepdf.Pdf` immediately;
-  nothing is undoable until you close without saving.
-- **No page/tree cross-linking yet.** The PDF.js preview and the tag tree
-  are rendered independently. The highest-value next feature is almost
-  certainly linking them: highlighting a tag's marked content on the page
-  when it's selected in the tree, and vice versa.
+- **Page highlight/click-to-select is text-only.** Both directions of the
+  PDF.js <-> tag tree link work off `getTextContent()`, so a Figure/Formula
+  tag's marked content (normally an image `Do` call) won't highlight, and
+  clicking on an image in the preview won't select its tag.
 - **`RoleMap` / `ParentTree` / `ClassMap` are ignored.** Custom
   (non-standard) role names round-trip as opaque strings; nothing here
   resolves them against a document's `RoleMap`.
