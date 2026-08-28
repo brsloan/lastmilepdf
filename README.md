@@ -78,10 +78,11 @@ npm start
 
 Things this scaffold deliberately does not solve yet:
 
-- **Reordering is StructElem-to-StructElem only.** Moving a raw content
-  leaf (a bare MCID or an `/MCR` dict) between parents isn't supported -
-  doing that correctly would also mean rewriting marked-content IDs in the
-  page's content stream, which is out of scope here.
+- **Content leaves can't move across pages.** A bare MCID leaf (unlike an
+  `/MCR` or `/OBJR` dict) has no `/Pg` of its own - it inherits whatever
+  page its containing StructElem resolves to - so reparenting one onto a
+  tag on a different page is refused rather than silently mislabeling
+  which page it points at. Same-page reordering/reparenting is supported.
 - **Drop = append as last child.** There's no drop-position indicator for
   inserting a node between two specific siblings; dropping onto a node
   always appends to the end of its children. Worth adding before this is

@@ -318,8 +318,19 @@ function renderTreeNode(node) {
     });
     attachDropHandlers(row, node.id);
   } else {
-    // 'content' (bare MCID / MCR) or 'object-ref' (OBJR) - read-only leaves
-    row.className = 'tree-row';
+    // 'content' (bare MCID / MCR) or 'object-ref' (OBJR) - not editable, but
+    // (like element tags) selectable and movable: dragged/reordered the same
+    // way, just never a drop *target* since a leaf can't hold children (see
+    // attachDropHandlers, which is deliberately not attached below, and the
+    // backend's _is_container check).
+    row.className = 'tree-row selectable';
+    applySelectionClasses(row, node.id);
+    row.draggable = true;
+
+    const spacer = document.createElement('span');
+    spacer.className = 'tree-toggle-spacer';
+    row.appendChild(spacer);
+
     const hasTextPreview = node.type === 'content' && node.mcid !== null && node.mcid !== undefined
       && node.page !== null && node.page !== undefined;
     if (!hasTextPreview) {
@@ -340,6 +351,16 @@ function renderTreeNode(node) {
       row.appendChild(textSpan);
       loadContentText(node.page, node.mcid, textSpan);
     }
+
+    row.addEventListener('click', (e) => handleRowClick(node.id, e));
+    row.addEventListener('dragstart', (e) => {
+      // Same block-vs-single logic as an element tag's dragstart, above.
+      const isBlockDrag = state.selectedNodeIds.size > 1 && state.selectedNodeIds.has(node.id);
+      state.draggedNodeIds = isBlockDrag ? new Set(state.selectedNodeIds) : new Set([node.id]);
+      state.draggedNodeId = node.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', node.id);
+    });
   }
 
   li.appendChild(row);
@@ -483,7 +504,7 @@ function handleRowClick(nodeId, e) {
 // arrow-key navigation uses, so it naturally follows collapse/filter state.
 function extendSelectionTo(nodeId) {
   const entry = state.nodesById.get(nodeId);
-  if (!entry || entry.node.type !== 'element') return;
+  if (!entry || entry.node.type === 'root') return;
 
   if (!state.selectionAnchorId || !state.nodesById.has(state.selectionAnchorId)) {
     selectNode(nodeId);
@@ -509,7 +530,7 @@ function extendSelectionTo(nodeId) {
 // the selection alone, and becomes the new shift+click anchor.
 function toggleSelectionMember(nodeId) {
   const entry = state.nodesById.get(nodeId);
-  if (!entry || entry.node.type !== 'element') return;
+  if (!entry || entry.node.type === 'root') return;
 
   const next = new Set(state.selectedNodeIds);
   if (next.has(nodeId)) next.delete(nodeId);
@@ -530,8 +551,20 @@ function toggleSelectionMember(nodeId) {
 function refreshDetailsForSelection() {
   const nodeId = state.selectedNodeId;
   const entry = nodeId ? state.nodesById.get(nodeId) : null;
-  if (!entry || entry.node.type !== 'element') {
+  if (!entry) {
     closeDetails();
+    return;
+  }
+  if (entry.node.type !== 'element') {
+    // A content/object-ref leaf - a valid selection (movable, like a tag),
+    // just not an editable one. Hide the details form without wiping the
+    // tree selection the way closeDetails() would (that's only for "nothing
+    // is selected"), and still scroll/highlight it like a tag selection.
+    el.detailsEmpty.hidden = false;
+    el.detailsForm.hidden = true;
+    const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+    highlightNodeOnPage(nodeId, { allowPageJump: true });
     return;
   }
   const node = entry.node;
@@ -1032,7 +1065,9 @@ window.addEventListener('keydown', (e) => {
 // Ctrl/Cmd+Up/Down moves the selected tag one place earlier/later among its
 // siblings (a keyboard equivalent of dragging it past its neighbor). At the
 // first/last child slot it instead outdents the tag to just before/after
-// its own parent - see moveSelectedSibling(). Disabled while a
+// its own parent - unless it's a content/object-ref leaf and there's an
+// adjacent tag at that same boundary, in which case it jumps straight into
+// that tag's content instead (see moveSelectedSibling()). Disabled while a
 // Headings/Figures filter is active, same as drag-and-drop - the flat
 // filtered list doesn't reflect sibling adjacency in the real tree.
 window.addEventListener('keydown', (e) => {
@@ -1055,7 +1090,7 @@ async function moveSelectedSibling(direction) {
 
   const nodeId = state.selectedNodeId;
   const entry = state.nodesById.get(nodeId);
-  if (!entry || entry.node.type !== 'element' || entry.parentId === null) return;
+  if (!entry || entry.node.type === 'root' || entry.parentId === null) return;
   const parentId = entry.parentId;
   const parentEntry = state.nodesById.get(parentId);
   if (!parentEntry) return;
@@ -1067,12 +1102,16 @@ async function moveSelectedSibling(direction) {
   let newParentId = parentId;
   let newIndex = currentIndex + direction;
 
+  // Set only for the "jump into the adjacent tag" case below - the usual
+  // (parent, index) reselect trick doesn't work there (see the comment by
+  // the reselect logic), so this carries what it needs instead.
+  let jumpGrandParentId = null;
+  let jumpAdjacentIndex = -1;
+
   if (newIndex < 0 || newIndex >= siblings.length) {
-    // At the edge of its sibling list - outdent past the parent instead of
-    // doing nothing: moving up out of the first child slot drops the tag
-    // just before its (former) parent; moving down out of the last child
-    // slot drops it just after. Only possible if the parent itself has a
-    // parent to become a sibling under (i.e. it isn't the struct root).
+    // At the edge of its sibling list. Only possible to go any further if
+    // the parent itself has a parent to work with (i.e. it isn't the
+    // struct root).
     if (parentEntry.parentId === null) return;
     const grandParentId = parentEntry.parentId;
     const grandParentEntry = state.nodesById.get(grandParentId);
@@ -1080,8 +1119,30 @@ async function moveSelectedSibling(direction) {
     const parentSiblings = grandParentEntry.node.children || [];
     const parentIndex = parentSiblings.findIndex((child) => child.id === parentId);
     if (parentIndex === -1) return;
-    newParentId = grandParentId;
-    newIndex = direction < 0 ? parentIndex : parentIndex + 1;
+
+    // A content/object-ref leaf pushed past the end/start of its own
+    // parent's children jumps into the *adjacent* tag at that same level
+    // instead of merely outdenting - the next tag below when moving past
+    // the last child, the previous tag above when moving past the first -
+    // landing in its first/last content slot respectively. That's the
+    // content-leaf equivalent of "keep moving in this direction", since
+    // sitting it beside its own parent wouldn't make it content of
+    // anything. Element tags always just outdent (the `else` branch).
+    const isContentLeaf = entry.node.type === 'content' || entry.node.type === 'object-ref';
+    const adjacentTag = isContentLeaf ? parentSiblings[parentIndex + direction] : undefined;
+
+    if (adjacentTag && adjacentTag.type === 'element') {
+      newParentId = adjacentTag.id;
+      newIndex = direction < 0 ? adjacentTag.children.length : 0;
+      jumpGrandParentId = grandParentId;
+      jumpAdjacentIndex = parentIndex + direction;
+    } else {
+      // Outdent past the parent instead: moving up out of the first child
+      // slot drops the tag just before its (former) parent; moving down
+      // out of the last child slot drops it just after.
+      newParentId = grandParentId;
+      newIndex = direction < 0 ? parentIndex : parentIndex + 1;
+    }
   }
 
   try {
@@ -1089,12 +1150,26 @@ async function moveSelectedSibling(direction) {
     applyFreshTree(result.tree);
     applyUndoState(result);
     // Node ids are reassigned by depth-first position on every rebuild (see
-    // tag_worker.py), so the moved tag's id changes - but an ancestor's own
-    // id doesn't (it's assigned before its children are visited, and this
-    // move never changes an ancestor's position among *its* siblings), so
-    // we can still find the tag by its known new (parent, index) and keep
-    // it selected.
-    const movedNode = state.nodesById.get(newParentId)?.node.children?.[newIndex];
+    // tag_worker.py). For a plain sibling move or an outdent, newParentId
+    // is always an *ancestor* of the moved node's old position, and an
+    // ancestor's id is stable across the rebuild (it's assigned before its
+    // own children are visited, and neither move changes its position
+    // among its siblings) - so the usual (parent, index) lookup still
+    // finds the right node. Jumping into an adjacent tag is different: that
+    // tag is a *sibling*, and moving a leaf out of one side of it and into
+    // the other shifts the depth-first counter enough that the sibling's
+    // own id can change (it may even end up reused by the node we just
+    // moved). Its *grandparent* and its position among *its* siblings are
+    // still both stable though (neither was touched by this move), so
+    // re-locate it structurally through those instead of trusting the
+    // captured id.
+    let movedNode;
+    if (jumpGrandParentId !== null) {
+      const freshAdjacentTag = state.nodesById.get(jumpGrandParentId)?.node.children?.[jumpAdjacentIndex];
+      movedNode = freshAdjacentTag?.children?.[newIndex];
+    } else {
+      movedNode = state.nodesById.get(newParentId)?.node.children?.[newIndex];
+    }
     if (movedNode) selectNode(movedNode.id);
     setStatus('Moved tag.');
   } catch (err) {

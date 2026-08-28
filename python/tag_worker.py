@@ -18,10 +18,15 @@ of the app and talk to it over stdio rather than shelling out per-call
 (which would mean re-parsing the PDF every time).
 
 Scope / known limitations (read this before extending):
-  - Only StructElem <-> StructElem reparenting is supported by `reorder`.
-    Moving a marked-content leaf (a bare MCID or an /MCR dict) between
-    parents would also require rewriting MCIDs in the page content stream,
-    which this scaffold does not attempt.
+  - Content leaves (a bare MCID, or an /MCR or /OBJR dict) can be reordered
+    and reparented via `reorder`/`reorder_many` the same as StructElems, but
+    only within the same page: a bare MCID has no /Pg of its own, so its
+    page is whatever its containing StructElem resolves to, and moving one
+    under a StructElem on a *different* page would silently mislabel which
+    page's content stream it lives in. /MCR and /OBJR carry their own /Pg,
+    so they're free to move across pages. See `_is_container` and the
+    page check in `reorder_node`/`reorder_many`. Content leaves have no
+    editable attributes and can never themselves be a drop target.
   - Every mutating call rebuilds and returns the *entire* tree rather than
     patching it incrementally. This trades some efficiency for correctness:
     node ids are just a fresh depth-first counter assigned on each rebuild,
@@ -195,6 +200,13 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
     if resolved is not None:
         own_page = resolved
 
+    # Track every element's resolved page and kind alongside `elements`/
+    # `parent_map`, so reorder can tell a container from a content leaf and
+    # (for bare-MCID leaves specifically) refuse a cross-page move - see the
+    # module docstring.
+    doc["node_pages"][node_id] = own_page
+    doc["node_kind"][node_id] = "root" if node_id == "root" else "element"
+
     node = {
         "id": node_id,
         "type": "root" if node_id == "root" else "element",
@@ -211,8 +223,13 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
         if mcid is not None:
             # A bare MCID has no dict of its own to carry /Pg, so it always
             # uses the page established by its containing struct element.
+            child_id = _next_id(doc)
+            doc["elements"][child_id] = mcid
+            doc["parent_map"][child_id] = node_id
+            doc["node_pages"][child_id] = own_page
+            doc["node_kind"][child_id] = "content-int"
             node["children"].append({
-                "id": _next_id(doc), "type": "content", "role": None,
+                "id": child_id, "type": "content", "role": None,
                 "mcid": mcid, "page": own_page, "children": [],
             })
             continue
@@ -239,8 +256,13 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
                 resolved_kid_page = _resolve_page_index(doc, kid.get("/Pg"))
                 if resolved_kid_page is not None:
                     kid_page = resolved_kid_page
+            child_id = _next_id(doc)
+            doc["elements"][child_id] = kid
+            doc["parent_map"][child_id] = node_id
+            doc["node_pages"][child_id] = kid_page
+            doc["node_kind"][child_id] = "content-dict"
             node["children"].append({
-                "id": _next_id(doc),
+                "id": child_id,
                 "type": "object-ref" if kid_type == "/OBJR" else "content",
                 "role": None,
                 "mcid": mcid_val,
@@ -255,10 +277,19 @@ def _rebuild_registry(doc_id):
     doc = documents[doc_id]
     doc["elements"] = {}
     doc["parent_map"] = {}
+    doc["node_pages"] = {}
+    doc["node_kind"] = {}
     doc["counter"] = 0
     struct_root = doc["pdf"].Root["/StructTreeRoot"]
     doc["elements"]["root"] = struct_root
     return _walk(doc, struct_root, "root")
+
+
+def _is_container(doc, node_id):
+    """True if `node_id` can validly be a reorder drop target - the struct
+    root, or a struct element. Content leaves (bare MCID, /MCR, /OBJR) have
+    no /K of their own and can't accept children."""
+    return node_id == "root" or doc["node_kind"].get(node_id) == "element"
 
 
 # --- command handlers --------------------------------------------------
@@ -269,7 +300,8 @@ def open_document(path):
     pdf = pikepdf.open(path, allow_overwriting_input=True)
     doc_id = str(uuid.uuid4())
     documents[doc_id] = {
-        "pdf": pdf, "elements": {}, "parent_map": {}, "counter": 0,
+        "pdf": pdf, "elements": {}, "parent_map": {}, "node_pages": {},
+        "node_kind": {}, "counter": 0,
         "page_index_by_objgen": {page.objgen: i for i, page in enumerate(pdf.pages)},
         "undo_stack": [], "redo_stack": [],
     }
@@ -288,6 +320,8 @@ def update_node(doc_id, node_id, changes):
         raise ValueError(f"Unknown node id: {node_id}")
     if node_id == "root":
         raise ValueError("The document root has no editable attributes")
+    if doc["node_kind"].get(node_id) != "element":
+        raise ValueError("Content leaves have no editable attributes")
 
     _push_undo_snapshot(doc)
     elem = doc["elements"][node_id]
@@ -319,6 +353,8 @@ def update_nodes(doc_id, node_ids, changes):
             raise ValueError("The document root has no editable attributes")
         if node_id not in doc["elements"]:
             raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) != "element":
+            raise ValueError("Content leaves have no editable attributes")
         targets.append(doc["elements"][node_id])
     if not targets:
         raise ValueError("No nodes to update")
@@ -353,6 +389,8 @@ def shift_heading_levels(doc_id, node_ids, direction):
             raise ValueError("The document root has no editable attributes")
         if node_id not in doc["elements"]:
             raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) != "element":
+            raise ValueError("Content leaves have no editable attributes")
         targets.append(doc["elements"][node_id])
     if not targets:
         raise ValueError("No nodes to update")
@@ -379,6 +417,8 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
         raise ValueError(f"Unknown node id: {node_id}")
     if new_parent_id not in doc["elements"]:
         raise ValueError(f"Unknown target parent id: {new_parent_id}")
+    if not _is_container(doc, new_parent_id):
+        raise ValueError("Cannot move a tag into a content leaf")
 
     if new_parent_id == node_id:
         raise ValueError("A node cannot become its own parent")
@@ -396,6 +436,13 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
     if current_parent_id is None:
         raise ValueError(f"Node {node_id} has no tracked parent - cannot move it")
 
+    # A bare MCID leaf has no /Pg of its own - it takes whatever page its
+    # containing struct element resolves to (see the module docstring), so
+    # reparenting it under an element on a different page would silently
+    # mislabel which page's content it points at.
+    if doc["node_kind"].get(node_id) == "content-int" and doc["node_pages"].get(new_parent_id) != doc["node_pages"].get(node_id):
+        raise ValueError("Can't move marked content to a tag on a different page")
+
     _push_undo_snapshot(doc)
     node_obj = doc["elements"][node_id]
     old_parent_obj = doc["elements"][current_parent_id]
@@ -403,7 +450,8 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
 
     _remove_kid(old_parent_obj, node_obj)
     _insert_kid(new_parent_obj, node_obj, new_index)
-    node_obj["/P"] = new_parent_obj
+    if isinstance(node_obj, pikepdf.Dictionary):
+        node_obj["/P"] = new_parent_obj
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
@@ -418,6 +466,8 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
         raise ValueError("No nodes to move")
     if new_parent_id not in doc["elements"]:
         raise ValueError(f"Unknown target parent id: {new_parent_id}")
+    if not _is_container(doc, new_parent_id):
+        raise ValueError("Cannot move a tag into a content leaf")
 
     seen = set()
     unique_ids = []
@@ -428,6 +478,10 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
             raise ValueError(f"Unknown node id: {node_id}")
         if node_id == new_parent_id:
             raise ValueError("A node cannot become its own parent")
+        # See reorder_node: a bare MCID leaf's page is inherited from its
+        # containing element, so it can't be reparented across pages.
+        if doc["node_kind"].get(node_id) == "content-int" and doc["node_pages"].get(new_parent_id) != doc["node_pages"].get(node_id):
+            raise ValueError("Can't move marked content to a tag on a different page")
         if node_id not in seen:
             seen.add(node_id)
             unique_ids.append(node_id)
@@ -464,7 +518,8 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
     for node_id in unique_ids:
         node_obj = doc["elements"][node_id]
         _insert_kid(new_parent_obj, node_obj, insertion_index)
-        node_obj["/P"] = new_parent_obj
+        if isinstance(node_obj, pikepdf.Dictionary):
+            node_obj["/P"] = new_parent_obj
         insertion_index += 1
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
