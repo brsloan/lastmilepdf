@@ -232,6 +232,10 @@ ipcMain.handle('tags:update-nodes', async (_event, { docId, nodeIds, changes }) 
   return callWorker('update_nodes', { docId, nodeIds, changes });
 });
 
+ipcMain.handle('tags:shift-heading-levels', async (_event, { docId, nodeIds, direction }) => {
+  return callWorker('shift_heading_levels', { docId, nodeIds, direction });
+});
+
 ipcMain.handle('tags:reorder-node', async (_event, { docId, nodeId, newParentId, newIndex }) => {
   return callWorker('reorder', { docId, nodeId, newParentId, newIndex });
 });

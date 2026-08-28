@@ -40,6 +40,7 @@ Scope / known limitations (read this before extending):
 
 import io
 import json
+import re
 import sys
 import uuid
 
@@ -339,6 +340,37 @@ def update_nodes(doc_id, node_ids, changes):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+def shift_heading_levels(doc_id, node_ids, direction):
+    """Bulk heading-level step for the tag tree's Headings-filter multi-select:
+    each listed node's H-level moves by `direction` (+1/-1), clamped to
+    H1-H6, computed independently per node (so an H1 and H3 selected
+    together become H2 and H4). Non-heading nodes are left untouched. All
+    changes land as a single undo step."""
+    doc = documents[doc_id]
+    targets = []
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("The document root has no editable attributes")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        targets.append(doc["elements"][node_id])
+    if not targets:
+        raise ValueError("No nodes to update")
+
+    _push_undo_snapshot(doc)
+    for elem in targets:
+        role = str(elem["/S"]).lstrip("/") if "/S" in elem else ""
+        match = re.match(r"^H([1-6])$", role)
+        if not match:
+            continue
+        level = int(match.group(1))
+        new_level = level + direction
+        if 1 <= new_level <= 6:
+            elem["/S"] = pikepdf.Name(f"/H{new_level}")
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
 def reorder_node(doc_id, node_id, new_parent_id, new_index):
     doc = documents[doc_id]
     if node_id == "root":
@@ -540,6 +572,8 @@ def main():
                 result = update_node(request["docId"], request["nodeId"], request.get("changes", {}))
             elif cmd == "update_nodes":
                 result = update_nodes(request["docId"], request["nodeIds"], request.get("changes", {}))
+            elif cmd == "shift_heading_levels":
+                result = shift_heading_levels(request["docId"], request["nodeIds"], request["direction"])
             elif cmd == "reorder":
                 result = reorder_node(
                     request["docId"], request["nodeId"],

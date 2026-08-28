@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:update-node', { docId, nodeId, changes }),
   updateNodes: (docId, nodeIds, changes) =>
     ipcRenderer.invoke('tags:update-nodes', { docId, nodeIds, changes }),
+  shiftHeadingLevels: (docId, nodeIds, direction) =>
+    ipcRenderer.invoke('tags:shift-heading-levels', { docId, nodeIds, direction }),
 
   reorderNode: (docId, nodeId, newParentId, newIndex) =>
     ipcRenderer.invoke('tags:reorder-node', { docId, nodeId, newParentId, newIndex }),

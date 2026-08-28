@@ -1171,7 +1171,13 @@ window.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
   if (state.filter === 'headings') {
-    if (attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+    const direction = e.key === 'ArrowRight' ? 1 : -1;
+    if (state.selectedNodeIds.size > 1) {
+      e.preventDefault();
+      shiftSelectedHeadingLevels(direction);
+    } else if (attemptHeadingLevelChange(direction)) {
+      e.preventDefault();
+    }
     return;
   }
 
@@ -1209,7 +1215,9 @@ window.addEventListener('keydown', (e) => {
 // callers know to treat the key as handled either way. Only acts on a
 // single selected tag - unlike Role, heading level isn't specified as a
 // block operation, so applying it to just the active tag out of several
-// selected would be a silent partial edit.
+// selected would be a silent partial edit. When multiple tags are selected
+// in the Headings filter, callers use shiftSelectedHeadingLevels() instead,
+// which steps every selection independently.
 function attemptHeadingLevelChange(direction) {
   if (state.selectedNodeIds.size > 1) return false;
   const entry = state.nodesById.get(state.selectedNodeId);
@@ -1234,6 +1242,24 @@ async function changeHeadingLevel(nodeId, newLevel) {
     setStatus(`Changed to H${newLevel}.`);
   } catch (err) {
     reportError('Could not change heading level', err);
+  }
+}
+
+// Steps every selected heading's level by `direction` independently (an H1
+// and H3 both selected become H2 and H4), clamped to H1-H6, as one undo
+// step. Used when Left/Right is pressed in the Headings filter with more
+// than one tag selected.
+async function shiftSelectedHeadingLevels(direction) {
+  const selectedIds = Array.from(state.selectedNodeIds);
+  try {
+    const result = await window.api.shiftHeadingLevels(state.docId, selectedIds, direction);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    // Role-only changes don't touch the tree's structure, so ids survive.
+    refreshDetailsForSelection();
+    setStatus(`Changed heading level for ${selectedIds.length} tags.`);
+  } catch (err) {
+    reportError('Could not change heading levels', err);
   }
 }
 
