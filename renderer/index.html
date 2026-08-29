@@ -24,6 +24,7 @@
       <button id="btn-undo" class="btn btn-ghost" disabled title="Undo (Ctrl+Z)">Undo</button>
       <button id="btn-redo" class="btn btn-ghost" disabled title="Redo (Ctrl+Y)">Redo</button>
       <button id="btn-kill-divs" class="btn btn-ghost" disabled title="Remove all Div tags, keeping their contents">Kill Divs</button>
+      <button id="btn-scope-tables" class="btn btn-ghost" disabled title="Set Row/Column/Both scope on every table's TH cells based on its header shape">Scope Tables</button>
       <button id="btn-smartifact" class="btn btn-ghost" disabled title="Artifact image leaves that are the same size as their page (e.g. full-page scan backgrounds)">Smartifact</button>
       <button id="btn-walk" class="btn btn-ghost" disabled title="Walk the tag tree, selecting one tag at a time (+/- to change speed, any other key to stop)">Walk</button>
     </div>
@@ -128,7 +129,7 @@
         </div>
 
         <div id="field-th-section" class="field-row" hidden>
-          <label class="field">
+          <label class="field" id="field-scope-wrap">
             <span class="field-label">Scope</span>
             <select id="field-scope">
               <option value="">(none)</option>

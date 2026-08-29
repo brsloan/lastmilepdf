@@ -1116,6 +1116,119 @@ def kill_divs(doc_id):
     return {"tree": _rebuild_registry(doc_id), "removed": removed, **_undo_state(doc)}
 
 
+def _role_of(struct_obj):
+    return str(struct_obj["/S"]).lstrip("/") if "/S" in struct_obj else None
+
+
+def _collect_tables(struct_obj, out):
+    """Depth-first collection of every Table struct element anywhere in
+    struct_obj's subtree, including tables nested inside another table's
+    cells - each one is scoped independently."""
+    for kid in _iter_kids(struct_obj):
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            if _role_of(kid) == "Table":
+                out.append(kid)
+            _collect_tables(kid, out)
+
+
+def _collect_rows(table_obj):
+    """Ordered list of a Table's TR struct elements, flattening through any
+    THead/TBody/TFoot wrappers. Stops at a nested Table (its rows belong to
+    that inner table, not this one)."""
+    rows = []
+
+    def walk(struct_obj):
+        for kid in _iter_kids(struct_obj):
+            if not (isinstance(kid, pikepdf.Dictionary) and "/S" in kid):
+                continue
+            role = _role_of(kid)
+            if role == "TR":
+                rows.append(kid)
+            elif role in ("THead", "TBody", "TFoot"):
+                walk(kid)
+
+    walk(table_obj)
+    return rows
+
+
+def _collect_cells(row_obj):
+    """Ordered list of a TR's TH/TD struct-element kids."""
+    return [
+        kid for kid in _iter_kids(row_obj)
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid and _role_of(kid) in ("TH", "TD")
+    ]
+
+
+def _set_cell_scope(doc, cell_obj, scope_value):
+    _ensure_table_attr_obj(doc, cell_obj)["/Scope"] = pikepdf.Name("/" + scope_value)
+
+
+def scope_tables(doc_id):
+    """Walks every Table tag in the document and sets its TH cells' Scope
+    attribute from the shape of its header cells, backing the toolbar's
+    'Scope Tables' button:
+      - a header row (first row all TH) with no TH cells anywhere else ->
+        those header-row TH cells get Column scope.
+      - every row's first cell is TH (row headers, no distinct header row) ->
+        those first-cell TH cells get Row scope.
+      - both at once (header row all TH, and every other row also leads with
+        a TH) -> the header row's first TH is Both, the rest of the header
+        row is Column, and the leading TH of every other row is Row.
+    Tables that match none of these shapes (e.g. TH cells scattered
+    elsewhere) are left untouched. Leaves the document unchanged (no undo
+    snapshot) if there was nothing to scope."""
+    doc = documents[doc_id]
+    struct_root = doc["elements"]["root"]
+    tables = []
+    _collect_tables(struct_root, tables)
+
+    scoped = 0
+    pending = []  # [(cell_obj, scope_value), ...] - collected before mutating anything
+    for table in tables:
+        rows = _collect_rows(table)
+        if not rows:
+            continue
+        row_cells = [_collect_cells(row) for row in rows]
+        first_row_cells = row_cells[0]
+        other_rows_cells = row_cells[1:]
+        if not first_row_cells:
+            continue
+
+        first_row_all_th = all(_role_of(c) == "TH" for c in first_row_cells)
+        other_rows_begin_with_th = bool(other_rows_cells) and all(
+            cells and _role_of(cells[0]) == "TH" for cells in other_rows_cells
+        )
+        other_rows_have_no_th = all(
+            all(_role_of(c) != "TH" for c in cells) for cells in other_rows_cells
+        )
+        all_rows_begin_with_th = all(
+            cells and _role_of(cells[0]) == "TH" for cells in row_cells
+        )
+
+        table_changes = []
+        if first_row_all_th and other_rows_begin_with_th:
+            table_changes.append((first_row_cells[0], "Both"))
+            table_changes.extend((c, "Column") for c in first_row_cells[1:])
+            table_changes.extend((cells[0], "Row") for cells in other_rows_cells)
+        elif first_row_all_th and other_rows_have_no_th:
+            table_changes.extend((c, "Column") for c in first_row_cells)
+        elif all_rows_begin_with_th:
+            table_changes.extend((cells[0], "Row") for cells in row_cells)
+
+        if table_changes:
+            pending.extend(table_changes)
+            scoped += 1
+
+    if not pending:
+        return {"tree": _rebuild_registry(doc_id), "tablesScoped": 0, **_undo_state(doc)}
+
+    _push_undo_snapshot(doc)
+    for cell_obj, scope_value in pending:
+        _set_cell_scope(doc, cell_obj, scope_value)
+
+    return {"tree": _rebuild_registry(doc_id), "tablesScoped": scoped, **_undo_state(doc)}
+
+
 def delete_nodes(doc_id, node_ids):
     """Removes each of `node_ids` from its parent's /K, taking its entire
     subtree with it. Backs the tag tree's Delete key for both cases it
@@ -1219,6 +1332,8 @@ def main():
                 )
             elif cmd == "kill_divs":
                 result = kill_divs(request["docId"])
+            elif cmd == "scope_tables":
+                result = scope_tables(request["docId"])
             elif cmd == "delete_nodes":
                 result = delete_nodes(request["docId"], request["nodeIds"])
             elif cmd == "set_role_or_wrap":

@@ -254,6 +254,10 @@ ipcMain.handle('tags:kill-divs', async (_event, { docId }) => {
   return callWorker('kill_divs', { docId });
 });
 
+ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
+  return callWorker('scope_tables', { docId });
+});
+
 ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
   return callWorker('delete_nodes', { docId, nodeIds });
 });

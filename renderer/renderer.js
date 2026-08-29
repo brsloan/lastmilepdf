@@ -61,6 +61,7 @@ const el = {
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
   btnKillDivs: document.getElementById('btn-kill-divs'),
+  btnScopeTables: document.getElementById('btn-scope-tables'),
   btnSmartifact: document.getElementById('btn-smartifact'),
   btnWalk: document.getElementById('btn-walk'),
   tagFilter: document.getElementById('tag-filter'),
@@ -90,6 +91,7 @@ const el = {
   btnCloseTablePreview: document.getElementById('btn-close-table-preview'),
   fieldLang: document.getElementById('field-lang'),
   thSection: document.getElementById('field-th-section'),
+  fieldScopeWrap: document.getElementById('field-scope-wrap'),
   fieldScope: document.getElementById('field-scope'),
   fieldColSpan: document.getElementById('field-col-span'),
   fieldRowSpan: document.getElementById('field-row-span'),
@@ -685,19 +687,29 @@ function refreshDetailsForSelection() {
   el.fieldLang.disabled = multi;
   el.btnPullContent.disabled = multi;
 
-  // TH-only attributes (Scope/Column span/Row span, PDF's Table attribute
-  // owner - see _get_table_attrs() in tag_worker.py) - shown only when
-  // every selected tag is a TH, so the fields can't silently misrepresent a
-  // mixed selection. Unlike Alt/Actual text/Language, these stay enabled in
-  // a multi-select: same block-apply-to-all shape as Role, just applied to
-  // Table-attribute fields instead - see the submit handler.
+  // Table-cell attributes (Scope/Column span/Row span, PDF's Table attribute
+  // owner - see _get_table_attrs() in tag_worker.py). Column span/Row span
+  // apply to both TH and TD cells, so they're shown whenever every selected
+  // tag is a TH or TD; Scope only has meaning on TH per the PDF spec, so it
+  // stays hidden unless every selected tag is a TH specifically. Gating on
+  // "every selected tag" (rather than just this one) means the fields can't
+  // silently misrepresent a mixed selection. Unlike Alt/Actual text/
+  // Language, these stay enabled in a multi-select: same block-apply-to-all
+  // shape as Role, just applied to Table-attribute fields instead - see the
+  // submit handler.
   const allSelectedIds = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const allTH = allSelectedIds.length > 0
     && allSelectedIds.every((id) => state.nodesById.get(id)?.node.role === 'TH');
-  el.thSection.hidden = !allTH;
+  const allCell = allSelectedIds.length > 0
+    && allSelectedIds.every((id) => {
+      const role = state.nodesById.get(id)?.node.role;
+      return role === 'TH' || role === 'TD';
+    });
+  el.thSection.hidden = !allCell;
+  el.fieldScopeWrap.hidden = !allTH;
   el.fieldScope.value = allTH ? (node.scope || '') : '';
-  el.fieldColSpan.value = allTH && node.colSpan != null ? node.colSpan : '';
-  el.fieldRowSpan.value = allTH && node.rowSpan != null ? node.rowSpan : '';
+  el.fieldColSpan.value = allCell && node.colSpan != null ? node.colSpan : '';
+  el.fieldRowSpan.value = allCell && node.rowSpan != null ? node.rowSpan : '';
 
   // A Table tag's Actual Text is swapped out for a generated read-only HTML
   // preview of its own row/cell structure - more useful here than a free-
@@ -732,6 +744,7 @@ function closeDetails() {
   el.fieldLang.disabled = false;
   el.btnPullContent.disabled = false;
   el.thSection.hidden = true;
+  el.fieldScopeWrap.hidden = true;
   el.fieldActualTextWrap.hidden = false;
   el.tablePreviewWrap.hidden = true;
   state.tablePreviewToken += 1; // invalidate any table-preview build still in flight
@@ -1480,8 +1493,10 @@ el.detailsForm.addEventListener('change', async () => {
         return;
       }
       const changes = { role };
-      if (!el.thSection.hidden) {
+      if (!el.fieldScopeWrap.hidden) {
         changes.scope = el.fieldScope.value;
+      }
+      if (!el.thSection.hidden) {
         changes.colSpan = el.fieldColSpan.value.trim();
         changes.rowSpan = el.fieldRowSpan.value.trim();
       }
@@ -1498,8 +1513,10 @@ el.detailsForm.addEventListener('change', async () => {
         actualText: el.fieldActualText.value.trim(),
         lang: el.fieldLang.value.trim(),
       };
-      if (!el.thSection.hidden) {
+      if (!el.fieldScopeWrap.hidden) {
         changes.scope = el.fieldScope.value;
+      }
+      if (!el.thSection.hidden) {
         changes.colSpan = el.fieldColSpan.value.trim();
         changes.rowSpan = el.fieldRowSpan.value.trim();
       }
@@ -2215,6 +2232,7 @@ async function performOpen() {
     state.savedFilePath = opened.filePath; // Save overwrites the file it was opened from until Save As picks a new one
     el.fileName.textContent = state.fileName;
     el.btnKillDivs.disabled = !opened.hasStructTree;
+    el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
     stopWalking();
@@ -2282,6 +2300,19 @@ el.btnKillDivs.addEventListener('click', async () => {
     setStatus(result.removed > 0 ? `Removed ${result.removed} Div tag${result.removed === 1 ? '' : 's'}.` : 'No Div tags found.');
   } catch (err) {
     reportError('Could not remove Div tags', err);
+  }
+});
+
+el.btnScopeTables.addEventListener('click', async () => {
+  if (!state.docId) return;
+  try {
+    setStatus('Scoping tables…');
+    const result = await window.api.scopeTables(state.docId);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    setStatus(result.tablesScoped > 0 ? `Scoped ${result.tablesScoped} table${result.tablesScoped === 1 ? '' : 's'}.` : 'No tables matched a recognized header shape.');
+  } catch (err) {
+    reportError('Could not scope tables', err);
   }
 });
 
