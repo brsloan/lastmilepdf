@@ -126,6 +126,28 @@
           </label>
         </div>
 
+        <div id="field-th-section" class="field-row" hidden>
+          <label class="field">
+            <span class="field-label">Scope</span>
+            <select id="field-scope">
+              <option value="">(none)</option>
+              <option value="Row">Row</option>
+              <option value="Column">Column</option>
+              <option value="Both">Both</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Column span</span>
+            <input id="field-col-span" type="number" min="1" step="1" placeholder="1" />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Row span</span>
+            <input id="field-row-span" type="number" min="1" step="1" placeholder="1" />
+          </label>
+        </div>
+
         <label class="field">
           <span class="field-label">Alt text</span>
           <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>

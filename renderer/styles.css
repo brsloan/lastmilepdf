@@ -529,6 +529,16 @@ body.busy * {
   min-width: 0;
 }
 
+/* `.field-row`'s own `display: flex` otherwise outranks the default UA
+   `[hidden] { display: none }` rule (same gotcha as `.viewer-placeholder`
+   above), which left the TH attributes row visible even when its `hidden`
+   property was set. Only `#field-th-section` among the `.field-row`s is
+   ever toggled hidden, so this could be scoped to it, but the fix belongs
+   on any `.field-row` that might gain a `hidden` toggle in the future. */
+.field-row[hidden] {
+  display: none;
+}
+
 .field-label {
   font-size: 11px;
   text-transform: uppercase;
@@ -566,6 +576,7 @@ body.busy * {
 }
 
 .field input,
+.field select,
 .field textarea {
   background: var(--panel-alt);
   border: 1px solid var(--border);
@@ -578,11 +589,13 @@ body.busy * {
 }
 
 .field input:focus,
+.field select:focus,
 .field textarea:focus {
   border-color: var(--accent);
 }
 
 .field input:disabled,
+.field select:disabled,
 .field textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;

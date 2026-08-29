@@ -80,6 +80,10 @@ const el = {
   fieldAlt: document.getElementById('field-alt'),
   fieldActualText: document.getElementById('field-actual-text'),
   fieldLang: document.getElementById('field-lang'),
+  thSection: document.getElementById('field-th-section'),
+  fieldScope: document.getElementById('field-scope'),
+  fieldColSpan: document.getElementById('field-col-span'),
+  fieldRowSpan: document.getElementById('field-row-span'),
   btnCancelEdit: document.getElementById('btn-cancel-edit'),
   btnPullContent: document.getElementById('btn-pull-content'),
   shortcutsDialog: document.getElementById('shortcuts-dialog'),
@@ -671,6 +675,20 @@ function refreshDetailsForSelection() {
   el.fieldLang.disabled = multi;
   el.btnPullContent.disabled = multi;
 
+  // TH-only attributes (Scope/Column span/Row span, PDF's Table attribute
+  // owner - see _get_table_attrs() in tag_worker.py) - shown only when
+  // every selected tag is a TH, so the fields can't silently misrepresent a
+  // mixed selection. Unlike Alt/Actual text/Language, these stay enabled in
+  // a multi-select: same block-apply-to-all shape as Role, just applied to
+  // Table-attribute fields instead - see the submit handler.
+  const allSelectedIds = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  const allTH = allSelectedIds.length > 0
+    && allSelectedIds.every((id) => state.nodesById.get(id)?.node.role === 'TH');
+  el.thSection.hidden = !allTH;
+  el.fieldScope.value = allTH ? (node.scope || '') : '';
+  el.fieldColSpan.value = allTH && node.colSpan != null ? node.colSpan : '';
+  el.fieldRowSpan.value = allTH && node.rowSpan != null ? node.rowSpan : '';
+
   const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
   row?.scrollIntoView({ block: 'nearest' });
 
@@ -688,6 +706,7 @@ function closeDetails() {
   el.fieldActualText.disabled = false;
   el.fieldLang.disabled = false;
   el.btnPullContent.disabled = false;
+  el.thSection.hidden = true;
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
 }
@@ -1298,16 +1317,23 @@ el.detailsForm.addEventListener('submit', async (e) => {
   try {
     let result;
     if (multi) {
-      // With multiple tags selected, only Role applies as a block edit -
-      // the other fields are disabled in the form for this reason (see
+      // With multiple tags selected, only Role and (when every selected tag
+      // is a TH) the TH attributes apply as a block edit - the other fields
+      // are disabled in the form for this reason (see
       // refreshDetailsForSelection()).
       const role = el.fieldRole.value.trim();
       if (!role) {
         setStatus('Enter a role to apply it to the selected tags.');
         return;
       }
+      const changes = { role };
+      if (!el.thSection.hidden) {
+        changes.scope = el.fieldScope.value;
+        changes.colSpan = el.fieldColSpan.value.trim();
+        changes.rowSpan = el.fieldRowSpan.value.trim();
+      }
       const selectedIds = Array.from(state.selectedNodeIds);
-      result = await window.api.updateNodes(state.docId, selectedIds, { role });
+      result = await window.api.updateNodes(state.docId, selectedIds, changes);
       applyFreshTree(result.tree);
       applyUndoState(result);
       setStatus(`Updated role for ${selectedIds.length} tags.`);
@@ -1319,6 +1345,11 @@ el.detailsForm.addEventListener('submit', async (e) => {
         actualText: el.fieldActualText.value.trim(),
         lang: el.fieldLang.value.trim(),
       };
+      if (!el.thSection.hidden) {
+        changes.scope = el.fieldScope.value;
+        changes.colSpan = el.fieldColSpan.value.trim();
+        changes.rowSpan = el.fieldRowSpan.value.trim();
+      }
       result = await window.api.updateNode(state.docId, nodeId, changes);
       applyFreshTree(result.tree);
       applyUndoState(result);

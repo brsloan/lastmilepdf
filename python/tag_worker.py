@@ -114,6 +114,132 @@ def _set_or_clear_string(obj, key, value):
         del obj[key]
 
 
+def _find_table_attr_obj(struct_obj):
+    """The /Table-owned attribute dict inside `struct_obj`'s /A entry, if
+    any. /A may be absent, a single attribute dict, or an array mixing
+    attribute dicts from different owners (e.g. /Layout alongside /Table) -
+    entries that aren't a dict, or whose /O isn't /Table, are skipped."""
+    a = struct_obj.get("/A")
+    if isinstance(a, pikepdf.Dictionary):
+        candidates = [a]
+    elif isinstance(a, pikepdf.Array):
+        candidates = list(a)
+    else:
+        return None
+    for item in candidates:
+        if isinstance(item, pikepdf.Dictionary) and str(item.get("/O", "")).lstrip("/") == "Table":
+            return item
+    return None
+
+
+def _get_table_attrs(struct_obj):
+    """Scope/ColSpan/RowSpan read off `struct_obj`'s /Table attribute
+    object, each None if unset or unparseable. Backs the tag properties
+    panel's TH attributes section."""
+    attr = _find_table_attr_obj(struct_obj)
+    if attr is None:
+        return {"scope": None, "colSpan": None, "rowSpan": None}
+
+    scope = None
+    if "/Scope" in attr:
+        try:
+            scope = str(attr["/Scope"]).lstrip("/")
+        except Exception:
+            scope = None
+
+    def _int_or_none(key):
+        if key not in attr:
+            return None
+        try:
+            return int(attr[key])
+        except (TypeError, ValueError):
+            return None
+
+    return {"scope": scope, "colSpan": _int_or_none("/ColSpan"), "rowSpan": _int_or_none("/RowSpan")}
+
+
+def _ensure_table_attr_obj(doc, struct_obj):
+    """Like _find_table_attr_obj, but creates (and attaches to /A) a fresh
+    Table attribute dict if none exists yet - folded in alongside whatever
+    /A already held (a lone other-owner dict becomes a 2-element array; an
+    existing array just gets the new dict appended)."""
+    existing = _find_table_attr_obj(struct_obj)
+    if existing is not None:
+        return existing
+    new_attr = doc["pdf"].make_indirect(pikepdf.Dictionary({"/O": pikepdf.Name("/Table")}))
+    a = struct_obj.get("/A")
+    if a is None:
+        struct_obj["/A"] = new_attr
+    elif isinstance(a, pikepdf.Array):
+        struct_obj["/A"] = pikepdf.Array(list(a) + [new_attr])
+    else:
+        struct_obj["/A"] = pikepdf.Array([a, new_attr])
+    return new_attr
+
+
+def _prune_table_attr(struct_obj):
+    """Removes the /Table-owned attribute dict from /A once nothing but /O
+    is left in it (e.g. after clearing Scope/ColSpan/RowSpan back to
+    unset), and drops /A entirely if that was its only attribute object -
+    mirrors how _set_or_clear_string() removes an emptied key rather than
+    leaving a stray dict/array behind."""
+    attr = _find_table_attr_obj(struct_obj)
+    if attr is None or len(attr) > 1:
+        return
+    a = struct_obj["/A"]
+    if isinstance(a, pikepdf.Array):
+        remaining = [item for item in a if not _same_object(item, attr)]
+        if remaining:
+            struct_obj["/A"] = remaining[0] if len(remaining) == 1 else pikepdf.Array(remaining)
+            return
+    del struct_obj["/A"]
+
+
+def _apply_table_attr_changes(doc, elem, changes):
+    """Applies `scope`/`colSpan`/`rowSpan` from `changes` (each an already-
+    trimmed string; '' clears the attribute) onto elem's /Table-owned
+    attribute object, creating one only if there's actually something to
+    write, and pruning it away again if every field ends up cleared. Backs
+    the tag properties panel's TH attributes section."""
+    if not any(key in changes for key in ("scope", "colSpan", "rowSpan")):
+        return
+
+    attr = [None]  # boxed so the nested closure can lazily create-and-cache it
+
+    def get_or_create_attr():
+        if attr[0] is None:
+            attr[0] = _ensure_table_attr_obj(doc, elem)
+        return attr[0]
+
+    if "scope" in changes:
+        value = changes["scope"]
+        if value:
+            get_or_create_attr()["/Scope"] = pikepdf.Name("/" + value)
+        else:
+            existing = _find_table_attr_obj(elem)
+            if existing is not None and "/Scope" in existing:
+                del existing["/Scope"]
+
+    for key, pdf_key in (("colSpan", "/ColSpan"), ("rowSpan", "/RowSpan")):
+        if key not in changes:
+            continue
+        value = changes[key]
+        if value:
+            try:
+                num = int(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a whole number")
+            if num < 1:
+                raise ValueError(f"{key} must be at least 1")
+            get_or_create_attr()[pdf_key] = num
+        else:
+            existing = _find_table_attr_obj(elem)
+            if existing is not None and pdf_key in existing:
+                del existing[pdf_key]
+
+    _prune_table_attr(elem)
+
+
 def _same_object(a, b):
     """Identity comparison that works for indirect PDF objects, where two
     Python-side wrapper instances can refer to the same underlying object."""
@@ -616,6 +742,7 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
     doc["node_pages"][node_id] = own_page
     doc["node_kind"][node_id] = "root" if node_id == "root" else "element"
 
+    table_attrs = _get_table_attrs(struct_obj)
     node = {
         "id": node_id,
         "type": "root" if node_id == "root" else "element",
@@ -623,6 +750,9 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
         "alt": _get_string(struct_obj, "/Alt"),
         "actualText": _get_string(struct_obj, "/ActualText"),
         "lang": _get_string(struct_obj, "/Lang"),
+        "scope": table_attrs["scope"],
+        "colSpan": table_attrs["colSpan"],
+        "rowSpan": table_attrs["rowSpan"],
         "page": own_page,
         "children": [],
     }
@@ -748,6 +878,7 @@ def update_node(doc_id, node_id, changes):
         _set_or_clear_string(elem, "/ActualText", changes["actualText"])
     if "lang" in changes:
         _set_or_clear_string(elem, "/Lang", changes["lang"])
+    _apply_table_attr_changes(doc, elem, changes)
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
@@ -783,6 +914,7 @@ def update_nodes(doc_id, node_ids, changes):
             _set_or_clear_string(elem, "/ActualText", changes["actualText"])
         if "lang" in changes:
             _set_or_clear_string(elem, "/Lang", changes["lang"])
+        _apply_table_attr_changes(doc, elem, changes)
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
