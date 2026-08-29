@@ -1474,7 +1474,9 @@ window.addEventListener('resize', () => {
 // Auto-applies on the form's native 'change' event (fires when a text/
 // textarea field is committed via blur, and immediately for select
 // elements) rather than requiring an explicit Apply button.
-el.detailsForm.addEventListener('change', async () => {
+el.detailsForm.addEventListener('change', applyDetailsChange);
+
+async function applyDetailsChange() {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
 
@@ -1530,7 +1532,7 @@ el.detailsForm.addEventListener('change', async () => {
   } catch (err) {
     reportError('Could not update tag', err);
   }
-});
+}
 
 el.btnPullContent.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;
@@ -1547,6 +1549,32 @@ el.btnPullContent.addEventListener('click', async () => {
   } catch (err) {
     reportError('Could not pull content text', err);
   }
+});
+
+// Enter (not Shift+Enter, which still inserts a newline) commits the alt
+// text like a blur would, then jumps to the next tag in tree order and
+// keeps this field focused - lets you type alt text for a run of
+// figures/tables back-to-back without reaching for the mouse. Skips over
+// content/object-ref leaves since they have no alt text field of their own
+// (see refreshDetailsForSelection, which hides the whole form for those).
+el.fieldAlt.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  e.preventDefault();
+
+  await applyDetailsChange();
+
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const currentIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectedNodeId);
+  if (currentIndex === -1) return;
+
+  const nextRow = rows.slice(currentIndex + 1).find((row) => {
+    return state.nodesById.get(row.dataset.nodeId)?.node.type === 'element';
+  });
+  if (!nextRow) return;
+
+  selectNode(nextRow.dataset.nodeId);
+  el.fieldAlt.focus();
+  el.fieldAlt.select();
 });
 
 // --- undo / redo -----------------------------------------------------------
