@@ -644,6 +644,20 @@ body.busy * {
   display: none;
 }
 
+/* Wraps the Title/Author fields shown in place of Alt Text when the
+   /Document tag is selected (see refreshDetailsForSelection()) - same
+   column layout as `.details-form` itself, plus the same `[hidden]`
+   override as `.field-row`/`.field` above. */
+#field-docinfo-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#field-docinfo-section[hidden] {
+  display: none;
+}
+
 .field-label {
   font-size: 11px;
   text-transform: uppercase;

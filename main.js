@@ -224,6 +224,8 @@ ipcMain.handle('dialog:open-pdf', async () => {
     docId: openResult.docId,
     hasStructTree: openResult.hasStructTree,
     tree: openResult.tree, // null if hasStructTree is false
+    outline: openResult.outline,
+    docInfo: openResult.docInfo,
     // Base64 so it survives Electron's IPC structured-clone boundary cleanly;
     // for very large PDFs you'd want to stream this instead.
     pdfBase64: fileBuffer.toString('base64'),
@@ -236,6 +238,10 @@ ipcMain.handle('tags:update-node', async (_event, { docId, nodeId, changes }) =>
 
 ipcMain.handle('tags:update-nodes', async (_event, { docId, nodeIds, changes }) => {
   return callWorker('update_nodes', { docId, nodeIds, changes });
+});
+
+ipcMain.handle('doc:update-info', async (_event, { docId, changes }) => {
+  return callWorker('update_doc_info', { docId, changes });
 });
 
 ipcMain.handle('tags:shift-heading-levels', async (_event, { docId, nodeIds, direction }) => {

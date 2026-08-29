@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:update-node', { docId, nodeId, changes }),
   updateNodes: (docId, nodeIds, changes) =>
     ipcRenderer.invoke('tags:update-nodes', { docId, nodeIds, changes }),
+  updateDocInfo: (docId, changes) =>
+    ipcRenderer.invoke('doc:update-info', { docId, changes }),
   shiftHeadingLevels: (docId, nodeIds, direction) =>
     ipcRenderer.invoke('tags:shift-heading-levels', { docId, nodeIds, direction }),
 

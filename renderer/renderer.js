@@ -55,6 +55,7 @@ const state = {
   walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
   figureDrawActive: false,      // true while the Add Figure button's rubber-band draw mode is armed
   figureDrawRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
+  docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -90,8 +91,12 @@ const el = {
   fieldNodeId: document.getElementById('field-node-id'),
   fieldRole: document.getElementById('field-role'),
   fieldAlt: document.getElementById('field-alt'),
+  fieldAltWrap: document.getElementById('field-alt-wrap'),
   fieldActualText: document.getElementById('field-actual-text'),
   fieldActualTextWrap: document.getElementById('field-actual-text-wrap'),
+  fieldDocInfoSection: document.getElementById('field-docinfo-section'),
+  fieldDocTitle: document.getElementById('field-doc-title'),
+  fieldDocAuthor: document.getElementById('field-doc-author'),
   tablePreviewWrap: document.getElementById('field-table-preview'),
   tablePreviewContainer: document.getElementById('table-preview-container'),
   btnExpandTablePreview: document.getElementById('btn-expand-table-preview'),
@@ -1027,6 +1032,20 @@ function refreshDetailsForSelection() {
   el.fieldLang.disabled = multi;
   el.btnPullContent.disabled = multi;
 
+  // The /Document tag doesn't carry meaningful accessibility text of its
+  // own - swap Alt/Actual Text out for the PDF's document-info Title/Author
+  // instead (see update_doc_info() in tag_worker.py). The underlying Alt/
+  // Actual Text fields are left populated (just hidden), same reasoning as
+  // the Table preview swap below: Apply still round-trips whatever value
+  // they held.
+  const isDocument = !multi && node.role === 'Document';
+  el.fieldDocInfoSection.hidden = !isDocument;
+  el.fieldAltWrap.hidden = isDocument;
+  if (isDocument) {
+    el.fieldDocTitle.value = state.docInfo.title || '';
+    el.fieldDocAuthor.value = state.docInfo.author || '';
+  }
+
   // Table-cell attributes (Scope/Column span/Row span, PDF's Table attribute
   // owner - see _get_table_attrs() in tag_worker.py). Column span/Row span
   // apply to both TH and TD cells, so they're shown whenever every selected
@@ -1057,7 +1076,7 @@ function refreshDetailsForSelection() {
   // renderTablePreview()). The underlying field/value is left untouched
   // (just hidden) so Apply still round-trips whatever actualText it had.
   const isTable = !multi && node.role === 'Table';
-  el.fieldActualTextWrap.hidden = isTable;
+  el.fieldActualTextWrap.hidden = isTable || isDocument;
   el.tablePreviewWrap.hidden = !isTable;
   if (isTable) {
     renderTablePreview(node);
@@ -1943,6 +1962,22 @@ async function applyDetailsChange() {
       result = await window.api.updateNode(state.docId, nodeId, changes);
       applyFreshTree(result.tree);
       applyUndoState(result);
+
+      // /Document tag selected: Title/Author (PDF document-info, not a
+      // struct-element attribute) are edited via a separate call, and only
+      // when actually changed - unlike alt/actualText/lang above, there's no
+      // single combined undo step for both, so an unconditional call here
+      // would push an empty undo snapshot on every unrelated field edit.
+      if (!el.fieldDocInfoSection.hidden) {
+        const title = el.fieldDocTitle.value.trim();
+        const author = el.fieldDocAuthor.value.trim();
+        if (title !== (state.docInfo.title || '') || author !== (state.docInfo.author || '')) {
+          const infoResult = await window.api.updateDocInfo(state.docId, { title, author });
+          state.docInfo = infoResult.docInfo;
+          applyUndoState(infoResult);
+        }
+      }
+
       setStatus('Updated tag.');
       // Keep the same node selected/visible after the tree re-renders.
       selectNode(nodeId);
@@ -2035,6 +2070,7 @@ async function performUndo() {
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
+    state.docInfo = result.docInfo || { title: null, author: null };
     applyUndoState(result);
     closeDetails();
     setStatus('Undid last change.');
@@ -2050,6 +2086,7 @@ async function performRedo() {
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
+    state.docInfo = result.docInfo || { title: null, author: null };
     applyUndoState(result);
     closeDetails();
     setStatus('Redid change.');
@@ -2715,6 +2752,7 @@ async function performOpen() {
     stopWalking();
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
+    state.docInfo = opened.docInfo || { title: null, author: null };
     applyFreshTree(opened.tree || null);
     state.selectedBookmarkId = null;
     applyFreshOutline(opened.outline || []);

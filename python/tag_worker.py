@@ -121,6 +121,33 @@ def _set_or_clear_string(obj, key, value):
         del obj[key]
 
 
+def _get_doc_info(doc):
+    """Title/Author out of the PDF's document information dictionary
+    (trailer /Info), read directly off the trailer rather than through
+    pikepdf's `Pdf.docinfo` property - that property auto-vivifies an /Info
+    dict on first access, which would dirty documents that don't have one
+    just from opening them or selecting the /Document tag."""
+    info = doc["pdf"].trailer.get("/Info")
+    if not isinstance(info, pikepdf.Dictionary):
+        return {"title": None, "author": None}
+    return {"title": _get_string(info, "/Title"), "author": _get_string(info, "/Author")}
+
+
+def update_doc_info(doc_id, changes):
+    """Sets Title/Author on the PDF's document information dictionary - the
+    Tag Properties panel swaps in these fields (in place of Alt/Actual Text)
+    when the /Document tag is selected, since that struct element doesn't
+    carry meaningful accessibility text of its own."""
+    doc = documents[doc_id]
+    _push_undo_snapshot(doc)
+    info = doc["pdf"].docinfo
+    if "title" in changes:
+        _set_or_clear_string(info, "/Title", changes["title"])
+    if "author" in changes:
+        _set_or_clear_string(info, "/Author", changes["author"])
+    return {"docInfo": _get_doc_info(doc), **_undo_state(doc)}
+
+
 def _find_table_attr_obj(struct_obj):
     """The /Table-owned attribute dict inside `struct_obj`'s /A entry, if
     any. /A may be absent, a single attribute dict, or an array mixing
@@ -1086,12 +1113,19 @@ def open_document(path):
     }
     doc = documents[doc_id]
     outline_tree = _get_outline_tree(doc)
+    doc_info = _get_doc_info(doc)
 
     if "/StructTreeRoot" not in pdf.Root:
-        return {"docId": doc_id, "hasStructTree": False, "tree": None, "outline": outline_tree, **_undo_state(doc)}
+        return {
+            "docId": doc_id, "hasStructTree": False, "tree": None,
+            "outline": outline_tree, "docInfo": doc_info, **_undo_state(doc),
+        }
 
     tree = _rebuild_registry(doc_id)
-    return {"docId": doc_id, "hasStructTree": True, "tree": tree, "outline": outline_tree, **_undo_state(doc)}
+    return {
+        "docId": doc_id, "hasStructTree": True, "tree": tree,
+        "outline": outline_tree, "docInfo": doc_info, **_undo_state(doc),
+    }
 
 
 def update_node(doc_id, node_id, changes):
@@ -2065,7 +2099,10 @@ def undo_edit(doc_id):
     doc["pdf"].close()
     doc["pdf"] = pikepdf.open(io.BytesIO(doc["undo_stack"].pop()))
     _reindex_pages(doc)
-    return {"tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc), **_undo_state(doc)}
+    return {
+        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
+        "docInfo": _get_doc_info(doc), **_undo_state(doc),
+    }
 
 
 def redo_edit(doc_id):
@@ -2076,7 +2113,10 @@ def redo_edit(doc_id):
     doc["pdf"].close()
     doc["pdf"] = pikepdf.open(io.BytesIO(doc["redo_stack"].pop()))
     _reindex_pages(doc)
-    return {"tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc), **_undo_state(doc)}
+    return {
+        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
+        "docInfo": _get_doc_info(doc), **_undo_state(doc),
+    }
 
 
 def save_document(doc_id, path):
@@ -2153,6 +2193,8 @@ def main():
                 result = delete_bookmark(request["docId"], request["bookmarkId"])
             elif cmd == "generate_bookmarks":
                 result = generate_bookmarks(request["docId"], request.get("headings", []))
+            elif cmd == "update_doc_info":
+                result = update_doc_info(request["docId"], request.get("changes", {}))
             elif cmd == "save":
                 result = save_document(request["docId"], request["path"])
             else:

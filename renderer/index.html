@@ -157,7 +157,19 @@
           </label>
         </div>
 
-        <label class="field">
+        <div id="field-docinfo-section" hidden>
+          <label class="field">
+            <span class="field-label">Title</span>
+            <input id="field-doc-title" placeholder="Document title (PDF metadata)" autocomplete="off" />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Author</span>
+            <input id="field-doc-author" placeholder="Document author (PDF metadata)" autocomplete="off" />
+          </label>
+        </div>
+
+        <label class="field" id="field-alt-wrap">
           <span class="field-label">Alt text</span>
           <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>
         </label>
