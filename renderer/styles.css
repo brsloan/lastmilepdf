@@ -671,12 +671,6 @@ body.busy * {
   color: var(--cat-table);
 }
 
-.field-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
 /* --- status bar --- */
 
 .statusbar {

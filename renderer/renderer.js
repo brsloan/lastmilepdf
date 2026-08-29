@@ -93,7 +93,6 @@ const el = {
   fieldScope: document.getElementById('field-scope'),
   fieldColSpan: document.getElementById('field-col-span'),
   fieldRowSpan: document.getElementById('field-row-span'),
-  btnCancelEdit: document.getElementById('btn-cancel-edit'),
   btnPullContent: document.getElementById('btn-pull-content'),
   shortcutsDialog: document.getElementById('shortcuts-dialog'),
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
@@ -1459,8 +1458,10 @@ window.addEventListener('resize', () => {
   if (state.pdfDoc) syncHighlightLayerBounds();
 });
 
-el.detailsForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
+// Auto-applies on the form's native 'change' event (fires when a text/
+// textarea field is committed via blur, and immediately for select
+// elements) rather than requiring an explicit Apply button.
+el.detailsForm.addEventListener('change', async () => {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
 
@@ -1513,8 +1514,6 @@ el.detailsForm.addEventListener('submit', async (e) => {
     reportError('Could not update tag', err);
   }
 });
-
-el.btnCancelEdit.addEventListener('click', () => closeDetails());
 
 el.btnPullContent.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;
