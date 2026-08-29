@@ -137,7 +137,12 @@ def update_doc_info(doc_id, changes):
     """Sets Title/Author on the PDF's document information dictionary - the
     Tag Properties panel swaps in these fields (in place of Alt/Actual Text)
     when the /Document tag is selected, since that struct element doesn't
-    carry meaningful accessibility text of its own."""
+    carry meaningful accessibility text of its own.
+
+    Also mirrors the change into XMP (dc:title/dc:creator): Acrobat's
+    Document Properties dialog reads Title/Author from XMP whenever an XMP
+    stream is present, and ignores /Info entirely in that case, so writing
+    only the legacy /Info dict left Acrobat showing stale values."""
     doc = documents[doc_id]
     _push_undo_snapshot(doc)
     info = doc["pdf"].docinfo
@@ -145,6 +150,8 @@ def update_doc_info(doc_id, changes):
         _set_or_clear_string(info, "/Title", changes["title"])
     if "author" in changes:
         _set_or_clear_string(info, "/Author", changes["author"])
+    with doc["pdf"].open_metadata() as meta:
+        meta.load_from_docinfo(info, delete_missing=True)
     return {"docInfo": _get_doc_info(doc), **_undo_state(doc)}
 
 
