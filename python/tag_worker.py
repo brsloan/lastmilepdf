@@ -1528,6 +1528,28 @@ def delete_nodes(doc_id, node_ids):
 #     the same fallback Acrobat itself uses when you manually draw a figure
 #     region with nothing distinct underneath: the Alt text still reads out
 #     in tree order, it's just not tied to any specific marked content.
+#
+# The new Figure is always attached under the document's /Document element
+# (see _document_insertion_parent) rather than root - a bare tag hung
+# directly off /StructTreeRoot would sit as a stray sibling of /Document,
+# i.e. outside the one element PDF/UA expects to wrap the entire document.
+#
+# Where it lands among /Document's existing kids is also estimated rather
+# than always appended at the end: _estimate_insert_index() ranks the new
+# rectangle's (page, y) against every existing kid's own (page, y) - the
+# page-space point where that kid's first positioned descendant begins,
+# found via a DFS in document order (see _first_positioned_descendant) -
+# and slots the new Figure in just before the first kid that would come
+# after it in reading order. "Where a tag begins" comes from whichever of
+# these its subtree has: an MCID's text anchor (_page_anchor_info tracks
+# the text matrix - Tm/Td/TD/T*, no font metrics - well enough to rank
+# spans top-to-bottom, not to measure them), a placed image XObject's top
+# edge, or - for an already-bbox-tagged Figure - its own /Layout /BBox.
+# It's an estimate, not a guarantee: a kid with no positioned descendant
+# anywhere in its subtree (an empty container, or one built entirely from
+# things this heuristic can't see) is skipped as a candidate boundary, and
+# the drag/drop reordering the tag tree already supports is still there for
+# whatever the estimate gets wrong.
 
 def _mat_mult(m1, m2):
     """Composes two PDF transformation matrices as `m1` applied first, `m2`
@@ -1711,24 +1733,255 @@ def _register_struct_parent(doc, key, struct_elem):
     struct_root["/ParentTreeNextKey"] = max(prior_next, key + 1)
 
 
-def _new_figure_shell(doc, page):
+def _page_anchor_info(page):
+    """One combined content-stream pass producing everything
+    _estimate_insert_index() needs to rank existing content top-to-bottom:
+      - "mcid": {mcid: y} - the page-space y where each MCID's marked
+        content begins. Tracks the text matrix (BT/ET, Tm, Td/TD, T*) the
+        same way _page_image_placements tracks the CTM, but carries no font
+        metrics at all - Tj/TJ never move the tracked position - so this is
+        only good for ranking spans top-to-bottom, not for measuring them.
+        The position is taken at the *first text-showing operator* (Tj/TJ/
+        '/") after the MCID's BDC, not at the BDC itself: real generators
+        commonly emit `BDC` right after `BT`, before the `Tm`/`Td` that
+        actually places the text (this file's own test-complex.pdf fixture
+        does exactly that), so anchoring at BDC-open would read every such
+        span's position as wherever the text matrix happened to be left by
+        whatever came before - typically the BT-reset identity matrix, i.e.
+        the page origin, wrongly ranking it first every time. BDC-open is
+        still recorded as a fallback baseline, for a marked span that's
+        graphical rather than textual (no Tj ever fires inside it) - a
+        stroked/filled vector figure, most notably.
+      - "xobject": {objgen: y} - the top edge of each image XObject's placed
+        bbox, keyed by the object's own identity so a leaf referencing it
+        via /OBJR (see figure_from_rect's "object" strategy) can look
+        itself up directly rather than needing its own placement pass.
+    """
+    result = {"mcid": {}, "xobject": {}}
+    resources = _resolve_inherited(page.obj, "/Resources")
+    xobjects = resources.get("/XObject") if isinstance(resources, pikepdf.Dictionary) else None
+
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    stack = []
+    tm = tlm = None  # text matrix / text line matrix - only meaningful inside BT/ET
+    leading = 0.0
+    mcid_stack = []
+    finalized = set()  # mcids whose anchor came from a real Tj/TJ/'/", not just BDC-open
+
+    try:
+        instructions = pikepdf.parse_content_stream(
+            page, "q Q cm BT ET Tm Td TD T* TL Do BDC BMC EMC Tj TJ ' \""
+        )
+    except Exception:
+        return result
+
+    for instr in instructions:
+        op = str(instr.operator)
+        ops = instr.operands
+        if op == "q":
+            stack.append(ctm)
+        elif op == "Q":
+            if stack:
+                ctm = stack.pop()
+        elif op == "cm" and len(ops) == 6:
+            try:
+                m = tuple(float(v) for v in ops)
+            except (TypeError, ValueError):
+                continue
+            ctm = _mat_mult(m, ctm)
+        elif op == "BT":
+            tm = tlm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            leading = 0.0
+        elif op == "ET":
+            tm = tlm = None
+        elif op == "Tm" and len(ops) == 6:
+            try:
+                tm = tlm = tuple(float(v) for v in ops)
+            except (TypeError, ValueError):
+                continue
+        elif op == "TL" and len(ops) == 1:
+            try:
+                leading = float(ops[0])
+            except (TypeError, ValueError):
+                pass
+        elif op in ("Td", "TD") and len(ops) == 2 and tlm is not None:
+            try:
+                tx, ty = float(ops[0]), float(ops[1])
+            except (TypeError, ValueError):
+                continue
+            if op == "TD":
+                leading = -ty
+            tlm = _mat_mult((1.0, 0.0, 0.0, 1.0, tx, ty), tlm)
+            tm = tlm
+        elif op == "T*" and tlm is not None:
+            tlm = _mat_mult((1.0, 0.0, 0.0, 1.0, 0.0, -leading), tlm)
+            tm = tlm
+        elif op == "Do" and ops and xobjects is not None:
+            xobj = xobjects.get(str(ops[0]))
+            if (isinstance(xobj, (pikepdf.Dictionary, pikepdf.Stream))
+                    and str(xobj.get("/Subtype", "")) == "/Image"
+                    and getattr(xobj, "is_indirect", False)):
+                corners = [_mat_apply(p, ctm) for p in ((0, 0), (1, 0), (1, 1), (0, 1))]
+                result["xobject"].setdefault(xobj.objgen, max(p[1] for p in corners))
+        elif op == "BDC" and len(ops) == 2:
+            mcid = None
+            props = ops[1]
+            if isinstance(props, pikepdf.Dictionary) and "/MCID" in props:
+                try:
+                    mcid = int(props["/MCID"])
+                except (TypeError, ValueError):
+                    mcid = None
+            mcid_stack.append(mcid)
+            if mcid is not None and mcid not in result["mcid"]:
+                pen = _mat_mult(tm, ctm) if tm is not None else ctm
+                result["mcid"][mcid] = _mat_apply((0, 0), pen)[1]
+        elif op == "BMC":
+            mcid_stack.append(None)
+        elif op == "EMC":
+            if mcid_stack:
+                mcid_stack.pop()
+        elif op in ("Tj", "TJ", "'", '"') and mcid_stack and mcid_stack[-1] is not None:
+            mcid = mcid_stack[-1]
+            if mcid not in finalized:
+                pen = _mat_mult(tm, ctm) if tm is not None else ctm
+                result["mcid"][mcid] = _mat_apply((0, 0), pen)[1]
+                finalized.add(mcid)
+
+    return result
+
+
+def _first_positioned_descendant(doc, node_id, get_page_anchors):
+    """DFS over `node_id`'s subtree in document order (the same order
+    `_direct_child_ids` walks), returning the first (page, y) position found
+    - from a bare MCID's text/image anchor (see _page_anchor_info), an
+    /OBJR's target image, or - checked last, so real content always wins -
+    the element's own /Layout /BBox. None if nothing in the subtree (or the
+    element itself) is positioned. `get_page_anchors(page_index)` is a
+    memoizing accessor over _page_anchor_info, shared across a whole
+    _estimate_insert_index() call so each page is only parsed once."""
+    kind = doc["node_kind"].get(node_id)
+    obj = doc["elements"].get(node_id)
+    page = doc["node_pages"].get(node_id)
+
+    if kind == "content-int":  # bare MCID
+        if page is not None and isinstance(obj, int):
+            y = get_page_anchors(page)["mcid"].get(obj)
+            if y is not None:
+                return (page, y)
+        return None
+
+    if kind == "content-dict":  # /MCR or /OBJR
+        if page is not None and isinstance(obj, pikepdf.Dictionary):
+            mcid_val = None
+            if "/MCID" in obj:
+                try:
+                    mcid_val = int(obj["/MCID"])
+                except (TypeError, ValueError):
+                    mcid_val = None
+            if mcid_val is not None:
+                y = get_page_anchors(page)["mcid"].get(mcid_val)
+                if y is not None:
+                    return (page, y)
+            target = obj.get("/Obj")
+            if isinstance(target, (pikepdf.Dictionary, pikepdf.Stream)) and getattr(target, "is_indirect", False):
+                y = get_page_anchors(page)["xobject"].get(target.objgen)
+                if y is not None:
+                    return (page, y)
+        return None
+
+    if kind == "element":
+        for child_id in _direct_child_ids(doc, node_id):
+            found = _first_positioned_descendant(doc, child_id, get_page_anchors)
+            if found is not None:
+                return found
+        if isinstance(obj, pikepdf.Dictionary):
+            bbox = _find_layout_bbox(obj)
+            if bbox is not None and page is not None:
+                return (page, max(bbox[1], bbox[3]))
+
+    return None
+
+
+def _position_before(a, b):
+    """True if page-space position `a` (page, y) sorts strictly before `b`
+    in reading order: an earlier page, or the same page and higher up (PDF's
+    y-axis grows upward, so "higher up" is a larger y)."""
+    if a[0] != b[0]:
+        return a[0] < b[0]
+    return a[1] > b[1]
+
+
+def _estimate_insert_index(doc, parent_node_id, target_page, target_top_y):
+    """Where a new Figure at (target_page, target_top_y) belongs among
+    `parent_node_id`'s existing kids, in document order - the index of the
+    first kid whose own position (see _first_positioned_descendant) comes
+    after it, or the end if every positioned kid comes before it (or none
+    are positioned at all, the same "append at the end" this replaces)."""
+    sibling_ids = _direct_child_ids(doc, parent_node_id)
+    anchor_cache = {}
+
+    def get_page_anchors(page_index):
+        if page_index not in anchor_cache:
+            anchor_cache[page_index] = _page_anchor_info(doc["pdf"].pages[page_index])
+        return anchor_cache[page_index]
+
+    target = (target_page, target_top_y)
+    for index, child_id in enumerate(sibling_ids):
+        sibling_pos = _first_positioned_descendant(doc, child_id, get_page_anchors)
+        if sibling_pos is not None and _position_before(target, sibling_pos):
+            return index
+    return len(sibling_ids)
+
+
+def _node_id_for_object(doc, obj):
+    """The app's synthetic node id currently pointing at the same underlying
+    pikepdf object as `obj` (identity, not equality - see _same_object), or
+    None if it isn't (or is no longer) registered. `doc["elements"]` is only
+    as fresh as the last mutation/_rebuild_registry() call, so this is only
+    meaningful for an object that was already part of the tree before the
+    current command started mutating it."""
+    return next((nid for nid, o in doc["elements"].items() if _same_object(o, obj)), None)
+
+
+def _document_insertion_parent(doc):
+    """Where a newly created top-level tag (currently just figure_from_rect)
+    should actually attach: the /Document struct element immediately under
+    /StructTreeRoot, if there is one - never the root itself, and never as a
+    sibling of /Document at the root level, both of which would leave the
+    new tag outside the one element PDF/UA expects to wrap the entire
+    document. Falls back to root only for the (non-conforming) case where
+    root has no /Document child to begin with, since there's nowhere more
+    correct to put it. Returns (parent_obj, parent_node_id)."""
+    struct_root = doc["elements"]["root"]
+    for kid in _iter_kids(struct_root):
+        if isinstance(kid, pikepdf.Dictionary) and str(kid.get("/S", "")).lstrip("/") == "Document":
+            node_id = _node_id_for_object(doc, kid)
+            if node_id is not None:
+                return kid, node_id
+    return struct_root, "root"
+
+
+def _new_figure_shell(doc, page, parent_obj):
     return doc["pdf"].make_indirect(pikepdf.Dictionary({
         "/Type": pikepdf.Name("/StructElem"),
         "/S": pikepdf.Name("/Figure"),
-        "/P": doc["elements"]["root"],
+        "/P": parent_obj,
         "/Pg": page.obj,
     }))
 
 
 def figure_from_rect(doc_id, page_index, rect):
     """Tags a user-drawn rectangle (page-space [x0, y0, x1, y1], PDF default
-    user space) as a new top-level /Figure, picking between the "object" and
-    "bbox" strategies described in this section's comment automatically -
-    the caller doesn't need to know which one ran, though `method` is
-    returned in case the UI wants to say. Alt text isn't set here: like
-    every other freshly created tag in this file (make_list/make_table's
-    items, set_role_or_wrap's wrapped leaves), it starts empty and is filled
-    in afterward through the normal update_node path."""
+    user space) as a new /Figure, picking between the "object" and "bbox"
+    strategies described in this section's comment automatically - the
+    caller doesn't need to know which one ran, though `method` is returned
+    in case the UI wants to say. It's attached under the document's
+    /Document element (see _document_insertion_parent), not root - a new
+    top-level tag directly under /StructTreeRoot would sit outside the one
+    element PDF/UA expects to wrap the whole document. Alt text isn't set
+    here: like every other freshly created tag in this file (make_list/
+    make_table's items, set_role_or_wrap's wrapped leaves), it starts empty
+    and is filled in afterward through the normal update_node path."""
     doc = documents[doc_id]
     if "/StructTreeRoot" not in doc["pdf"].Root:
         raise ValueError("This document has no structure tree yet")
@@ -1761,10 +2014,12 @@ def figure_from_rect(doc_id, page_index, rect):
         if overlap > best_overlap:
             best, best_overlap = cand, overlap
 
+    parent_obj, parent_node_id = _document_insertion_parent(doc)
+
     _push_undo_snapshot(doc)
 
     if best is not None and best_overlap >= MIN_XOBJECT_OVERLAP:
-        figure = _new_figure_shell(doc, page)
+        figure = _new_figure_shell(doc, page, parent_obj)
         key = _next_struct_parent_key(doc["elements"]["root"])
         best["xobject"]["/StructParent"] = key
         figure["/K"] = pikepdf.Dictionary({
@@ -1775,15 +2030,15 @@ def figure_from_rect(doc_id, page_index, rect):
         _register_struct_parent(doc, key, figure)
         method = "object"
     else:
-        figure = _new_figure_shell(doc, page)
+        figure = _new_figure_shell(doc, page, parent_obj)
         figure["/A"] = pikepdf.Dictionary({
             "/O": pikepdf.Name("/Layout"),
             "/BBox": pikepdf.Array([float(v) for v in norm_rect]),
         })
         method = "bbox"
 
-    struct_root = doc["elements"]["root"]
-    _insert_kid(struct_root, figure, len(_iter_kids(struct_root)))
+    insert_index = _estimate_insert_index(doc, parent_node_id, page_index, norm_rect[3])
+    _insert_kid(parent_obj, figure, insert_index)
 
     tree = _rebuild_registry(doc_id)
     new_node_id = next((nid for nid, obj in doc["elements"].items() if _same_object(obj, figure)), None)
