@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:convert-to-paragraph', { docId, nodeIds }),
   makeList: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:make-list', { docId, nodeIds }),
+  makeTable: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:make-table', { docId, nodeIds }),
+  makeTr: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:make-tr', { docId, nodeIds }),
 
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),

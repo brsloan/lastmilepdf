@@ -439,15 +439,18 @@ def convert_to_paragraph(doc_id, node_ids):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
-def make_list(doc_id, node_ids):
-    """Groups the selected tags into a newly created List: each one becomes
-    an LI (a struct element is relabeled in place; a content/object-ref leaf
-    is wrapped in a brand-new LI, same as set_role_or_wrap() does for H1-H6/
-    'I'), and all of them become children of a fresh /L struct element
-    inserted at the position the earliest-selected one occupied. Every
-    selected node must currently share the same parent - there'd be no
-    single well-defined "where the first item was" otherwise. Backs the tag
-    tree's 'L' shortcut."""
+def _group_into_container(doc_id, node_ids, container_role, item_role, preserved_roles, cant_group_msg):
+    """Shared shape behind the 'L'/'T'/'R' shortcuts: groups the selected
+    tags into a newly created container struct element (List/Table/TR).
+    Each selected node becomes a child with role `item_role` - a struct
+    element is relabeled in place (unless its current role is already in
+    `preserved_roles`, in which case it's left untouched); a content/
+    object-ref leaf is wrapped in a brand-new element with role `item_role`,
+    same as set_role_or_wrap() does for H1-H6/'I' (a leaf has no role of its
+    own, so it's never eligible for `preserved_roles`). The container lands
+    at the position the earliest-selected item occupied. Every selected node
+    must currently share the same parent - there'd be no single
+    well-defined "where the first item was" otherwise."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -459,7 +462,7 @@ def make_list(doc_id, node_ids):
 
     parent_ids = {doc["parent_map"].get(nid) for nid in node_ids}
     if len(parent_ids) != 1 or None in parent_ids:
-        raise ValueError("Can't group into a list: selected tags don't share a parent.")
+        raise ValueError(cant_group_msg)
     parent_id = next(iter(parent_ids))
     parent_obj = doc["elements"][parent_id]
 
@@ -476,38 +479,70 @@ def make_list(doc_id, node_ids):
 
     _push_undo_snapshot(doc)
 
-    li_dicts = []
+    item_dicts = []
     for node_id in ordered_ids:
         if doc["node_kind"].get(node_id) == "element":
             elem = doc["elements"][node_id]
             _remove_kid(parent_obj, elem)
-            elem["/S"] = pikepdf.Name("/LI")
-            li_dicts.append(elem)
+            role = str(elem.get("/S", "")).lstrip("/")
+            if role not in preserved_roles:
+                elem["/S"] = pikepdf.Name("/" + item_role)
+            item_dicts.append(elem)
         else:
             leaf_obj = doc["elements"][node_id]
             _remove_kid(parent_obj, leaf_obj)
-            li = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            item = doc["pdf"].make_indirect(pikepdf.Dictionary({
                 "/Type": pikepdf.Name("/StructElem"),
-                "/S": pikepdf.Name("/LI"),
+                "/S": pikepdf.Name("/" + item_role),
             }))
             page_index = doc["node_pages"].get(node_id)
             if page_index is not None:
-                li["/Pg"] = doc["pdf"].pages[page_index].obj
-            li["/K"] = leaf_obj
-            li_dicts.append(li)
+                item["/Pg"] = doc["pdf"].pages[page_index].obj
+            item["/K"] = leaf_obj
+            item_dicts.append(item)
 
-    new_list = doc["pdf"].make_indirect(pikepdf.Dictionary({
+    new_container = doc["pdf"].make_indirect(pikepdf.Dictionary({
         "/Type": pikepdf.Name("/StructElem"),
-        "/S": pikepdf.Name("/L"),
+        "/S": pikepdf.Name("/" + container_role),
         "/P": parent_obj,
     }))
-    for li in li_dicts:
-        li["/P"] = new_list
-    new_list["/K"] = pikepdf.Array(li_dicts)
+    for item in item_dicts:
+        item["/P"] = new_container
+    new_container["/K"] = pikepdf.Array(item_dicts)
 
-    _insert_kid(parent_obj, new_list, first_index)
+    _insert_kid(parent_obj, new_container, first_index)
 
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def make_list(doc_id, node_ids):
+    """Groups the selected tags into a newly created List: each one becomes
+    an LI regardless of its prior role. Backs the tag tree's 'L' shortcut -
+    see _group_into_container for the shared mechanics."""
+    return _group_into_container(
+        doc_id, node_ids, "L", "LI", frozenset(),
+        "Can't group into a list: selected tags don't share a parent.",
+    )
+
+
+def make_table(doc_id, node_ids):
+    """Groups the selected tags into a newly created Table: each one becomes
+    a TD, except a TH or TR, which is left as-is. Backs the tag tree's 'T'
+    shortcut - see _group_into_container for the shared mechanics."""
+    return _group_into_container(
+        doc_id, node_ids, "Table", "TD", {"TH", "TR"},
+        "Can't group into a table: selected tags don't share a parent.",
+    )
+
+
+def make_tr(doc_id, node_ids):
+    """Groups the selected tags into a newly created TR (table row): each
+    one becomes a TD, except a TH, which is left as-is. Backs the tag tree's
+    'R' shortcut - see _group_into_container for the shared mechanics."""
+    return _group_into_container(
+        doc_id, node_ids, "TR", "TD", {"TH"},
+        "Can't group into a table row: selected tags don't share a parent.",
+    )
 
 
 def _snapshot_bytes(pdf):
@@ -1060,6 +1095,10 @@ def main():
                 result = convert_to_paragraph(request["docId"], request["nodeIds"])
             elif cmd == "make_list":
                 result = make_list(request["docId"], request["nodeIds"])
+            elif cmd == "make_table":
+                result = make_table(request["docId"], request["nodeIds"])
+            elif cmd == "make_tr":
+                result = make_tr(request["docId"], request["nodeIds"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":

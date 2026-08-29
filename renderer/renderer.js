@@ -1715,12 +1715,12 @@ async function deleteSelection() {
   }
 }
 
-// 1-6/P/L/I convert the current selection's role, each via a dedicated
-// backend op (set_role_or_wrap/convert_to_paragraph/make_list in
-// tag_worker.py) rather than a plain Role edit, since a content/object-ref
-// leaf has no role of its own to set - these wrap it in a brand-new struct
-// element instead. See each handler below for what its shortcut actually
-// does structurally.
+// 1-6/P/L/I/T/R/D/H convert the current selection's role, each via a
+// dedicated backend op (set_role_or_wrap/convert_to_paragraph/make_list/
+// make_table/make_tr in tag_worker.py) rather than a plain Role edit, since
+// a content/object-ref leaf has no role of its own to set - these wrap it
+// in a brand-new struct element instead. See each handler below for what
+// its shortcut actually does structurally.
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (state.selectedNodeIds.size === 0) return;
@@ -1744,6 +1744,18 @@ window.addEventListener('keydown', (e) => {
   } else if (key === 'i') {
     e.preventDefault();
     applyRoleShortcut('LI');
+  } else if (key === 't') {
+    e.preventDefault();
+    groupSelectionIntoTable();
+  } else if (key === 'r') {
+    e.preventDefault();
+    groupSelectionIntoTr();
+  } else if (key === 'd') {
+    e.preventDefault();
+    applyRoleShortcut('TD');
+  } else if (key === 'h') {
+    e.preventDefault();
+    applyRoleShortcut('TH');
   }
 });
 
@@ -1844,6 +1856,40 @@ async function groupSelectionIntoList() {
   } catch (err) {
     reportError('Could not create list', err);
   }
+}
+
+// Shared by the 'T' and 'R' shortcuts: both group the whole selection into
+// a newly created container (Table/TR) the same way 'L' does for List, via
+// `apiCall` - each selected node becomes a child of the new container,
+// converted to TD unless it's already one of `preservedRoles`. See
+// make_table()/make_tr() in tag_worker.py for the per-role conversion rule.
+async function groupSelectionIntoContainer(apiCall, label) {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  if (ids.length === 0) return;
+
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
+  const firstId = orderedIds[0] ?? ids[0];
+
+  try {
+    const result = await apiCall(state.docId, ids);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (state.nodesById.has(firstId)) selectNode(firstId);
+    else closeDetails();
+    setStatus(`Grouped ${ids.length} tag${ids.length === 1 ? '' : 's'} into a new ${label}.`);
+  } catch (err) {
+    reportError(`Could not create ${label}`, err);
+  }
+}
+
+function groupSelectionIntoTable() {
+  return groupSelectionIntoContainer(window.api.makeTable, 'table');
+}
+
+function groupSelectionIntoTr() {
+  return groupSelectionIntoContainer(window.api.makeTr, 'table row');
 }
 
 // Changes the selected node's heading level by `direction` (+1/-1) if it's

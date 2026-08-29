@@ -270,6 +270,14 @@ ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds }) => {
   return callWorker('make_list', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:make-table', async (_event, { docId, nodeIds }) => {
+  return callWorker('make_table', { docId, nodeIds });
+});
+
+ipcMain.handle('tags:make-tr', async (_event, { docId, nodeIds }) => {
+  return callWorker('make_tr', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });
