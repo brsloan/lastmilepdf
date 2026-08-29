@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('api', {
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
 
+  renameBookmark: (docId, bookmarkId, title) =>
+    ipcRenderer.invoke('outline:rename-bookmark', { docId, bookmarkId, title }),
+  deleteBookmark: (docId, bookmarkId) =>
+    ipcRenderer.invoke('outline:delete-bookmark', { docId, bookmarkId }),
+  generateBookmarks: (docId, headings) =>
+    ipcRenderer.invoke('outline:generate-bookmarks', { docId, headings }),
+
   // Fired when the user picks Open/Undo/Redo/Save/Save As/Shortcuts from the app menu - see main.js.
   onMenuOpen: (callback) => ipcRenderer.on('menu:open', callback),
   onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),

@@ -290,6 +290,18 @@ ipcMain.handle('tags:redo', async (_event, { docId }) => {
   return callWorker('redo', { docId });
 });
 
+ipcMain.handle('outline:rename-bookmark', async (_event, { docId, bookmarkId, title }) => {
+  return callWorker('rename_bookmark', { docId, bookmarkId, title });
+});
+
+ipcMain.handle('outline:delete-bookmark', async (_event, { docId, bookmarkId }) => {
+  return callWorker('delete_bookmark', { docId, bookmarkId });
+});
+
+ipcMain.handle('outline:generate-bookmarks', async (_event, { docId, headings }) => {
+  return callWorker('generate_bookmarks', { docId, headings });
+});
+
 ipcMain.handle('dialog:save-pdf', async (_event, { docId, suggestedName }) => {
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'Save PDF As',

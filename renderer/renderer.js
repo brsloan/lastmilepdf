@@ -32,6 +32,10 @@ const state = {
   selectedNodeId: null,      // the "active"/most-recently-clicked tag - drives the details panel, highlight, scroll
   selectedNodeIds: new Set(), // full multi-selection (shift/ctrl+click); always a superset containing selectedNodeId
   selectionAnchorId: null,   // fixed point shift+click range-selects from; updated by plain/ctrl clicks, not by shift+click
+  activePanel: 'properties', // 'properties' | 'bookmarks' - which details-pane tab is showing
+  outline: null,             // current bookmark tree, as returned by the worker (null before a doc is opened)
+  bookmarksById: new Map(),  // id -> { node, parentId }, rebuilt every time `outline` is replaced - mirrors nodesById
+  selectedBookmarkId: null,
   draggedNodeId: null,
   draggedNodeIds: null,
   pdfDoc: null,          // pdf.js document proxy
@@ -98,6 +102,13 @@ const el = {
   btnPullContent: document.getElementById('btn-pull-content'),
   shortcutsDialog: document.getElementById('shortcuts-dialog'),
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
+  tabProperties: document.getElementById('tab-properties'),
+  tabBookmarks: document.getElementById('tab-bookmarks'),
+  panelProperties: document.getElementById('panel-properties'),
+  panelBookmarks: document.getElementById('panel-bookmarks'),
+  btnGenerateBookmarks: document.getElementById('btn-generate-bookmarks'),
+  bookmarksEmpty: document.getElementById('bookmarks-empty'),
+  bookmarkTree: document.getElementById('bookmark-tree'),
 };
 
 function setStatus(message) {
@@ -560,6 +571,261 @@ function applyFreshTree(tree) {
   }
   renderTree();
 }
+
+// --- details pane tabs ------------------------------------------------
+
+function setActivePanel(panel) {
+  state.activePanel = panel;
+  el.tabProperties.classList.toggle('active', panel === 'properties');
+  el.tabProperties.setAttribute('aria-selected', String(panel === 'properties'));
+  el.tabBookmarks.classList.toggle('active', panel === 'bookmarks');
+  el.tabBookmarks.setAttribute('aria-selected', String(panel === 'bookmarks'));
+  el.panelProperties.hidden = panel !== 'properties';
+  el.panelBookmarks.hidden = panel !== 'bookmarks';
+}
+
+el.tabProperties.addEventListener('click', () => setActivePanel('properties'));
+el.tabBookmarks.addEventListener('click', () => setActivePanel('bookmarks'));
+
+// --- bookmarks panel --------------------------------------------------
+//
+// A separate tree from the tag tree (PDF bookmarks/outlines live in their
+// own /Outlines object graph, not /StructTreeRoot - see tag_worker.py), but
+// rendered the same visual way: nested rows reusing .tree-row/.tree-children
+// so a bookmark's children read exactly like a tag's do. Ids ("bN") are, like
+// tag node ids, a fresh depth-first counter assigned on every worker
+// response - never assumed stable across a mutation.
+
+function indexOutline(outline) {
+  const map = new Map();
+  (function visit(nodes, parentId) {
+    for (const node of nodes) {
+      map.set(node.id, { node, parentId });
+      visit(node.children || [], node.id);
+    }
+  })(outline || [], null);
+  return map;
+}
+
+function applyFreshOutline(outline) {
+  state.outline = outline || [];
+  state.bookmarksById = indexOutline(state.outline);
+  if (state.selectedBookmarkId && !state.bookmarksById.has(state.selectedBookmarkId)) {
+    state.selectedBookmarkId = null;
+  }
+  renderBookmarkTree();
+}
+
+function renderBookmarkTree() {
+  el.bookmarkTree.innerHTML = '';
+  const hasBookmarks = state.outline && state.outline.length > 0;
+  el.bookmarksEmpty.hidden = hasBookmarks;
+  el.bookmarkTree.hidden = !hasBookmarks;
+  if (!hasBookmarks) return;
+
+  const ul = document.createElement('ul');
+  ul.className = 'tree-node';
+  ul.style.listStyle = 'none';
+  ul.style.padding = '0';
+  ul.style.margin = '0';
+  for (const node of state.outline) ul.appendChild(renderBookmarkNode(node));
+  el.bookmarkTree.appendChild(ul);
+}
+
+function renderBookmarkNode(node) {
+  const li = document.createElement('li');
+  li.className = 'tree-node';
+
+  const row = document.createElement('div');
+  row.className = 'tree-row selectable';
+  row.dataset.bookmarkId = node.id;
+  if (node.id === state.selectedBookmarkId) row.classList.add('selected');
+
+  const spacer = document.createElement('span');
+  spacer.className = 'tree-toggle-spacer';
+  row.appendChild(spacer);
+
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'bookmark-title';
+  titleSpan.textContent = node.title || '(untitled)';
+  row.appendChild(titleSpan);
+
+  if (node.page !== null && node.page !== undefined) {
+    const pageSpan = document.createElement('span');
+    pageSpan.className = 'tree-node-meta';
+    pageSpan.textContent = `p. ${node.page + 1}`;
+    row.appendChild(pageSpan);
+  }
+
+  row.addEventListener('click', () => selectBookmark(node.id));
+  row.addEventListener('dblclick', () => startRenamingBookmark(node.id));
+
+  li.appendChild(row);
+
+  if (node.children && node.children.length > 0) {
+    const childUl = document.createElement('ul');
+    childUl.className = 'tree-children';
+    for (const child of node.children) childUl.appendChild(renderBookmarkNode(child));
+    li.appendChild(childUl);
+  }
+
+  return li;
+}
+
+function selectBookmark(bookmarkId) {
+  state.selectedBookmarkId = bookmarkId;
+  renderBookmarkTree();
+  const node = state.bookmarksById.get(bookmarkId)?.node;
+  if (node && node.page !== null && node.page !== undefined) {
+    jumpToPage(node.page + 1);
+  }
+}
+
+async function jumpToPage(pageNumber) {
+  if (!state.pdfDoc) return;
+  if (pageNumber < 1 || pageNumber > state.pageCount) return;
+  if (pageNumber === state.currentPage) return;
+  state.currentPage = pageNumber;
+  await renderCurrentPage();
+  updatePageNavUI();
+}
+
+// Swaps a bookmark row's title for a text input on double-click, committing
+// on Enter/blur (skipped if unchanged or emptied) and discarding on Escape -
+// there's no dedicated rename dialog elsewhere in the app, so this mirrors
+// the lightest-touch inline-edit pattern that fits a tree row.
+function startRenamingBookmark(bookmarkId) {
+  const entry = state.bookmarksById.get(bookmarkId);
+  if (!entry) return;
+  const row = el.bookmarkTree.querySelector(`[data-bookmark-id="${bookmarkId}"]`);
+  const titleSpan = row?.querySelector('.bookmark-title');
+  if (!row || !titleSpan) return;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'bookmark-title-input';
+  input.value = entry.node.title || '';
+  titleSpan.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+
+  const commit = async () => {
+    if (settled) return;
+    settled = true;
+    const newTitle = input.value.trim();
+    if (!newTitle || newTitle === entry.node.title) {
+      renderBookmarkTree();
+      return;
+    }
+    try {
+      const result = await window.api.renameBookmark(state.docId, bookmarkId, newTitle);
+      state.selectedBookmarkId = bookmarkId;
+      applyFreshOutline(result.outline);
+      applyUndoState(result);
+      setStatus('Renamed bookmark.');
+    } catch (err) {
+      reportError('Could not rename bookmark', err);
+      renderBookmarkTree();
+    }
+  };
+
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    renderBookmarkTree();
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  });
+}
+
+async function deleteSelectedBookmark() {
+  const bookmarkId = state.selectedBookmarkId;
+  if (!bookmarkId) return;
+  try {
+    const result = await window.api.deleteBookmark(state.docId, bookmarkId);
+    state.selectedBookmarkId = null;
+    applyFreshOutline(result.outline);
+    applyUndoState(result);
+    setStatus('Deleted bookmark.');
+  } catch (err) {
+    reportError('Could not delete bookmark', err);
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Delete') return;
+  if (state.activePanel !== 'bookmarks' || !state.selectedBookmarkId) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  e.preventDefault();
+  deleteSelectedBookmark();
+});
+
+// Walks the tag tree for every H1-H6 node, in document order, collecting
+// what generate_bookmarks() (tag_worker.py) needs to rebuild a nested
+// outline matching the heading hierarchy: level (for nesting), page (from
+// the tag tree's own resolved /Pg, already 0-based), and title text - pulled
+// via pullContentText(), the same content-extraction path the "Pull
+// Content" button uses, since pikepdf has no equivalent way to recover a
+// heading's visible text from its marked content. Headings with no numbered
+// level (a bare "H" or "Title" role) are skipped - there'd be no level to
+// nest them by.
+async function collectHeadingsForBookmarks() {
+  const headingNodes = [];
+  (function visit(node) {
+    if (node.type === 'element') {
+      const match = /^H([1-6])$/.exec(node.role || '');
+      if (match) headingNodes.push({ id: node.id, level: Number(match[1]) });
+    }
+    for (const child of node.children || []) visit(child);
+  })(state.tree);
+
+  const headings = [];
+  for (const { id, level } of headingNodes) {
+    const node = state.nodesById.get(id)?.node;
+    if (!node || node.page === null || node.page === undefined) continue;
+    const title = (await pullContentText(id)).trim() || `Untitled ${node.role}`;
+    headings.push({ title, level, page: node.page });
+  }
+  return headings;
+}
+
+el.btnGenerateBookmarks.addEventListener('click', async () => {
+  if (!state.docId) return;
+  if (!state.pdfDoc) {
+    setStatus('Open a PDF preview before generating bookmarks.');
+    return;
+  }
+  document.body.classList.add('busy');
+  try {
+    setStatus('Generating bookmarks from headings…');
+    const headings = await collectHeadingsForBookmarks();
+    const result = await window.api.generateBookmarks(state.docId, headings);
+    state.selectedBookmarkId = null;
+    applyFreshOutline(result.outline);
+    applyUndoState(result);
+    setStatus(headings.length > 0
+      ? `Generated ${headings.length} bookmark${headings.length === 1 ? '' : 's'} from headings.`
+      : 'No headings found - bookmarks cleared.');
+  } catch (err) {
+    reportError('Could not generate bookmarks', err);
+  } finally {
+    document.body.classList.remove('busy');
+  }
+});
 
 // --- details panel --------------------------------------------------------
 //
@@ -1590,6 +1856,8 @@ async function performUndo() {
   try {
     const result = await window.api.undo(state.docId);
     applyFreshTree(result.tree);
+    state.selectedBookmarkId = null;
+    applyFreshOutline(result.outline);
     applyUndoState(result);
     closeDetails();
     setStatus('Undid last change.');
@@ -1603,6 +1871,8 @@ async function performRedo() {
   try {
     const result = await window.api.redo(state.docId);
     applyFreshTree(result.tree);
+    state.selectedBookmarkId = null;
+    applyFreshOutline(result.outline);
     applyUndoState(result);
     closeDetails();
     setStatus('Redid change.');
@@ -1912,6 +2182,7 @@ window.addEventListener('keydown', (e) => {
 // it amounts to here - see delete_nodes() in tag_worker.py.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete') return;
+  if (state.activePanel === 'bookmarks') return; // handled by the Bookmarks-panel Delete listener instead
   if (state.selectedNodeIds.size === 0) return;
 
   const tag = document.activeElement?.tagName;
@@ -2267,6 +2538,9 @@ async function performOpen() {
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     applyFreshTree(opened.tree || null);
+    state.selectedBookmarkId = null;
+    applyFreshOutline(opened.outline || []);
+    el.btnGenerateBookmarks.disabled = !opened.hasStructTree;
     applyUndoState(opened);
     closeDetails();
 

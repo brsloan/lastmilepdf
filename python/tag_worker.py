@@ -826,6 +826,170 @@ def _rebuild_registry(doc_id):
     return _walk(doc, struct_root, "root")
 
 
+# --- outline (bookmarks) ----------------------------------------------
+#
+# Separate object graph from the tag tree above (/Outlines vs
+# /StructTreeRoot), backed by pikepdf's own high-level Outline/OutlineItem
+# API rather than the raw-Dictionary walk _walk() does - pikepdf already
+# models an outline as an arbitrary-depth tree of OutlineItem.children,
+# which is exactly the shape Acrobat-style nested bookmarks need. Like the
+# tag tree, ids ("b1", "b2", ...) are a fresh depth-first counter assigned
+# on every read, not persisted identity - see the module docstring's note
+# on why the tag tree does the same.
+
+def _outline_item_dest_array(item):
+    """The explicit-destination Array behind `item` (a [pageref, ...] as PDF
+    12.3.2.2 defines it), from either item.destination directly or, when the
+    item instead uses a /GoTo action, that action's /D - a common
+    alternative encoding for the exact same "jump to this page" bookmark.
+    None if neither is present/resolvable (e.g. a URI action, or a named
+    destination this editor doesn't resolve)."""
+    dest = item.destination
+    if dest is not None:
+        return dest
+    if item.action is not None and str(item.action.get("/S", "")).lstrip("/") == "GoTo":
+        return item.action.get("/D")
+    return None
+
+
+def _outline_item_page(doc, item):
+    """0-based page index `item` targets, or None if it has no resolvable
+    page destination. A freshly created (not yet saved) item's destination
+    is still the plain page-number int it was constructed with - see
+    generate_bookmarks(); an item loaded from an existing PDF instead has an
+    already-resolved [pageref, ...] Array."""
+    dest = _outline_item_dest_array(item)
+    if dest is None:
+        return None
+    if isinstance(dest, int):
+        return dest
+    if isinstance(dest, pikepdf.Array) and len(dest) > 0:
+        return _resolve_page_index(doc, dest[0])
+    return None
+
+
+def _walk_outline(doc, items, counter, id_map=None):
+    """Depth-first JSON tree for `items` (an Outline's .root, or an
+    OutlineItem's .children), assigning each item a fresh "bN" id as it
+    goes. If `id_map` is given, every assigned id is also recorded there as
+    id -> the live OutlineItem object, for _locate_outline_item() to look up
+    by id later in the *same* open_outline() session - ids aren't stored
+    identity, just a reproducible position, so a lookup is only valid
+    against a walk of the same not-yet-saved item objects."""
+    result = []
+    for item in items:
+        counter[0] += 1
+        node_id = f"b{counter[0]}"
+        if id_map is not None:
+            id_map[node_id] = item
+        result.append({
+            "id": node_id,
+            "title": item.title,
+            "page": _outline_item_page(doc, item),
+            "children": _walk_outline(doc, item.children, counter, id_map),
+        })
+    return result
+
+
+def _get_outline_tree(doc):
+    """The current outline as a JSON-able tree, for embedding in a command's
+    response the same way _rebuild_registry()'s tag tree is - a no-op
+    open_outline() session (nothing is mutated) so this is safe to call
+    read-only from anywhere."""
+    with doc["pdf"].open_outline() as outline:
+        return _walk_outline(doc, outline.root, [0])
+
+
+def _locate_outline_item(outline, bookmark_id):
+    """(containing_list, item) for `bookmark_id` within `outline.root`'s
+    tree - `containing_list` is whichever Python list (the root list, or
+    some ancestor's .children) directly holds it, for a caller that wants to
+    remove/replace it there. None if not found. Must be called against an
+    `outline` whose .root hasn't been saved/reloaded since the id was handed
+    out - see _walk_outline()."""
+    counter = [0]
+
+    def walk(items):
+        for item in items:
+            counter[0] += 1
+            node_id = f"b{counter[0]}"
+            if node_id == bookmark_id:
+                return items, item
+            found = walk(item.children)
+            if found is not None:
+                return found
+        return None
+
+    return walk(outline.root)
+
+
+def rename_bookmark(doc_id, bookmark_id, title):
+    doc = documents[doc_id]
+    outline = doc["pdf"].open_outline()
+    located = _locate_outline_item(outline, bookmark_id)
+    if located is None:
+        raise ValueError(f"Unknown bookmark id: {bookmark_id}")
+    _, item = located
+
+    _push_undo_snapshot(doc)
+    with outline:
+        item.title = title
+
+    return {"outline": _get_outline_tree(doc), **_undo_state(doc)}
+
+
+def delete_bookmark(doc_id, bookmark_id):
+    doc = documents[doc_id]
+    outline = doc["pdf"].open_outline()
+    located = _locate_outline_item(outline, bookmark_id)
+    if located is None:
+        raise ValueError(f"Unknown bookmark id: {bookmark_id}")
+    containing_list, item = located
+
+    _push_undo_snapshot(doc)
+    with outline:
+        containing_list.remove(item)
+
+    return {"outline": _get_outline_tree(doc), **_undo_state(doc)}
+
+
+def generate_bookmarks(doc_id, headings):
+    """Replaces the whole outline with a fresh one built from `headings` -
+    an ordered (document-order) list of {title, level (1-6), page
+    (0-based)} dicts that the renderer collects from the tag tree's H1-H6
+    nodes (see collectHeadingsForBookmarks() in renderer.js): each
+    heading's title comes from pdf.js's content extraction over there,
+    which this Python side has no equivalent of (recovering text from a
+    content stream by marked-content id isn't something pikepdf does).
+    Nesting follows heading level via a stack: a heading becomes a child of
+    the nearest preceding heading with a strictly lower level, or a
+    top-level item if none - the standard way to rebuild a tree from a flat
+    leveled list. An empty `headings` list just clears the outline. Backs
+    the Bookmarks panel's Generate button."""
+    doc = documents[doc_id]
+
+    root = []
+    stack = []  # [(level, that_heading's_children_list)], innermost open ancestor last
+    for h in headings:
+        level = h.get("level")
+        page = h.get("page")
+        if not isinstance(level, int) or not isinstance(page, int):
+            continue
+        title = (h.get("title") or "").strip() or "Untitled"
+        item = pikepdf.OutlineItem(title, page)
+
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        (stack[-1][1] if stack else root).append(item)
+        stack.append((level, item.children))
+
+    _push_undo_snapshot(doc)
+    with doc["pdf"].open_outline() as outline:
+        outline.root = root
+
+    return {"outline": _get_outline_tree(doc), **_undo_state(doc)}
+
+
 def _is_container(doc, node_id):
     """True if `node_id` can validly be a reorder drop target - the struct
     root, or a struct element. Content leaves (bare MCID, /MCR, /OBJR) have
@@ -847,12 +1011,13 @@ def open_document(path):
         "undo_stack": [], "redo_stack": [],
     }
     doc = documents[doc_id]
+    outline_tree = _get_outline_tree(doc)
 
     if "/StructTreeRoot" not in pdf.Root:
-        return {"docId": doc_id, "hasStructTree": False, "tree": None, **_undo_state(doc)}
+        return {"docId": doc_id, "hasStructTree": False, "tree": None, "outline": outline_tree, **_undo_state(doc)}
 
     tree = _rebuild_registry(doc_id)
-    return {"docId": doc_id, "hasStructTree": True, "tree": tree, **_undo_state(doc)}
+    return {"docId": doc_id, "hasStructTree": True, "tree": tree, "outline": outline_tree, **_undo_state(doc)}
 
 
 def update_node(doc_id, node_id, changes):
@@ -1264,6 +1429,17 @@ def delete_nodes(doc_id, node_ids):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+def _reindex_pages(doc):
+    """Rebuilds page_index_by_objgen against doc["pdf"]'s current page
+    objects - qpdf renumbers objects on save/reload, so the mapping built at
+    open_document() time silently points at the wrong pages (or nothing)
+    once doc["pdf"] has been swapped for a reloaded snapshot, corrupting
+    every /Pg- and outline-destination-resolved page number. Call after any
+    doc["pdf"] = pikepdf.open(...) reassignment - currently undo_edit() and
+    redo_edit()."""
+    doc["page_index_by_objgen"] = {page.objgen: i for i, page in enumerate(doc["pdf"].pages)}
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
@@ -1271,7 +1447,8 @@ def undo_edit(doc_id):
     doc["redo_stack"].append(_snapshot_bytes(doc["pdf"]))
     doc["pdf"].close()
     doc["pdf"] = pikepdf.open(io.BytesIO(doc["undo_stack"].pop()))
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    _reindex_pages(doc)
+    return {"tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc), **_undo_state(doc)}
 
 
 def redo_edit(doc_id):
@@ -1281,7 +1458,8 @@ def redo_edit(doc_id):
     doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
     doc["pdf"].close()
     doc["pdf"] = pikepdf.open(io.BytesIO(doc["redo_stack"].pop()))
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    _reindex_pages(doc)
+    return {"tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc), **_undo_state(doc)}
 
 
 def save_document(doc_id, path):
@@ -1350,6 +1528,12 @@ def main():
                 result = undo_edit(request["docId"])
             elif cmd == "redo":
                 result = redo_edit(request["docId"])
+            elif cmd == "rename_bookmark":
+                result = rename_bookmark(request["docId"], request["bookmarkId"], request["title"])
+            elif cmd == "delete_bookmark":
+                result = delete_bookmark(request["docId"], request["bookmarkId"])
+            elif cmd == "generate_bookmarks":
+                result = generate_bookmarks(request["docId"], request.get("headings", []))
             elif cmd == "save":
                 result = save_document(request["docId"], request["path"])
             else:

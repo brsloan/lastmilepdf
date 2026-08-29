@@ -75,8 +75,13 @@
 
     <section class="pane details-pane">
       <div class="pane-header">
-        <span>Tag Properties</span>
+        <div class="pane-tabs" role="tablist">
+          <button type="button" id="tab-properties" class="pane-tab active" role="tab" aria-selected="true">Tag Properties</button>
+          <button type="button" id="tab-bookmarks" class="pane-tab" role="tab" aria-selected="false">Bookmarks</button>
+        </div>
       </div>
+
+      <div id="panel-properties" class="details-panel">
 
       <p id="details-empty" class="details-empty">Select a tag in the tree to edit it.</p>
 
@@ -172,6 +177,15 @@
         </div>
 
       </form>
+      </div>
+
+      <div id="panel-bookmarks" class="details-panel" hidden>
+        <div class="bookmarks-toolbar">
+          <button type="button" id="btn-generate-bookmarks" class="btn btn-primary" disabled title="Clear existing bookmarks and generate new ones from headings">Generate</button>
+        </div>
+        <p id="bookmarks-empty" class="details-empty">No bookmarks. Click Generate to create them from headings, or open a PDF that already has some.</p>
+        <div id="bookmark-tree" class="tag-tree bookmark-tree" hidden></div>
+      </div>
     </section>
 
   </main>
@@ -241,6 +255,15 @@
           <div class="shortcut-row"><dt><kbd>R</kbd></dt><dd>Group selection into a Table Row (TH kept, others become TD)</dd></div>
           <div class="shortcut-row"><dt><kbd>D</kbd></dt><dd>Set role to Table Cell (TD)</dd></div>
           <div class="shortcut-row"><dt><kbd>H</kbd></dt><dd>Set role to Table Header Cell (TH)</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Bookmarks</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Click</kbd></dt><dd>Select a bookmark, jump to its page</dd></div>
+          <div class="shortcut-row"><dt><kbd>Double-click</kbd></dt><dd>Rename a bookmark</dd></div>
+          <div class="shortcut-row"><dt><kbd>Delete</kbd></dt><dd>Delete selected bookmark</dd></div>
         </dl>
       </section>
 
