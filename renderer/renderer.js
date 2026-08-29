@@ -47,6 +47,7 @@ const state = {
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
   tablePreviewTableEl: null,   // most recently built <table> (see renderTablePreview()), reused by the Expand dialog
+  actualTextPlaceholderToken: 0, // invalidates in-flight Actual Text placeholder pulls when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
@@ -114,6 +115,11 @@ const el = {
   bookmarksEmpty: document.getElementById('bookmarks-empty'),
   bookmarkTree: document.getElementById('bookmark-tree'),
 };
+
+// The Actual Text field's placeholder as authored in index.html - restored
+// whenever the selection doesn't warrant swapping in pulled content text
+// (see updateActualTextPlaceholder()).
+const DEFAULT_ACTUAL_TEXT_PLACEHOLDER = el.fieldActualText.placeholder;
 
 function setStatus(message) {
   el.statusMessage.textContent = message;
@@ -989,6 +995,8 @@ function refreshDetailsForSelection() {
     // is selected"), and still scroll/highlight it like a tag selection.
     el.detailsEmpty.hidden = false;
     el.detailsForm.hidden = true;
+    state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
+    el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
     const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
     row?.scrollIntoView({ block: 'nearest' });
     highlightNodeOnPage(nodeId, { allowPageJump: true });
@@ -1004,6 +1012,12 @@ function refreshDetailsForSelection() {
   el.fieldAlt.value = node.alt || '';
   el.fieldActualText.value = node.actualText || '';
   el.fieldLang.value = node.lang || '';
+  if (multi) {
+    state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
+    el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+  } else {
+    updateActualTextPlaceholder(node, nodeId);
+  }
 
   // With multiple tags selected, only Role applies as a block edit (see the
   // submit handler) - disable the other fields rather than let an edit look
@@ -1065,6 +1079,8 @@ function closeDetails() {
   el.detailsForm.hidden = true;
   el.detailsEmpty.hidden = false;
   el.detailsForm.reset();
+  state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
+  el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
   el.fieldAlt.disabled = false;
   el.fieldActualText.disabled = false;
   el.fieldLang.disabled = false;
@@ -1381,6 +1397,24 @@ async function findFullPageImageLeafIds() {
 // see getPageMcidGraphicsInfo()) contributes a bracketed type label instead
 // of being silently dropped, the same fallback loadContentText() uses for a
 // content leaf's tree-row preview.
+// Swaps the Actual Text field's placeholder for the tag's own content text
+// (pulled the same way the "Pull Content" button does) when the tag has a
+// content leaf directly inside it - a strong hint that Actual Text exists to
+// replace that content. Any other tag (no content leaf, or one buried under
+// nested elements) keeps the generic default placeholder from index.html.
+async function updateActualTextPlaceholder(node, nodeId) {
+  const hasDirectContentLeaf = (node.children || []).some((child) => child.type === 'content');
+  if (!hasDirectContentLeaf) {
+    state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
+    el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+    return;
+  }
+  const token = ++state.actualTextPlaceholderToken;
+  const text = await pullContentText(nodeId);
+  if (token !== state.actualTextPlaceholderToken) return; // selection changed mid-flight
+  el.fieldActualText.placeholder = text || DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+}
+
 async function pullContentText(nodeId) {
   const targets = collectTargetMcids(nodeId);
   const parts = [];
