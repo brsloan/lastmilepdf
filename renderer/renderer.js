@@ -634,10 +634,10 @@ function closeDetails() {
 // their union rather than one box per run (which got noisy and overlapped
 // for multi-line/multi-word content).
 //
-// A Figure/Formula's marked content is normally an image `Do` call, which
-// getTextContent() doesn't report - those rects come from a separate path,
-// getPageImageRects(), that walks the page's operator list instead (see
-// below).
+// A Figure/Formula's marked content is normally an image `Do` call or a
+// stroked/filled vector path, neither of which getTextContent() reports -
+// those rects come from a separate path, getPageGraphicRects(), that walks
+// the page's operator list instead (see below).
 
 function collectTargetMcids(nodeId) {
   const entry = state.nodesById.get(nodeId);
@@ -690,17 +690,21 @@ async function getPageMcidTextMap(pageNumber) {
   return map;
 }
 
-// Builds a page's mcid -> image-xobject rect(s) lookup, and its set of
-// mcids painted via vector path operators (stroke/fill), in one pass over
-// the operator list (cached per page). This is the non-text-content
-// counterpart to getPageMcidTextMap(): image `Do` calls and path stroke/
-// fill ops don't show up in getTextContent(), so a Figure's placement (or a
-// vector-graphic leaf's mere presence) has to be recovered from the raw
-// operator list instead. Image rects come from mapping the unit square
+// Builds a page's mcid -> image-xobject rect(s) lookup, its mcid -> vector-
+// path rect(s) lookup, and its set of mcids painted via vector path
+// operators (stroke/fill), in one pass over the operator list (cached per
+// page). This is the non-text-content counterpart to getPageMcidTextMap():
+// image `Do` calls and path stroke/fill ops don't show up in
+// getTextContent(), so a Figure's placement has to be recovered from the
+// raw operator list instead. Image rects come from mapping the unit square
 // [0,1]x[0,1] - where an image is painted - through the current CTM
 // (accumulated the same way a PDF interpreter would, via save/restore/
-// transform/form-xobject) into page space; vector content only needs a
-// presence flag, not a rect, since paths aren't currently highlighted.
+// transform/form-xobject) into page space. Vector rects come from the same
+// CTM applied to the bounding box pdf.js itself precomputes for each path
+// (constructPath's third arg) - it doesn't track curve control points, so a
+// curve-only path (no preceding moveTo/lineTo/rectangle) yields an empty
+// bound and is skipped, same as this file's other "close enough" rect
+// approximations.
 async function getPageMcidGraphicsInfo(pageNumber) {
   if (state.mcidGraphicsCache.has(pageNumber)) return state.mcidGraphicsCache.get(pageNumber);
   const page = await state.pdfDoc.getPage(pageNumber);
@@ -709,27 +713,33 @@ async function getPageMcidGraphicsInfo(pageNumber) {
   const { OPS, Util } = pdfjsLib;
 
   const imageRects = new Map(); // mcid -> rect[]
+  const vectorRects = new Map(); // mcid -> rect[]
   const vectorMcids = new Set();
   const mcidStack = [];
   const ctmStack = [];
   let ctm = [1, 0, 0, 1, 0, 0];
+  let currentPathMinMax = null; // [minX, minY, maxX, maxY] in user space, or null once painted
 
   const currentMcid = () => (mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null);
 
-  const unitSquareRectForCurrentMcid = () => {
-    const mcid = currentMcid();
-    if (mcid === null) return;
-    const corners = [[0, 0], [1, 0], [0, 1], [1, 1]]
+  const rectFromCorners = (corners) => {
+    const transformed = corners
       .map((p) => Util.applyTransform(p, ctm))
       .map((p) => Util.applyTransform(p, viewport.transform));
-    const xs = corners.map((c) => c[0]);
-    const ys = corners.map((c) => c[1]);
-    const rect = {
+    const xs = transformed.map((c) => c[0]);
+    const ys = transformed.map((c) => c[1]);
+    return {
       x: Math.min(...xs),
       y: Math.min(...ys),
       width: Math.max(...xs) - Math.min(...xs),
       height: Math.max(...ys) - Math.min(...ys),
     };
+  };
+
+  const unitSquareRectForCurrentMcid = () => {
+    const mcid = currentMcid();
+    if (mcid === null) return;
+    const rect = rectFromCorners([[0, 0], [1, 0], [0, 1], [1, 1]]);
     const existing = imageRects.get(mcid);
     if (existing) existing.push(rect); else imageRects.set(mcid, [rect]);
   };
@@ -769,6 +779,9 @@ async function getPageMcidGraphicsInfo(pageNumber) {
       case OPS.paintImageMaskXObject:
         unitSquareRectForCurrentMcid();
         break;
+      case OPS.constructPath:
+        currentPathMinMax = args[2];
+        break;
       // A path is built by constructPath and only actually painted by one
       // of these - a clip-only path (W n with no stroke/fill) shouldn't
       // count as visible vector content, so we key off the paint ops
@@ -782,7 +795,19 @@ async function getPageMcidGraphicsInfo(pageNumber) {
       case OPS.closeFillStroke:
       case OPS.closeEOFillStroke: {
         const mcid = currentMcid();
-        if (mcid !== null) vectorMcids.add(mcid);
+        if (mcid !== null) {
+          vectorMcids.add(mcid);
+          if (currentPathMinMax && Number.isFinite(currentPathMinMax[0])) {
+            const [minX, minY, maxX, maxY] = currentPathMinMax;
+            const rect = rectFromCorners([[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]);
+            const existing = vectorRects.get(mcid);
+            if (existing) existing.push(rect); else vectorRects.set(mcid, [rect]);
+          }
+        }
+        // A painted path's current path is cleared per spec - don't let it
+        // leak into some later paint op that (invalidly) skips its own
+        // constructPath.
+        currentPathMinMax = null;
         break;
       }
       default:
@@ -790,13 +815,23 @@ async function getPageMcidGraphicsInfo(pageNumber) {
     }
   }
 
-  const info = { imageRects, vectorMcids };
+  const info = { imageRects, vectorRects, vectorMcids };
   state.mcidGraphicsCache.set(pageNumber, info);
   return info;
 }
 
-async function getPageImageRects(pageNumber) {
-  return (await getPageMcidGraphicsInfo(pageNumber)).imageRects;
+// Merges image and vector-path rects into one mcid -> rect[] lookup, for
+// consumers (highlighting, click hit-testing) that don't care which kind of
+// graphic a Figure/Formula's content actually is.
+async function getPageGraphicRects(pageNumber) {
+  const { imageRects, vectorRects } = await getPageMcidGraphicsInfo(pageNumber);
+  const merged = new Map();
+  for (const [mcid, rects] of imageRects) merged.set(mcid, [...rects]);
+  for (const [mcid, rects] of vectorRects) {
+    const existing = merged.get(mcid);
+    if (existing) existing.push(...rects); else merged.set(mcid, [...rects]);
+  }
+  return merged;
 }
 
 async function getPageVectorMcids(pageNumber) {
@@ -991,8 +1026,9 @@ function computeHighlightRects(textContent, viewport, mcidSet) {
 // the click point, walking the same begin/end-marked-content markers to
 // find which MCID (if any) the clicked run belongs to, then looks up the
 // struct element that directly owns that MCID via `state.mcidIndex` and
-// selects it. Falls back to the image-xobject rects (see getPageImageRects)
-// so clicking a Figure's picture also selects its tag.
+// selects it. Falls back to the image/vector-path rects (see
+// getPageGraphicRects) so clicking a Figure's picture or drawing also
+// selects its tag.
 
 function pointInRect(x, y, box) {
   return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
@@ -1023,8 +1059,8 @@ async function findNodeAtPoint(x, y) {
     if (pointInRect(x, y, box)) return pageMcids.get(currentMcid);
   }
 
-  const imageRectMap = await getPageImageRects(state.currentPage);
-  for (const [mcid, rects] of imageRectMap) {
+  const graphicRectMap = await getPageGraphicRects(state.currentPage);
+  for (const [mcid, rects] of graphicRectMap) {
     if (!pageMcids.has(mcid)) continue;
     if (rects.some((box) => pointInRect(x, y, box))) return pageMcids.get(mcid);
   }
@@ -1067,7 +1103,7 @@ function syncHighlightLayerBounds() {
 
 function renderHighlightRects(boxes, viewport) {
   el.highlightLayer.innerHTML = '';
-  for (const { rect: r, active } of boxes) {
+  for (const { rect: r, active, isFigure } of boxes) {
     const box = document.createElement('div');
     box.className = active ? 'highlight-box' : 'highlight-box secondary';
     // Percentages of the viewport's own pixel size so boxes stay aligned
@@ -1077,7 +1113,34 @@ function renderHighlightRects(boxes, viewport) {
     box.style.width = `${(100 * r.width / viewport.width).toFixed(3)}%`;
     box.style.height = `${(100 * r.height / viewport.height).toFixed(3)}%`;
     el.highlightLayer.appendChild(box);
+    if (isFigure) for (const line of buildCrosshair(r, viewport)) el.highlightLayer.appendChild(line);
   }
+}
+
+// Figures can be tiny relative to the page, so a plain box is easy to miss.
+// A reticle centered on the box - four lines running out to the page edges,
+// absent inside the box itself - draws the eye to the right neighborhood.
+function buildCrosshair(r, viewport) {
+  const cx = r.x + r.width / 2;
+  const cy = r.y + r.height / 2;
+  const pct = (v, of) => `${(100 * v / of).toFixed(3)}%`;
+
+  const segments = [
+    // above the box
+    { left: pct(cx, viewport.width), top: '0', width: '1px', height: pct(r.y, viewport.height), transform: 'translateX(-50%)' },
+    // below the box
+    { left: pct(cx, viewport.width), top: pct(r.y + r.height, viewport.height), width: '1px', height: pct(viewport.height - (r.y + r.height), viewport.height), transform: 'translateX(-50%)' },
+    // left of the box
+    { left: '0', top: pct(cy, viewport.height), width: pct(r.x, viewport.width), height: '1px', transform: 'translateY(-50%)' },
+    // right of the box
+    { left: pct(r.x + r.width, viewport.width), top: pct(cy, viewport.height), width: pct(viewport.width - (r.x + r.width), viewport.width), height: '1px', transform: 'translateY(-50%)' },
+  ];
+  return segments.map((s) => {
+    const line = document.createElement('div');
+    line.className = 'highlight-crosshair';
+    Object.assign(line.style, s);
+    return line;
+  });
 }
 
 function clearHighlight() {
@@ -1120,7 +1183,7 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
 
   try {
     const { textContent, viewport } = await getPageTextContent(state.currentPage);
-    const imageRectMap = await getPageImageRects(state.currentPage);
+    const graphicRectMap = await getPageGraphicRects(state.currentPage);
     if (token !== state.highlightToken) return;
 
     const boxes = [];
@@ -1130,11 +1193,12 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
       if (mcidSet.size === 0) continue;
       const rects = computeHighlightRects(textContent, viewport, mcidSet);
       for (const mcid of mcidSet) {
-        const imageRects = imageRectMap.get(mcid);
-        if (imageRects) rects.push(...imageRects);
+        const graphicRects = graphicRectMap.get(mcid);
+        if (graphicRects) rects.push(...graphicRects);
       }
       const rect = unionRects(rects);
-      if (rect) boxes.push({ rect, active: id === nodeId });
+      const role = state.nodesById.get(id)?.node.role;
+      if (rect) boxes.push({ rect, active: id === nodeId, isFigure: categoryForRole(role) === 'figure' });
     }
     syncHighlightLayerBounds();
     renderHighlightRects(boxes, viewport);

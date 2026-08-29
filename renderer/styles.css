@@ -300,6 +300,14 @@ button {
   border-color: var(--accent);
 }
 
+/* Reticle lines helping locate small figures - run from the highlighted
+   box's center out to the page edges, absent inside the box itself. */
+.highlight-crosshair {
+  position: absolute;
+  background: red;
+  box-shadow: 0 0 0 0.5px red;
+}
+
 /* --- tag tree --- */
 
 .tag-tree {
