@@ -1,5 +1,5 @@
 {
-  "name": "pdf-tag-editor",
+  "name": "lastmilepdf",
   "version": "0.1.0",
   "description": "Standalone Electron app for viewing and editing PDF accessibility (tag) structure trees.",
   "main": "main.js",

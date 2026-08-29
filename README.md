@@ -1,4 +1,4 @@
-# PDF Tag Editor (scaffold)
+# LastMilePDF (scaffold)
 
 A standalone Electron app for viewing a PDF and editing its accessibility
 structure tree (the tag tree behind PDF/UA compliance). Vanilla JavaScript,
