@@ -1985,6 +1985,14 @@ el.btnSmartifact.addEventListener('click', async () => {
 el.tagFilter.addEventListener('change', () => {
   state.filter = el.tagFilter.value;
   renderTree();
+  // Switching back to the full tree can leave the still-selected tag
+  // scrolled out of view (it may have been far from the filtered rows
+  // that were showing) - bring it back into sight without touching the
+  // PDF page/highlight, which the filter change had no effect on.
+  if (state.filter === 'all' && state.selectedNodeId) {
+    const row = el.tagTree.querySelector(`[data-node-id="${state.selectedNodeId}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+  }
 });
 
 setStatus('Ready.');
