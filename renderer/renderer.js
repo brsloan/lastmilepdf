@@ -41,6 +41,7 @@ const state = {
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
+  tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
@@ -79,6 +80,9 @@ const el = {
   fieldRole: document.getElementById('field-role'),
   fieldAlt: document.getElementById('field-alt'),
   fieldActualText: document.getElementById('field-actual-text'),
+  fieldActualTextWrap: document.getElementById('field-actual-text-wrap'),
+  tablePreviewWrap: document.getElementById('field-table-preview'),
+  tablePreviewContainer: document.getElementById('table-preview-container'),
   fieldLang: document.getElementById('field-lang'),
   thSection: document.getElementById('field-th-section'),
   fieldScope: document.getElementById('field-scope'),
@@ -691,6 +695,21 @@ function refreshDetailsForSelection() {
   el.fieldColSpan.value = allTH && node.colSpan != null ? node.colSpan : '';
   el.fieldRowSpan.value = allTH && node.rowSpan != null ? node.rowSpan : '';
 
+  // A Table tag's Actual Text is swapped out for a generated read-only HTML
+  // preview of its own row/cell structure - more useful here than a free-
+  // text field, since what actually matters for a table is its shape (see
+  // renderTablePreview()). The underlying field/value is left untouched
+  // (just hidden) so Apply still round-trips whatever actualText it had.
+  const isTable = !multi && node.role === 'Table';
+  el.fieldActualTextWrap.hidden = isTable;
+  el.tablePreviewWrap.hidden = !isTable;
+  if (isTable) {
+    renderTablePreview(node);
+  } else {
+    state.tablePreviewToken += 1;
+    el.tablePreviewContainer.innerHTML = '';
+  }
+
   const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
   row?.scrollIntoView({ block: 'nearest' });
 
@@ -709,6 +728,10 @@ function closeDetails() {
   el.fieldLang.disabled = false;
   el.btnPullContent.disabled = false;
   el.thSection.hidden = true;
+  el.fieldActualTextWrap.hidden = false;
+  el.tablePreviewWrap.hidden = true;
+  state.tablePreviewToken += 1; // invalidate any table-preview build still in flight
+  el.tablePreviewContainer.innerHTML = '';
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
 }
@@ -986,7 +1009,12 @@ async function findFullPageImageLeafIds() {
 
 // Collects a tag's own content text (its content-leaf descendants' text,
 // per collectTargetMcids), joined with a single space between blocks - used
-// by the "Pull Content" button to seed Actual Text.
+// by the "Pull Content" button to seed Actual Text, and by the table preview
+// (see renderTablePreview()) to fill in each generated cell. A leaf with no
+// text run of its own (an image `Do` call or a stroked/filled vector path -
+// see getPageMcidGraphicsInfo()) contributes a bracketed type label instead
+// of being silently dropped, the same fallback loadContentText() uses for a
+// content leaf's tree-row preview.
 async function pullContentText(nodeId) {
   const targets = collectTargetMcids(nodeId);
   const parts = [];
@@ -995,9 +1023,119 @@ async function pullContentText(nodeId) {
     if (pageNumber < 1 || pageNumber > state.pageCount) continue;
     const map = await getPageMcidTextMap(pageNumber);
     const text = map.get(target.mcid);
-    if (text) parts.push(text);
+    if (text) {
+      parts.push(text);
+      continue;
+    }
+    const { imageRects, vectorMcids } = await getPageMcidGraphicsInfo(pageNumber);
+    if (imageRects.has(target.mcid)) parts.push('[Image]');
+    else if (vectorMcids.has(target.mcid)) parts.push('[Graphic]');
   }
   return parts.join(' ');
+}
+
+// --- table tag -> generated HTML preview ---------------------------------
+//
+// Selecting a Table tag swaps its Actual Text field for a read-only preview
+// built from the tag's own row/cell structure (see refreshDetailsForSelection()).
+
+// Walks a Table tag's subtree for its TR descendants, in document order.
+// Recurses through wrapper roles (THead/TBody/TFoot, or auto-tagging's
+// stray Divs) to find rows nested under them, but never descends into a
+// nested Table - that inner table's rows belong to it, not this one.
+function collectTableRows(tableNode) {
+  const rows = [];
+  (function visit(node) {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      if (child.role === 'TR') rows.push(child);
+      else if (child.role === 'Table') continue;
+      else visit(child);
+    }
+  })(tableNode);
+  return rows;
+}
+
+// Same idea for a TR's TH/TD descendants: recurse through wrappers, but stop
+// at a nested TR or Table so a cell's own nested structure never leaks in as
+// extra columns of the outer row.
+function collectRowCells(trNode) {
+  const cells = [];
+  (function visit(node) {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      if (child.role === 'TH' || child.role === 'TD') cells.push(child);
+      else if (child.role === 'TR' || child.role === 'Table') continue;
+      else visit(child);
+    }
+  })(trNode);
+  return cells;
+}
+
+// scope -> { glyph, class } for the little direction indicator drawn in a TH
+// preview cell: pointing down for a column header, right for a row header,
+// both ways for scope="Both", or a red X when scope isn't set at all.
+const SCOPE_ICONS = {
+  Column: { glyph: '↓', cls: 'scope-col' },
+  Row: { glyph: '→', cls: 'scope-row' },
+  Both: { glyph: '↓→', cls: 'scope-both' },
+};
+
+async function renderTablePreview(tableNode) {
+  const token = ++state.tablePreviewToken;
+
+  if (!state.pdfDoc) {
+    el.tablePreviewContainer.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'table-preview-empty';
+    p.textContent = 'Open the PDF preview to generate a table preview.';
+    el.tablePreviewContainer.appendChild(p);
+    return;
+  }
+
+  const rows = collectTableRows(tableNode);
+
+  if (rows.length === 0) {
+    el.tablePreviewContainer.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'table-preview-empty';
+    p.textContent = 'No rows found in this table.';
+    el.tablePreviewContainer.appendChild(p);
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'generated-table';
+
+  for (const tr of rows) {
+    const trEl = document.createElement('tr');
+    for (const cell of collectRowCells(tr)) {
+      const isHeader = cell.role === 'TH';
+      const text = await pullContentText(cell.id);
+      if (token !== state.tablePreviewToken) return; // selection changed mid-flight
+
+      const cellEl = document.createElement(isHeader ? 'th' : 'td');
+      const colSpan = Number(cell.colSpan) || 1;
+      const rowSpan = Number(cell.rowSpan) || 1;
+      if (colSpan > 1) cellEl.colSpan = colSpan;
+      if (rowSpan > 1) cellEl.rowSpan = rowSpan;
+
+      if (isHeader) {
+        const icon = SCOPE_ICONS[cell.scope];
+        const iconEl = document.createElement('span');
+        iconEl.className = `scope-icon ${icon ? icon.cls : 'scope-none'}`;
+        iconEl.textContent = icon ? icon.glyph : '✕';
+        cellEl.appendChild(iconEl);
+      }
+      cellEl.appendChild(document.createTextNode(text));
+      trEl.appendChild(cellEl);
+    }
+    table.appendChild(trEl);
+  }
+
+  if (token !== state.tablePreviewToken) return;
+  el.tablePreviewContainer.innerHTML = '';
+  el.tablePreviewContainer.appendChild(table);
 }
 
 // Fills in a content leaf's text preview once pdf.js has parsed its page.

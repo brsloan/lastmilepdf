@@ -539,6 +539,14 @@ body.busy * {
   display: none;
 }
 
+/* Same gotcha, now on `.field` itself: `#field-table-preview` reuses the
+   `field field-grow` classes and is toggled `hidden` alongside the Actual
+   Text field it swaps places with (see refreshDetailsForSelection()), so
+   `.field`'s own `display: flex` needs the same override. */
+.field[hidden] {
+  display: none;
+}
+
 .field-label {
   font-size: 11px;
   text-transform: uppercase;
@@ -603,6 +611,64 @@ body.busy * {
 
 #field-role {
   font-family: var(--font-mono);
+}
+
+/* --- table preview (generated from a selected Table tag's structure) --- */
+
+.table-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-alt);
+  padding: 8px;
+}
+
+.table-preview-empty {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.generated-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.generated-table th,
+.generated-table td {
+  border: 1px solid var(--border);
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.generated-table td {
+  color: var(--text);
+}
+
+.generated-table th {
+  background: #14151a;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.scope-icon {
+  display: inline-block;
+  margin-right: 5px;
+  font-weight: 700;
+}
+
+.scope-icon.scope-none {
+  color: #e2554f;
+}
+
+.scope-icon.scope-col,
+.scope-icon.scope-row,
+.scope-icon.scope-both {
+  color: var(--cat-table);
 }
 
 .field-actions {
