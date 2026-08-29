@@ -1397,24 +1397,6 @@ async function findFullPageImageLeafIds() {
 // see getPageMcidGraphicsInfo()) contributes a bracketed type label instead
 // of being silently dropped, the same fallback loadContentText() uses for a
 // content leaf's tree-row preview.
-// Swaps the Actual Text field's placeholder for the tag's own content text
-// (pulled the same way the "Pull Content" button does) when the tag has a
-// content leaf directly inside it - a strong hint that Actual Text exists to
-// replace that content. Any other tag (no content leaf, or one buried under
-// nested elements) keeps the generic default placeholder from index.html.
-async function updateActualTextPlaceholder(node, nodeId) {
-  const hasDirectContentLeaf = (node.children || []).some((child) => child.type === 'content');
-  if (!hasDirectContentLeaf) {
-    state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
-    el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
-    return;
-  }
-  const token = ++state.actualTextPlaceholderToken;
-  const text = await pullContentText(nodeId);
-  if (token !== state.actualTextPlaceholderToken) return; // selection changed mid-flight
-  el.fieldActualText.placeholder = text || DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
-}
-
 async function pullContentText(nodeId) {
   const targets = collectTargetMcids(nodeId);
   const parts = [];
@@ -1432,6 +1414,34 @@ async function pullContentText(nodeId) {
     else if (vectorMcids.has(target.mcid)) parts.push('[Graphic]');
   }
   return parts.join(' ');
+}
+
+// True when a tag has a content leaf (bare MCID, node.type === 'content')
+// directly among its children - a strong hint that Actual Text exists to
+// replace that content, whether by an automatic placeholder pull (see
+// updateActualTextPlaceholder()) or by focusing the empty field (see the
+// fieldActualText 'focus' listener below). A content leaf buried under
+// nested elements doesn't count - same "immediately inside" scope both
+// call sites want.
+function hasDirectContentLeaf(node) {
+  return (node.children || []).some((child) => child.type === 'content');
+}
+
+// Swaps the Actual Text field's placeholder for the tag's own content text
+// (pulled the same way the "Pull Content" button does) when the tag has a
+// content leaf directly inside it - a strong hint that Actual Text exists to
+// replace that content. Any other tag (no content leaf, or one buried under
+// nested elements) keeps the generic default placeholder from index.html.
+async function updateActualTextPlaceholder(node, nodeId) {
+  if (!hasDirectContentLeaf(node)) {
+    state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
+    el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+    return;
+  }
+  const token = ++state.actualTextPlaceholderToken;
+  const text = await pullContentText(nodeId);
+  if (token !== state.actualTextPlaceholderToken) return; // selection changed mid-flight
+  el.fieldActualText.placeholder = text || DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
 }
 
 // --- table tag -> generated HTML preview ---------------------------------
@@ -1954,6 +1964,31 @@ el.btnPullContent.addEventListener('click', async () => {
     const text = await pullContentText(nodeId);
     el.fieldActualText.value = text;
     setStatus(text ? 'Pulled content text into Actual Text.' : 'No content text found in this tag.');
+  } catch (err) {
+    reportError('Could not pull content text', err);
+  }
+});
+
+// Focusing an empty Actual Text field auto-pulls the tag's own content into
+// it, same as clicking "Pull Content", when the selected tag has a content
+// leaf directly inside it - saves the extra click for the common case of
+// replacing a tag's own text/image/graphic content. A tag without one (or a
+// field that already has a value) is left alone.
+el.fieldActualText.addEventListener('focus', async () => {
+  if (el.fieldActualText.value) return;
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId || !state.pdfDoc) return;
+  const entry = state.nodesById.get(nodeId);
+  if (!entry || entry.node.type !== 'element' || !hasDirectContentLeaf(entry.node)) return;
+  try {
+    const text = await pullContentText(nodeId);
+    // Selection may have moved, or the user may have typed something, while
+    // the pull was in flight - don't clobber either.
+    if (el.fieldActualText.value || el.fieldNodeId.value !== nodeId) return;
+    if (text) {
+      el.fieldActualText.value = text;
+      setStatus('Pulled content text into Actual Text.');
+    }
   } catch (err) {
     reportError('Could not pull content text', err);
   }
