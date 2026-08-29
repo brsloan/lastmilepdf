@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld('api', {
   killDivs: (docId) => ipcRenderer.invoke('tags:kill-divs', { docId }),
   deleteNodes: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:delete-nodes', { docId, nodeIds }),
+  setRoleOrWrap: (docId, nodeIds, role) =>
+    ipcRenderer.invoke('tags:set-role-or-wrap', { docId, nodeIds, role }),
+  convertToParagraph: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:convert-to-paragraph', { docId, nodeIds }),
+  makeList: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:make-list', { docId, nodeIds }),
 
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),

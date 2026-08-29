@@ -252,6 +252,18 @@ ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
   return callWorker('delete_nodes', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:set-role-or-wrap', async (_event, { docId, nodeIds, role }) => {
+  return callWorker('set_role_or_wrap', { docId, nodeIds, role });
+});
+
+ipcMain.handle('tags:convert-to-paragraph', async (_event, { docId, nodeIds }) => {
+  return callWorker('convert_to_paragraph', { docId, nodeIds });
+});
+
+ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds }) => {
+  return callWorker('make_list', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });

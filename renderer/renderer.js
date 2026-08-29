@@ -1430,6 +1430,137 @@ async function deleteSelection() {
   }
 }
 
+// 1-6/P/L/I convert the current selection's role, each via a dedicated
+// backend op (set_role_or_wrap/convert_to_paragraph/make_list in
+// tag_worker.py) rather than a plain Role edit, since a content/object-ref
+// leaf has no role of its own to set - these wrap it in a brand-new struct
+// element instead. See each handler below for what its shortcut actually
+// does structurally.
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (state.selectedNodeIds.size === 0) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if (/^[1-6]$/.test(e.key)) {
+    e.preventDefault();
+    applyRoleShortcut(`H${e.key}`);
+    return;
+  }
+
+  const key = e.key.toLowerCase();
+  if (key === 'p') {
+    e.preventDefault();
+    convertSelectionToParagraph();
+  } else if (key === 'l') {
+    e.preventDefault();
+    groupSelectionIntoList();
+  } else if (key === 'i') {
+    e.preventDefault();
+    applyRoleShortcut('LI');
+  }
+});
+
+// Backs the H1-H6 and 'I' shortcuts: relabels each already-tagged selected
+// node's role in place, and wraps any selected content/object-ref leaf in a
+// brand-new element with that role. A wrapped leaf's id ends up pointing at
+// its new wrapper rather than the leaf itself (it lands in the same
+// depth-first slot the leaf used to occupy - see set_role_or_wrap() in
+// tag_worker.py), which is what we want selected afterward anyway.
+async function applyRoleShortcut(role) {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  if (ids.length === 0) return;
+  const allElements = ids.every((id) => state.nodesById.get(id)?.node.type === 'element');
+
+  try {
+    const result = await window.api.setRoleOrWrap(state.docId, ids, role);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (ids.length === 1) {
+      if (state.nodesById.has(ids[0])) selectNode(ids[0]);
+      else closeDetails();
+    } else if (allElements) {
+      // A pure batch of role relabels doesn't touch tree shape, so every id
+      // is still exactly where it was - safe to keep the whole selection,
+      // same as the bulk Role field edit does.
+      state.selectedNodeIds = new Set(ids.filter((id) => state.nodesById.has(id)));
+      state.selectedNodeId = state.selectedNodeIds.has(state.selectedNodeId)
+        ? state.selectedNodeId
+        : Array.from(state.selectedNodeIds).pop();
+      renderTree();
+      refreshDetailsForSelection();
+    } else {
+      // A mix of tags and content leaves: wrapping any one of the leaves
+      // shifts the ids of everything after it in document order, so the
+      // rest of the captured ids can no longer be trusted to point at the
+      // right nodes - drop the selection rather than risk a silent
+      // mis-select.
+      closeDetails();
+    }
+    setStatus(`Set ${ids.length} tag${ids.length === 1 ? '' : 's'} to ${role}.`);
+  } catch (err) {
+    reportError(`Could not convert to ${role}`, err);
+  }
+}
+
+// Backs the 'P' shortcut: converts each selected tag to a Paragraph, except
+// a List/Span/Div, which gets flattened into paragraphs instead (see
+// convert_to_paragraph() in tag_worker.py for why). Reselects on a single
+// target the same way applyRoleShortcut() does - the old id still resolves
+// to whatever now occupies that slot, whether that's the relabeled tag, a
+// wrapped leaf, or (for a flattened container) the first of its
+// replacements. A multi-target conversion can restructure arbitrarily much
+// of the tree at once, so it just clears the selection instead.
+async function convertSelectionToParagraph() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  try {
+    const result = await window.api.convertToParagraph(state.docId, topLevelIds);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
+      selectNode(topLevelIds[0]);
+    } else {
+      closeDetails();
+    }
+    setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to paragraph.`);
+  } catch (err) {
+    reportError('Could not convert to paragraph', err);
+  }
+}
+
+// Backs the 'L' shortcut: groups the whole selection into a newly created
+// List (see make_list() in tag_worker.py) - every selected node becomes an
+// LI, and the List lands where the first one (in document order) used to
+// sit. That new List always ends up occupying the depth-first slot the
+// first selected item's old id pointed to, so reselecting via that id shows
+// the new List itself once the tree refreshes.
+async function groupSelectionIntoList() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  if (ids.length === 0) return;
+
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
+  const firstId = orderedIds[0] ?? ids[0];
+
+  try {
+    const result = await window.api.makeList(state.docId, ids);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (state.nodesById.has(firstId)) selectNode(firstId);
+    else closeDetails();
+    setStatus(`Grouped ${ids.length} tag${ids.length === 1 ? '' : 's'} into a new list.`);
+  } catch (err) {
+    reportError('Could not create list', err);
+  }
+}
+
 // Changes the selected node's heading level by `direction` (+1/-1) if it's
 // currently H1-H6, clamped to that range. Returns true if the tag is a
 // heading at all (regardless of whether it was already at the clamp), so

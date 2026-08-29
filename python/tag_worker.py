@@ -154,6 +154,362 @@ def _insert_kid(parent_obj, node_obj, index):
     parent_obj["/K"] = pikepdf.Array(items)
 
 
+def _kid_index(struct_obj, kid_obj):
+    """Position of `kid_obj` among struct_obj's /K, by the same identity/
+    equality rule _remove_kid uses (so "found here" always agrees with
+    "removable from here"). -1 if not present."""
+    for i, k in enumerate(_iter_kids(struct_obj)):
+        if _same_object(k, kid_obj):
+            return i
+    return -1
+
+
+def _top_level_selection(doc, node_ids):
+    """Filters `node_ids` down to those that aren't a descendant of another
+    id in the same list - for use before an operation that removes or
+    replaces a whole subtree, so a covered descendant isn't then processed
+    a second time against a parent link that operation already invalidated."""
+    id_set = set(node_ids)
+
+    def _has_selected_ancestor(node_id):
+        walker = doc["parent_map"].get(node_id)
+        while walker is not None:
+            if walker in id_set:
+                return True
+            walker = doc["parent_map"].get(walker)
+        return False
+
+    return [nid for nid in node_ids if not _has_selected_ancestor(nid)]
+
+
+def _wrap_leaf(doc, leaf_node_id, role):
+    """Wraps the content/object-ref leaf at `leaf_node_id` in a brand-new
+    struct element with role `role`, inserted at the leaf's current position
+    within its parent (replacing the bare leaf there). Used wherever a
+    tag-tree role shortcut (H1-H6, P, LI) targets a leaf, which - unlike a
+    struct element - has no /S of its own to relabel in place."""
+    parent_id = doc["parent_map"][leaf_node_id]
+    parent_obj = doc["elements"][parent_id]
+    leaf_obj = doc["elements"][leaf_node_id]
+
+    index = _kid_index(parent_obj, leaf_obj)
+    if index == -1:
+        raise ValueError("Could not locate content leaf in its parent")
+
+    new_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+        "/P": parent_obj,
+    }))
+    # A bare MCID (or an /MCR/OBJR with no /Pg of its own) resolves its page
+    # by inheriting from its nearest ancestor - set it explicitly here so
+    # the leaf keeps pointing at the same page regardless of where in the
+    # tree its new wrapper ends up (see the module docstring on /Pg
+    # inheritance).
+    page_index = doc["node_pages"].get(leaf_node_id)
+    if page_index is not None:
+        new_elem["/Pg"] = doc["pdf"].pages[page_index].obj
+    new_elem["/K"] = leaf_obj
+
+    _remove_kid(parent_obj, leaf_obj)
+    _insert_kid(parent_obj, new_elem, index)
+    return new_elem
+
+
+def set_role_or_wrap(doc_id, node_ids, role):
+    """For each selected node: relabels its /S to `role` in place if it's
+    already a struct element, or wraps it in a brand-new struct element with
+    that role if it's a content/object-ref leaf. Backs the tag tree's H1-H6
+    and 'I' (List Item) shortcuts."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot change the role of the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    _push_undo_snapshot(doc)
+    for node_id in node_ids:
+        if doc["node_kind"].get(node_id) == "element":
+            doc["elements"][node_id]["/S"] = pikepdf.Name("/" + role)
+        else:
+            _wrap_leaf(doc, node_id, role)
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+# Roles the 'P' shortcut's flatten dissolves rather than preserves, when
+# encountered anywhere in a List/Span/Div's subtree - see _paragraphize().
+_TRANSPARENT_ROLES = ("L", "Span", "Div", "LI", "Lbl", "LBody")
+
+
+def _direct_child_ids(doc, node_id):
+    """Direct children of node_id, in document order - relies on
+    doc["parent_map"] preserving insertion order from the last
+    _rebuild_registry, which walks kids left-to-right (see _walk)."""
+    return [cid for cid, pid in doc["parent_map"].items() if pid == node_id]
+
+
+def _make_paragraph(doc, leaf_ids):
+    """A new, not-yet-attached /P struct element grouping every leaf in
+    `leaf_ids` (already in document order) under one /K - one new element
+    per *run* of leaves that belonged together, never one per leaf. /Pg is
+    taken from the first leaf; leaves grouped by _paragraphize() always come
+    from the same direct-children run (or, for an LI's Lbl+LBody merge,
+    from one list item), so in practice they always share a page."""
+    new_p = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/P"),
+    }))
+    page_index = doc["node_pages"].get(leaf_ids[0])
+    if page_index is not None:
+        new_p["/Pg"] = doc["pdf"].pages[page_index].obj
+    leaf_objs = [doc["elements"][lid] for lid in leaf_ids]
+    new_p["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
+    return new_p
+
+
+def _paragraphize(doc, node_id):
+    """What `node_id` dissolves into when the 'P' shortcut flattens an
+    ancestor List/Span/Div: a flat, ordered list of struct-element objects
+    (not yet attached anywhere) to splice in in its place. A tag whose role
+    isn't in _TRANSPARENT_ROLES is left completely untouched and passed
+    through as a single opaque unit - recursion stops there. Everything
+    else is dissolved (recursively, arbitrarily deep) by
+    _paragraphize_children(), except LI, which _paragraphize_list_item()
+    handles specially."""
+    struct_obj = doc["elements"][node_id]
+    role = str(struct_obj.get("/S", "")).lstrip("/")
+
+    if role == "LI":
+        return _paragraphize_list_item(doc, node_id)
+    if role not in _TRANSPARENT_ROLES:
+        return [struct_obj]
+    return _paragraphize_children(doc, node_id)
+
+
+def _paragraphize_children(doc, node_id):
+    """Generic dissolve for a transparent container: walks its direct
+    children in order, grouping each maximal run of consecutive direct
+    content leaves into one new /P (a run broken by an intervening
+    structural child becomes two paragraphs, not one - see the module's P
+    shortcut docs), and recursively dissolving any structural child in
+    place via _paragraphize()."""
+    output = []
+    pending_leaves = []
+
+    def flush():
+        if pending_leaves:
+            output.append(_make_paragraph(doc, pending_leaves))
+            pending_leaves.clear()
+
+    for child_id in _direct_child_ids(doc, node_id):
+        if doc["node_kind"].get(child_id) == "element":
+            flush()
+            output.extend(_paragraphize(doc, child_id))
+        else:
+            pending_leaves.append(child_id)
+    flush()
+    return output
+
+
+def _leaves_through_spans(doc, node_id):
+    """Every content leaf under `node_id`, descending through nested Span
+    children (an inline role with no semantics of its own - a Lbl/LBody's
+    text is routinely wrapped in one for language/style runs) as if they
+    weren't there. Returns None instead if a child of any other structural
+    role turns up, signaling the caller should treat this subtree as too
+    structured to merge into a single leaf run."""
+    leaves = []
+    for child_id in _direct_child_ids(doc, node_id):
+        if doc["node_kind"].get(child_id) != "element":
+            leaves.append(child_id)
+            continue
+        child_role = str(doc["elements"][child_id].get("/S", "")).lstrip("/")
+        if child_role != "Span":
+            return None
+        nested = _leaves_through_spans(doc, child_id)
+        if nested is None:
+            return None
+        leaves.extend(nested)
+    return leaves
+
+
+def _paragraphize_list_item(doc, node_id):
+    """Dissolve for an LI: every content leaf inside a Lbl and/or LBody
+    child - including ones tucked inside a nested Span, per
+    _leaves_through_spans() - is combined into one shared /P (they're one
+    list item's label and body - flattening them into two disconnected
+    paragraphs would lose that). A Lbl/LBody with any *other* nested
+    structure falls back to being dissolved on its own via _paragraphize(),
+    same as any other structural child, rather than risk merging things out
+    of order. Anything else directly under the LI (a bare leaf, or non-Lbl/
+    LBody structural content e.g. a nested sub-list) is handled the same
+    way _paragraphize_children() would."""
+    output = []
+    pending_leaves = []
+    combined_leaves = []
+
+    def flush_pending():
+        if pending_leaves:
+            output.append(_make_paragraph(doc, pending_leaves))
+            pending_leaves.clear()
+
+    def flush_combined():
+        if combined_leaves:
+            output.append(_make_paragraph(doc, combined_leaves))
+            combined_leaves.clear()
+
+    for child_id in _direct_child_ids(doc, node_id):
+        if doc["node_kind"].get(child_id) != "element":
+            pending_leaves.append(child_id)
+            continue
+
+        child_role = str(doc["elements"][child_id].get("/S", "")).lstrip("/")
+        leaves = _leaves_through_spans(doc, child_id) if child_role in ("Lbl", "LBody") else None
+        if leaves is not None:
+            flush_pending()
+            combined_leaves.extend(leaves)
+        else:
+            flush_pending()
+            flush_combined()
+            output.extend(_paragraphize(doc, child_id))
+
+    flush_pending()
+    flush_combined()
+    return output
+
+
+def _flatten_container_to_paragraphs(doc, node_id):
+    """Replaces the List/Span/Div struct element at `node_id` with the
+    fully flattened contents of its whole subtree (see _paragraphize),
+    spliced into its own parent in its place. The container itself is
+    always discarded."""
+    parent_id = doc["parent_map"].get(node_id)
+    if parent_id is None:
+        raise ValueError("Cannot flatten the document root")
+    parent_obj = doc["elements"][parent_id]
+    node_obj = doc["elements"][node_id]
+
+    index = _kid_index(parent_obj, node_obj)
+    if index == -1:
+        raise ValueError("Could not locate tag in its parent")
+
+    replacements = _paragraphize(doc, node_id)
+    for repl in replacements:
+        repl["/P"] = parent_obj
+
+    _remove_kid(parent_obj, node_obj)
+    for offset, repl in enumerate(replacements):
+        _insert_kid(parent_obj, repl, index + offset)
+
+
+def convert_to_paragraph(doc_id, node_ids):
+    """Converts each selected tag to a Paragraph. A List/Span/Div is instead
+    flattened (see _flatten_container_to_paragraphs) rather than simply
+    relabeled, since turning a list/wrapper's own role into /P while leaving
+    its List-Item/inline kids nested beneath it wouldn't make it an actual
+    paragraph. Anything else - including a content/object-ref leaf - is
+    set-or-wrapped to /P the same way set_role_or_wrap() handles H1-H6/LI.
+    Backs the tag tree's 'P' shortcut."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot convert the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    top_level = _top_level_selection(doc, node_ids)
+
+    _push_undo_snapshot(doc)
+    for node_id in top_level:
+        if doc["node_kind"].get(node_id) == "element":
+            role = str(doc["elements"][node_id].get("/S", "")).lstrip("/")
+            if role in ("L", "Span", "Div"):
+                _flatten_container_to_paragraphs(doc, node_id)
+            else:
+                doc["elements"][node_id]["/S"] = pikepdf.Name("/P")
+        else:
+            _wrap_leaf(doc, node_id, "P")
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
+def make_list(doc_id, node_ids):
+    """Groups the selected tags into a newly created List: each one becomes
+    an LI (a struct element is relabeled in place; a content/object-ref leaf
+    is wrapped in a brand-new LI, same as set_role_or_wrap() does for H1-H6/
+    'I'), and all of them become children of a fresh /L struct element
+    inserted at the position the earliest-selected one occupied. Every
+    selected node must currently share the same parent - there'd be no
+    single well-defined "where the first item was" otherwise. Backs the tag
+    tree's 'L' shortcut."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot group the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    parent_ids = {doc["parent_map"].get(nid) for nid in node_ids}
+    if len(parent_ids) != 1 or None in parent_ids:
+        raise ValueError("Can't group into a list: selected tags don't share a parent.")
+    parent_id = next(iter(parent_ids))
+    parent_obj = doc["elements"][parent_id]
+
+    # Document order among the selected nodes, as they currently sit among
+    # their shared parent's kids - see _top_level_selection for why this
+    # parent_map scan preserves kid order.
+    node_id_set = set(node_ids)
+    ordered_ids = [cid for cid, pid in doc["parent_map"].items() if pid == parent_id and cid in node_id_set]
+
+    leaf_objs = [doc["elements"][nid] for nid in ordered_ids]
+    first_index = min(_kid_index(parent_obj, obj) for obj in leaf_objs)
+    if first_index == -1:
+        raise ValueError("Could not locate selected tags in their parent")
+
+    _push_undo_snapshot(doc)
+
+    li_dicts = []
+    for node_id in ordered_ids:
+        if doc["node_kind"].get(node_id) == "element":
+            elem = doc["elements"][node_id]
+            _remove_kid(parent_obj, elem)
+            elem["/S"] = pikepdf.Name("/LI")
+            li_dicts.append(elem)
+        else:
+            leaf_obj = doc["elements"][node_id]
+            _remove_kid(parent_obj, leaf_obj)
+            li = doc["pdf"].make_indirect(pikepdf.Dictionary({
+                "/Type": pikepdf.Name("/StructElem"),
+                "/S": pikepdf.Name("/LI"),
+            }))
+            page_index = doc["node_pages"].get(node_id)
+            if page_index is not None:
+                li["/Pg"] = doc["pdf"].pages[page_index].obj
+            li["/K"] = leaf_obj
+            li_dicts.append(li)
+
+    new_list = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/L"),
+        "/P": parent_obj,
+    }))
+    for li in li_dicts:
+        li["/P"] = new_list
+    new_list["/K"] = pikepdf.Array(li_dicts)
+
+    _insert_kid(parent_obj, new_list, first_index)
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
 def _snapshot_bytes(pdf):
     buf = io.BytesIO()
     pdf.save(buf)
@@ -593,20 +949,9 @@ def delete_nodes(doc_id, node_ids):
         if node_id not in doc["elements"]:
             raise ValueError(f"Unknown node id: {node_id}")
 
-    # Drop any target that's a descendant of another target in the same
-    # batch - removing the ancestor already takes it (and its whole
-    # subtree) with it, so revisiting it separately would be redundant.
-    id_set = set(node_ids)
-
-    def _has_selected_ancestor(node_id):
-        walker = doc["parent_map"].get(node_id)
-        while walker is not None:
-            if walker in id_set:
-                return True
-            walker = doc["parent_map"].get(walker)
-        return False
-
-    top_level = [nid for nid in node_ids if not _has_selected_ancestor(nid)]
+    # Removing an ancestor already takes any selected descendant with it -
+    # see _top_level_selection.
+    top_level = _top_level_selection(doc, node_ids)
 
     _push_undo_snapshot(doc)
     for node_id in top_level:
@@ -689,6 +1034,12 @@ def main():
                 result = kill_divs(request["docId"])
             elif cmd == "delete_nodes":
                 result = delete_nodes(request["docId"], request["nodeIds"])
+            elif cmd == "set_role_or_wrap":
+                result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
+            elif cmd == "convert_to_paragraph":
+                result = convert_to_paragraph(request["docId"], request["nodeIds"])
+            elif cmd == "make_list":
+                result = make_list(request["docId"], request["nodeIds"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":
