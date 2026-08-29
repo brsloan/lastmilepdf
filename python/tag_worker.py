@@ -868,6 +868,32 @@ def _outline_item_page(doc, item):
     return None
 
 
+def _outline_item_top(doc, item):
+    """The page-space y-coordinate `item`'s destination scrolls to (matching
+    the units/orientation renderer.js's computeHeadingTop() computes them
+    in), or None if its fit style doesn't encode a vertical position at all
+    (e.g. plain /Fit or /FitB, which just show the whole page). Mirrors
+    _outline_item_page()'s handling of the same dest array - see
+    _outline_item_dest_array() - but reads the fit-style-dependent "top"
+    slot instead of the leading page ref."""
+    dest = _outline_item_dest_array(item)
+    if not isinstance(dest, pikepdf.Array) or len(dest) < 3:
+        return None
+    location = str(dest[1])
+    try:
+        if location == "/XYZ" and len(dest) > 3:
+            top = dest[3]
+        elif location in ("/FitH", "/FitBH"):
+            top = dest[2]
+        elif location == "/FitR" and len(dest) > 5:
+            top = dest[5]
+        else:
+            return None
+        return float(top)
+    except (TypeError, ValueError):
+        return None
+
+
 def _walk_outline(doc, items, counter, id_map=None):
     """Depth-first JSON tree for `items` (an Outline's .root, or an
     OutlineItem's .children), assigning each item a fresh "bN" id as it
@@ -886,6 +912,7 @@ def _walk_outline(doc, items, counter, id_map=None):
             "id": node_id,
             "title": item.title,
             "page": _outline_item_page(doc, item),
+            "top": _outline_item_top(doc, item),
             "children": _walk_outline(doc, item.children, counter, id_map),
         })
     return result
@@ -956,16 +983,19 @@ def delete_bookmark(doc_id, bookmark_id):
 def generate_bookmarks(doc_id, headings):
     """Replaces the whole outline with a fresh one built from `headings` -
     an ordered (document-order) list of {title, level (1-6), page
-    (0-based)} dicts that the renderer collects from the tag tree's H1-H6
-    nodes (see collectHeadingsForBookmarks() in renderer.js): each
+    (0-based), top} dicts that the renderer collects from the tag tree's
+    H1-H6 nodes (see collectHeadingsForBookmarks() in renderer.js): each
     heading's title comes from pdf.js's content extraction over there,
     which this Python side has no equivalent of (recovering text from a
-    content stream by marked-content id isn't something pikepdf does).
-    Nesting follows heading level via a stack: a heading becomes a child of
-    the nearest preceding heading with a strictly lower level, or a
-    top-level item if none - the standard way to rebuild a tree from a flat
-    leveled list. An empty `headings` list just clears the outline. Backs
-    the Bookmarks panel's Generate button."""
+    content stream by marked-content id isn't something pikepdf does), and
+    `top` is the heading's own vertical position on the page (also computed
+    over there, from the same text-run geometry pdf.js already resolved for
+    tag highlighting) so the bookmark scrolls straight to the heading rather
+    than just the top of its page. Nesting follows heading level via a
+    stack: a heading becomes a child of the nearest preceding heading with a
+    strictly lower level, or a top-level item if none - the standard way to
+    rebuild a tree from a flat leveled list. An empty `headings` list just
+    clears the outline. Backs the Bookmarks panel's Generate button."""
     doc = documents[doc_id]
 
     root = []
@@ -976,7 +1006,11 @@ def generate_bookmarks(doc_id, headings):
         if not isinstance(level, int) or not isinstance(page, int):
             continue
         title = (h.get("title") or "").strip() or "Untitled"
-        item = pikepdf.OutlineItem(title, page)
+        top = h.get("top")
+        if isinstance(top, (int, float)):
+            item = pikepdf.OutlineItem(title, page, page_location="FitH", top=top)
+        else:
+            item = pikepdf.OutlineItem(title, page)
 
         while stack and stack[-1][0] >= level:
             stack.pop()

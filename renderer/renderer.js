@@ -677,17 +677,26 @@ function selectBookmark(bookmarkId) {
   renderBookmarkTree();
   const node = state.bookmarksById.get(bookmarkId)?.node;
   if (node && node.page !== null && node.page !== undefined) {
-    jumpToPage(node.page + 1);
+    jumpToPage(node.page + 1, node.top);
   }
 }
 
-async function jumpToPage(pageNumber) {
+// `top`, when given, is a page-space y-coordinate (see computeHeadingTop())
+// to scroll to within the target page - used by bookmarks that carry a
+// specific position rather than just a page. Applied even when the page
+// itself doesn't change (e.g. two bookmarks on the same page), unlike the
+// page-render/highlight-resync above it, which only a real page change
+// needs.
+async function jumpToPage(pageNumber, top) {
   if (!state.pdfDoc) return;
   if (pageNumber < 1 || pageNumber > state.pageCount) return;
-  if (pageNumber === state.currentPage) return;
-  state.currentPage = pageNumber;
-  await renderCurrentPage();
-  updatePageNavUI();
+  if (pageNumber !== state.currentPage) {
+    state.currentPage = pageNumber;
+    await renderCurrentPage();
+    updatePageNavUI();
+    await highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+  }
+  await scrollToHeadingTop(top);
 }
 
 // Swaps a bookmark row's title for a text input on double-click, committing
@@ -777,12 +786,14 @@ window.addEventListener('keydown', (e) => {
 // Walks the tag tree for every H1-H6 node, in document order, collecting
 // what generate_bookmarks() (tag_worker.py) needs to rebuild a nested
 // outline matching the heading hierarchy: level (for nesting), page (from
-// the tag tree's own resolved /Pg, already 0-based), and title text - pulled
+// the tag tree's own resolved /Pg, already 0-based), title text - pulled
 // via pullContentText(), the same content-extraction path the "Pull
 // Content" button uses, since pikepdf has no equivalent way to recover a
-// heading's visible text from its marked content. Headings with no numbered
-// level (a bare "H" or "Title" role) are skipped - there'd be no level to
-// nest them by.
+// heading's visible text from its marked content - and top (the heading's
+// vertical position on the page, so the generated bookmark scrolls straight
+// to it instead of just the page's top edge; see computeHeadingTop()).
+// Headings with no numbered level (a bare "H" or "Title" role) are skipped -
+// there'd be no level to nest them by.
 async function collectHeadingsForBookmarks() {
   const headingNodes = [];
   (function visit(node) {
@@ -798,9 +809,54 @@ async function collectHeadingsForBookmarks() {
     const node = state.nodesById.get(id)?.node;
     if (!node || node.page === null || node.page === undefined) continue;
     const title = (await pullContentText(id)).trim() || `Untitled ${node.role}`;
-    headings.push({ title, level, page: node.page });
+    const top = await computeHeadingTop(id, node.page);
+    headings.push({ title, level, page: node.page, top });
   }
   return headings;
+}
+
+// A heading's y-coordinate on its page, in the same default-page-space
+// units (unscaled, PAGE_SCALE === 1) that a PDF destination's /FitH "top"
+// expects - measured from the page's own bottom-left origin, increasing
+// upward. Pulled from the same mcid text-run rects tag highlighting uses
+// (see computeHighlightRects), just against a scale-1 viewport instead of
+// PAGE_SCALE, and flipped from pdf.js's top-down pixel space back to PDF
+// space. null if the heading's marked content isn't findable (e.g. an empty
+// heading with no runs on this page).
+async function computeHeadingTop(nodeId, pageIndex) {
+  const mcidSet = new Set(
+    collectTargetMcids(nodeId).filter((t) => t.page === pageIndex).map((t) => t.mcid)
+  );
+  if (mcidSet.size === 0) return null;
+  const page = await state.pdfDoc.getPage(pageIndex + 1);
+  const textContent = await page.getTextContent({ includeMarkedContent: true });
+  const viewport = page.getViewport({ scale: 1 });
+  const rect = unionRects(computeHighlightRects(textContent, viewport, mcidSet));
+  return rect ? viewport.height - rect.y : null;
+}
+
+// Scrolls the canvas-wrap pane so page-space y-coordinate `top` (see
+// computeHeadingTop()) sits at the top edge of the visible area - the
+// on-page counterpart to jumpToPage()'s page-level navigation, used when a
+// bookmark carries a specific position rather than just a page. Positions a
+// throwaway 1px marker at that coordinate (reusing the highlight layer's
+// existing percentage-of-viewport placement, which already accounts for the
+// canvas's CSS scaling) and scrolls it into view, since there's no other
+// element guaranteed to already sit exactly there.
+async function scrollToHeadingTop(top) {
+  if (top === null || top === undefined || !state.pdfDoc) return;
+  const { viewport } = await getPageTextContent(state.currentPage);
+  const pixelY = viewport.height - top * PAGE_SCALE;
+  syncHighlightLayerBounds();
+  const marker = document.createElement('div');
+  marker.style.position = 'absolute';
+  marker.style.left = '0';
+  marker.style.width = '1px';
+  marker.style.height = '1px';
+  marker.style.top = `${(100 * pixelY / viewport.height).toFixed(3)}%`;
+  el.highlightLayer.appendChild(marker);
+  marker.scrollIntoView({ block: 'start', inline: 'nearest' });
+  marker.remove();
 }
 
 el.btnGenerateBookmarks.addEventListener('click', async () => {
