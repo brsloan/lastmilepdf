@@ -248,6 +248,10 @@ ipcMain.handle('tags:kill-divs', async (_event, { docId }) => {
   return callWorker('kill_divs', { docId });
 });
 
+ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
+  return callWorker('delete_nodes', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });

@@ -30,6 +30,7 @@ const state = {
   pageCount: 0,
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
+  mcidImageRectCache: new Map(), // page number -> Map(mcid -> rect[]), reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' - see renderFilteredTree()
@@ -620,9 +621,10 @@ function closeDetails() {
 // their union rather than one box per run (which got noisy and overlapped
 // for multi-line/multi-word content).
 //
-// Known limitation: this only covers *text* content. A Figure/Formula's
-// marked content is normally an image `Do` call, which getTextContent()
-// doesn't report, so those tags won't currently highlight anything.
+// A Figure/Formula's marked content is normally an image `Do` call, which
+// getTextContent() doesn't report - those rects come from a separate path,
+// getPageImageRects(), that walks the page's operator list instead (see
+// below).
 
 function collectTargetMcids(nodeId) {
   const entry = state.nodesById.get(nodeId);
@@ -672,6 +674,88 @@ async function getPageMcidTextMap(pageNumber) {
   }
   for (const [mcid, text] of map) map.set(mcid, text.trim());
   state.mcidTextCache.set(pageNumber, map);
+  return map;
+}
+
+// Builds a page's mcid -> image-xobject rect(s) lookup (cached), by walking
+// the page's operator list and tracking the CTM through save/restore/
+// transform/form-xobject ops. This is the image-content counterpart to
+// getPageMcidTextMap(): image `Do` calls don't show up in getTextContent(),
+// so a Figure's placement has to be recovered from the raw operator list
+// instead - the image is painted into the unit square [0,1]x[0,1], which
+// the current CTM (accumulated the same way a PDF interpreter would) maps
+// into page space.
+async function getPageImageRects(pageNumber) {
+  if (state.mcidImageRectCache.has(pageNumber)) return state.mcidImageRectCache.get(pageNumber);
+  const page = await state.pdfDoc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: PAGE_SCALE });
+  const { fnArray, argsArray } = await page.getOperatorList();
+  const { OPS, Util } = pdfjsLib;
+
+  const map = new Map(); // mcid -> rect[]
+  const mcidStack = [];
+  const ctmStack = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+
+  const unitSquareRectForCurrentMcid = () => {
+    const mcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
+    if (mcid === null) return;
+    const corners = [[0, 0], [1, 0], [0, 1], [1, 1]]
+      .map((p) => Util.applyTransform(p, ctm))
+      .map((p) => Util.applyTransform(p, viewport.transform));
+    const xs = corners.map((c) => c[0]);
+    const ys = corners.map((c) => c[1]);
+    const rect = {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys),
+    };
+    const existing = map.get(mcid);
+    if (existing) existing.push(rect); else map.set(mcid, [rect]);
+  };
+
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i];
+    const args = argsArray[i];
+    switch (fn) {
+      case OPS.save:
+        ctmStack.push(ctm);
+        break;
+      case OPS.restore:
+        ctm = ctmStack.length > 0 ? ctmStack.pop() : ctm;
+        break;
+      case OPS.transform:
+        ctm = Util.transform(ctm, args);
+        break;
+      case OPS.paintFormXObjectBegin:
+        ctmStack.push(ctm);
+        if (args && args[0]) ctm = Util.transform(ctm, args[0]);
+        break;
+      case OPS.paintFormXObjectEnd:
+        ctm = ctmStack.length > 0 ? ctmStack.pop() : ctm;
+        break;
+      case OPS.beginMarkedContentProps:
+        mcidStack.push(typeof args[1] === 'number' ? args[1] : null);
+        break;
+      case OPS.beginMarkedContent:
+        mcidStack.push(null);
+        break;
+      case OPS.endMarkedContent:
+        mcidStack.pop();
+        break;
+      case OPS.paintImageXObject:
+      case OPS.paintImageXObjectRepeat:
+      case OPS.paintInlineImageXObject:
+      case OPS.paintImageMaskXObject:
+        unitSquareRectForCurrentMcid();
+        break;
+      default:
+        break;
+    }
+  }
+
+  state.mcidImageRectCache.set(pageNumber, map);
   return map;
 }
 
@@ -791,7 +875,12 @@ function computeHighlightRects(textContent, viewport, mcidSet) {
 // the click point, walking the same begin/end-marked-content markers to
 // find which MCID (if any) the clicked run belongs to, then looks up the
 // struct element that directly owns that MCID via `state.mcidIndex` and
-// selects it. Same text-only limitation as the highlight feature.
+// selects it. Falls back to the image-xobject rects (see getPageImageRects)
+// so clicking a Figure's picture also selects its tag.
+
+function pointInRect(x, y, box) {
+  return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+}
 
 async function findNodeAtPoint(x, y) {
   const pageMcids = state.mcidIndex.get(state.currentPage - 1); // node.page is 0-based
@@ -815,9 +904,13 @@ async function findNodeAtPoint(x, y) {
     if (currentMcid === null || !pageMcids.has(currentMcid)) continue;
 
     const box = itemRectInViewport(item, viewport);
-    if (x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height) {
-      return pageMcids.get(currentMcid);
-    }
+    if (pointInRect(x, y, box)) return pageMcids.get(currentMcid);
+  }
+
+  const imageRectMap = await getPageImageRects(state.currentPage);
+  for (const [mcid, rects] of imageRectMap) {
+    if (!pageMcids.has(mcid)) continue;
+    if (rects.some((box) => pointInRect(x, y, box))) return pageMcids.get(mcid);
   }
 
   return null;
@@ -909,8 +1002,14 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
 
   try {
     const { textContent, viewport } = await getPageTextContent(state.currentPage);
+    const imageRectMap = await getPageImageRects(state.currentPage);
     if (token !== state.highlightToken) return;
-    const box = unionRects(computeHighlightRects(textContent, viewport, mcidSet));
+    const rects = computeHighlightRects(textContent, viewport, mcidSet);
+    for (const mcid of mcidSet) {
+      const imageRects = imageRectMap.get(mcid);
+      if (imageRects) rects.push(...imageRects);
+    }
+    const box = unionRects(rects);
     syncHighlightLayerBounds();
     renderHighlightRects(box ? [box] : [], viewport);
   } catch (err) {
@@ -1284,6 +1383,53 @@ window.addEventListener('keydown', (e) => {
   if (attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
 });
 
+// Delete removes the current selection from the struct tree. A tag
+// (element node) is deleted along with its whole subtree; a content/
+// object-ref leaf is just unlinked from its tag, which is what "artifact"
+// it amounts to here - see delete_nodes() in tag_worker.py.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Delete') return;
+  if (state.selectedNodeIds.size === 0) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  e.preventDefault();
+  deleteSelection();
+});
+
+async function deleteSelection() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  // Only the top-level selected nodes need to be sent - deleting an
+  // ancestor already takes its whole subtree, including any selected
+  // descendants, with it.
+  const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  let tagCount = 0;
+  let contentCount = 0;
+  for (const id of topLevelIds) {
+    const entry = state.nodesById.get(id);
+    if (entry?.node.type === 'element') tagCount += 1;
+    else contentCount += 1;
+  }
+
+  try {
+    const result = await window.api.deleteNodes(state.docId, topLevelIds);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    closeDetails();
+
+    const parts = [];
+    if (tagCount > 0) parts.push(`deleted ${tagCount} tag${tagCount === 1 ? '' : 's'}`);
+    if (contentCount > 0) parts.push(`artifacted ${contentCount} content element${contentCount === 1 ? '' : 's'}`);
+    const message = parts.join(' and ');
+    setStatus(message.charAt(0).toUpperCase() + message.slice(1) + '.');
+  } catch (err) {
+    reportError('Could not delete selection', err);
+  }
+}
+
 // Changes the selected node's heading level by `direction` (+1/-1) if it's
 // currently H1-H6, clamped to that range. Returns true if the tag is a
 // heading at all (regardless of whether it was already at the clamp), so
@@ -1355,6 +1501,7 @@ async function loadPdfPreview(base64Data) {
   state.currentPage = 1;
   state.textContentCache.clear();
   state.mcidTextCache.clear();
+  state.mcidImageRectCache.clear();
   el.viewerPlaceholder.hidden = true;
   await renderCurrentPage();
   updatePageNavUI();

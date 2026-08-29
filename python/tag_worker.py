@@ -573,6 +573,52 @@ def kill_divs(doc_id):
     return {"tree": _rebuild_registry(doc_id), "removed": removed, **_undo_state(doc)}
 
 
+def delete_nodes(doc_id, node_ids):
+    """Removes each of `node_ids` from its parent's /K, taking its entire
+    subtree with it. Backs the tag tree's Delete key for both cases it
+    handles: a struct element ("tag") is fully removed along with its
+    descendants, and a content/object-ref leaf is unlinked from the struct
+    tree the same way - since this editor never touches content-stream
+    marked-content operators (see the module docstring), removing
+    structure's only reference to a piece of content is what "artifact" it
+    means here: assistive tech skips unreferenced content exactly as it
+    would a real /Artifact tag."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No nodes to delete")
+
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot delete the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    # Drop any target that's a descendant of another target in the same
+    # batch - removing the ancestor already takes it (and its whole
+    # subtree) with it, so revisiting it separately would be redundant.
+    id_set = set(node_ids)
+
+    def _has_selected_ancestor(node_id):
+        walker = doc["parent_map"].get(node_id)
+        while walker is not None:
+            if walker in id_set:
+                return True
+            walker = doc["parent_map"].get(walker)
+        return False
+
+    top_level = [nid for nid in node_ids if not _has_selected_ancestor(nid)]
+
+    _push_undo_snapshot(doc)
+    for node_id in top_level:
+        node_obj = doc["elements"][node_id]
+        parent_id = doc["parent_map"].get(node_id)
+        parent_obj = doc["elements"].get(parent_id) if parent_id is not None else None
+        if parent_obj is not None:
+            _remove_kid(parent_obj, node_obj)
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
@@ -641,6 +687,8 @@ def main():
                 )
             elif cmd == "kill_divs":
                 result = kill_divs(request["docId"])
+            elif cmd == "delete_nodes":
+                result = delete_nodes(request["docId"], request["nodeIds"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":
