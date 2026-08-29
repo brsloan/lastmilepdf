@@ -608,3 +608,106 @@ body.busy * {
   background: var(--panel);
   border-top: 1px solid var(--border);
 }
+
+/* --- shortcuts dialog --- */
+
+.shortcuts-dialog {
+  width: min(640px, 92vw);
+  max-height: 84vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* Qualified on [open] rather than folded into .shortcuts-dialog above -
+   `display` is an author style, which beats the UA stylesheet's own
+   `dialog:not([open]) { display: none }` regardless of specificity, so a
+   bare `display: flex` here would make the dialog render even before
+   showModal() ever sets [open]. overflow:hidden + flex column (with
+   min-height:0 on .shortcuts-body below) override the UA stylesheet's own
+   `overflow: auto` on open dialogs, which would otherwise scroll the whole
+   dialog *in addition to* .shortcuts-body's own scroll region - two
+   scrollbars whenever their heights didn't happen to match exactly. */
+.shortcuts-dialog[open] {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.shortcuts-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.shortcuts-header h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.shortcuts-body {
+  padding: 8px 16px 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 24px;
+}
+
+.shortcuts-group {
+  min-width: 0;
+  break-inside: avoid;
+}
+
+.shortcuts-group h3 {
+  margin: 12px 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.shortcuts-group dl {
+  margin: 0;
+}
+
+.shortcut-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+
+.shortcut-row dt {
+  color: var(--text);
+}
+
+.shortcut-row dd {
+  margin: 0;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}

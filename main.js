@@ -174,6 +174,12 @@ function buildAppMenu() {
     },
     { role: 'viewMenu' },
     { role: 'windowMenu' },
+    {
+      label: 'Help',
+      submenu: [
+        { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => win?.webContents.send('menu:shortcuts') },
+      ],
+    },
   ];
   return Menu.buildFromTemplate(template);
 }

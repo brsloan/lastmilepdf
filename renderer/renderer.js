@@ -82,6 +82,8 @@ const el = {
   fieldLang: document.getElementById('field-lang'),
   btnCancelEdit: document.getElementById('btn-cancel-edit'),
   btnPullContent: document.getElementById('btn-pull-content'),
+  shortcutsDialog: document.getElementById('shortcuts-dialog'),
+  btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
 };
 
 function setStatus(message) {
@@ -1386,6 +1388,16 @@ el.btnUndo.addEventListener('click', () => performUndo());
 el.btnRedo.addEventListener('click', () => performRedo());
 window.api.onMenuUndo(() => performUndo());
 window.api.onMenuRedo(() => performRedo());
+
+// The native <dialog> already closes on Escape and backdrop-click-outside
+// is handled via the click listener below (clicking the dialog element
+// itself only happens on the backdrop, since the visible content is inside
+// a child that would catch the click first).
+window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());
+el.btnCloseShortcuts.addEventListener('click', () => el.shortcutsDialog.close());
+el.shortcutsDialog.addEventListener('click', (e) => {
+  if (e.target === el.shortcutsDialog) el.shortcutsDialog.close();
+});
 
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;

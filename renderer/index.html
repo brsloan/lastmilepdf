@@ -150,6 +150,70 @@
 
   <footer class="statusbar" id="status-bar">Ready.</footer>
 
+  <dialog id="shortcuts-dialog" class="shortcuts-dialog">
+    <div class="shortcuts-header">
+      <h2>Keyboard Shortcuts</h2>
+      <button type="button" id="btn-close-shortcuts" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <div class="shortcuts-body">
+      <section class="shortcuts-group">
+        <h3>File</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>O</kbd></dt><dd>Open PDF</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>S</kbd></dt><dd>Save</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></dt><dd>Save As&hellip;</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>History</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Z</kbd></dt><dd>Undo</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Y</kbd> / <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></dt><dd>Redo</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Selection</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Click</kbd></dt><dd>Select a tag</dd></div>
+          <div class="shortcut-row"><dt><kbd>Shift</kbd>+<kbd>Click</kbd></dt><dd>Select range</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd></dt><dd>Add/remove tag from selection</dd></div>
+          <div class="shortcut-row"><dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move selection through tree</dd></div>
+          <div class="shortcut-row"><dt><kbd>Shift</kbd>+<kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>Extend selection</dd></div>
+          <div class="shortcut-row"><dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Collapse/expand tag (steps heading level when filtered to Headings)</dd></div>
+          <div class="shortcut-row"><dt><kbd>Delete</kbd></dt><dd>Delete selected tag(s)</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Reordering</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>Move tag(s) earlier/later among siblings</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>&larr;</kbd>/<kbd>&rarr;</kbd></dt><dd>Change heading level (H1&ndash;H6)</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Tagging</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>1</kbd>&ndash;<kbd>6</kbd></dt><dd>Set role to H1&ndash;H6</dd></div>
+          <div class="shortcut-row"><dt><kbd>P</kbd></dt><dd>Convert to Paragraph</dd></div>
+          <div class="shortcut-row"><dt><kbd>L</kbd></dt><dd>Group selection into a List</dd></div>
+          <div class="shortcut-row"><dt><kbd>I</kbd></dt><dd>Set role to List Item</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Walk</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>+</kbd>/<kbd>-</kbd></dt><dd>Increase/decrease walk speed</dd></div>
+          <div class="shortcut-row"><dt><kbd>Any other key</kbd></dt><dd>Stop walking</dd></div>
+        </dl>
+      </section>
+    </div>
+  </dialog>
+
   <script type="module" src="renderer.js"></script>
 </body>
 </html>
