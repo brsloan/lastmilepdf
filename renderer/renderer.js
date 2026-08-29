@@ -42,7 +42,7 @@ const state = {
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
-  filter: 'all',                // 'all' | 'headings' | 'figures' - see renderFilteredTree()
+  filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
   walkTimerId: null,
   walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
@@ -185,12 +185,13 @@ function renderTree() {
 // containers. Since it's a flat list, drag reordering doesn't apply here:
 // filtered rows are plain, non-draggable, and get no drop handlers, which is
 // what disables moving tags while filtered.
-// "Figures" instead keeps each matching Figure's real subtree intact - only
-// the path down to each figure is flattened/skipped, not its contents - so
-// alt text, captions, and other nested structure stay browsable with normal
-// collapse/expand (rendered via renderTreeNode, same as the unfiltered
-// tree). Figures nested inside another matched figure aren't listed again
-// at the top level; they just show up as part of their parent's subtree.
+// "Figures" and "Table" instead keep each matching node's real subtree
+// intact - only the path down to each match is flattened/skipped, not its
+// contents - so alt text, captions, rows/cells, and other nested structure
+// stay browsable with normal collapse/expand (rendered via renderTreeNode,
+// same as the unfiltered tree). A match nested inside another match of the
+// same filter isn't listed again at the top level; it just shows up as part
+// of its parent's subtree.
 // Up/down arrow navigation keeps working unchanged, since it just walks
 // whatever `.tree-row.selectable` rows are currently in the DOM.
 
@@ -199,6 +200,7 @@ function nodeMatchesFilter(node) {
   if (node.type !== 'element') return false;
   if (state.filter === 'headings') return categoryForRole(node.role) === 'heading';
   if (state.filter === 'figures') return node.role === 'Figure';
+  if (state.filter === 'table') return node.role === 'Table';
   return true;
 }
 
@@ -211,7 +213,7 @@ function collectFilteredNodes(node, matches, stopAtMatch) {
 }
 
 function renderFilteredTree() {
-  const nested = state.filter === 'figures';
+  const nested = state.filter === 'figures' || state.filter === 'table';
   const matches = [];
   collectFilteredNodes(state.tree, matches, nested);
 
