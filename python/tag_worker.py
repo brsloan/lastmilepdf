@@ -529,6 +529,24 @@ def _push_undo_snapshot(doc):
     doc["redo_stack"].clear()
 
 
+def _resolve_objref_subtype(kid):
+    """For an /OBJR dict, resolve the /Subtype of the object it points at
+    (e.g. /Image or /Form for an XObject, /Link or /Widget for an
+    annotation), stripped of its leading slash. None if /Obj is missing,
+    unresolvable, or has no /Subtype."""
+    try:
+        target = kid.get("/Obj")
+    except Exception:
+        return None
+    if not isinstance(target, pikepdf.Dictionary) or "/Subtype" not in target:
+        return None
+    try:
+        subtype = str(target["/Subtype"])
+    except Exception:
+        return None
+    return subtype[1:] if subtype.startswith("/") else subtype
+
+
 def _resolve_page_index(doc, page_obj):
     """Map a /Pg reference (an indirect Page dictionary) to its 0-based
     index in the document's page list, or None if it can't be resolved
@@ -612,6 +630,7 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
                 resolved_kid_page = _resolve_page_index(doc, kid.get("/Pg"))
                 if resolved_kid_page is not None:
                     kid_page = resolved_kid_page
+            is_objref = kid_type == "/OBJR"
             child_id = _next_id(doc)
             doc["elements"][child_id] = kid
             doc["parent_map"][child_id] = node_id
@@ -619,10 +638,11 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
             doc["node_kind"][child_id] = "content-dict"
             node["children"].append({
                 "id": child_id,
-                "type": "object-ref" if kid_type == "/OBJR" else "content",
+                "type": "object-ref" if is_objref else "content",
                 "role": None,
                 "mcid": mcid_val,
                 "page": kid_page,
+                "objType": _resolve_objref_subtype(kid) if is_objref else None,
                 "children": [],
             })
 

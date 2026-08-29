@@ -30,7 +30,7 @@ const state = {
   pageCount: 0,
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
-  mcidImageRectCache: new Map(), // page number -> Map(mcid -> rect[]), reset per document
+  mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' - see renderFilteredTree()
@@ -338,7 +338,9 @@ function renderTreeNode(node) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.dataset.category = 'leaf';
-      chip.textContent = node.type === 'object-ref' ? 'objref' : 'content';
+      chip.textContent = node.type === 'object-ref'
+        ? (node.objType ? `[${node.objType}]` : 'objref')
+        : 'content';
       row.appendChild(chip);
       if (node.mcid !== null && node.mcid !== undefined) {
         const meta = document.createElement('span');
@@ -677,28 +679,34 @@ async function getPageMcidTextMap(pageNumber) {
   return map;
 }
 
-// Builds a page's mcid -> image-xobject rect(s) lookup (cached), by walking
-// the page's operator list and tracking the CTM through save/restore/
-// transform/form-xobject ops. This is the image-content counterpart to
-// getPageMcidTextMap(): image `Do` calls don't show up in getTextContent(),
-// so a Figure's placement has to be recovered from the raw operator list
-// instead - the image is painted into the unit square [0,1]x[0,1], which
-// the current CTM (accumulated the same way a PDF interpreter would) maps
-// into page space.
-async function getPageImageRects(pageNumber) {
-  if (state.mcidImageRectCache.has(pageNumber)) return state.mcidImageRectCache.get(pageNumber);
+// Builds a page's mcid -> image-xobject rect(s) lookup, and its set of
+// mcids painted via vector path operators (stroke/fill), in one pass over
+// the operator list (cached per page). This is the non-text-content
+// counterpart to getPageMcidTextMap(): image `Do` calls and path stroke/
+// fill ops don't show up in getTextContent(), so a Figure's placement (or a
+// vector-graphic leaf's mere presence) has to be recovered from the raw
+// operator list instead. Image rects come from mapping the unit square
+// [0,1]x[0,1] - where an image is painted - through the current CTM
+// (accumulated the same way a PDF interpreter would, via save/restore/
+// transform/form-xobject) into page space; vector content only needs a
+// presence flag, not a rect, since paths aren't currently highlighted.
+async function getPageMcidGraphicsInfo(pageNumber) {
+  if (state.mcidGraphicsCache.has(pageNumber)) return state.mcidGraphicsCache.get(pageNumber);
   const page = await state.pdfDoc.getPage(pageNumber);
   const viewport = page.getViewport({ scale: PAGE_SCALE });
   const { fnArray, argsArray } = await page.getOperatorList();
   const { OPS, Util } = pdfjsLib;
 
-  const map = new Map(); // mcid -> rect[]
+  const imageRects = new Map(); // mcid -> rect[]
+  const vectorMcids = new Set();
   const mcidStack = [];
   const ctmStack = [];
   let ctm = [1, 0, 0, 1, 0, 0];
 
+  const currentMcid = () => (mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null);
+
   const unitSquareRectForCurrentMcid = () => {
-    const mcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
+    const mcid = currentMcid();
     if (mcid === null) return;
     const corners = [[0, 0], [1, 0], [0, 1], [1, 1]]
       .map((p) => Util.applyTransform(p, ctm))
@@ -711,8 +719,8 @@ async function getPageImageRects(pageNumber) {
       width: Math.max(...xs) - Math.min(...xs),
       height: Math.max(...ys) - Math.min(...ys),
     };
-    const existing = map.get(mcid);
-    if (existing) existing.push(rect); else map.set(mcid, [rect]);
+    const existing = imageRects.get(mcid);
+    if (existing) existing.push(rect); else imageRects.set(mcid, [rect]);
   };
 
   for (let i = 0; i < fnArray.length; i++) {
@@ -750,13 +758,38 @@ async function getPageImageRects(pageNumber) {
       case OPS.paintImageMaskXObject:
         unitSquareRectForCurrentMcid();
         break;
+      // A path is built by constructPath and only actually painted by one
+      // of these - a clip-only path (W n with no stroke/fill) shouldn't
+      // count as visible vector content, so we key off the paint ops
+      // rather than constructPath itself.
+      case OPS.stroke:
+      case OPS.closeStroke:
+      case OPS.fill:
+      case OPS.eoFill:
+      case OPS.fillStroke:
+      case OPS.eoFillStroke:
+      case OPS.closeFillStroke:
+      case OPS.closeEOFillStroke: {
+        const mcid = currentMcid();
+        if (mcid !== null) vectorMcids.add(mcid);
+        break;
+      }
       default:
         break;
     }
   }
 
-  state.mcidImageRectCache.set(pageNumber, map);
-  return map;
+  const info = { imageRects, vectorMcids };
+  state.mcidGraphicsCache.set(pageNumber, info);
+  return info;
+}
+
+async function getPageImageRects(pageNumber) {
+  return (await getPageMcidGraphicsInfo(pageNumber)).imageRects;
+}
+
+async function getPageVectorMcids(pageNumber) {
+  return (await getPageMcidGraphicsInfo(pageNumber)).vectorMcids;
 }
 
 // Collects a tag's own content text (its content-leaf descendants' text,
@@ -787,8 +820,26 @@ async function loadContentText(page0, mcid, targetEl) {
     const map = await getPageMcidTextMap(pageNumber);
     if (!targetEl.isConnected) return;
     const text = map.get(mcid);
-    targetEl.textContent = text ? `“${text}”` : '';
-    targetEl.title = text || '';
+    if (text) {
+      targetEl.textContent = `“${text}”`;
+      targetEl.title = text;
+      return;
+    }
+    // No text run carries this mcid - the usual reason is that its content
+    // is an image `Do` call or a stroked/filled vector path instead
+    // (getTextContent() never reports those; see getPageMcidGraphicsInfo()).
+    // Fall back to a bracketed type label so the leaf isn't left blank, the
+    // same way an /OBJR leaf's objType is shown.
+    const { imageRects, vectorMcids } = await getPageMcidGraphicsInfo(pageNumber);
+    if (!targetEl.isConnected) return;
+    if (imageRects.has(mcid)) {
+      targetEl.textContent = '[Image]';
+    } else if (vectorMcids.has(mcid)) {
+      targetEl.textContent = '[Graphic]';
+    } else {
+      targetEl.textContent = '';
+    }
+    targetEl.title = '';
   } catch (err) {
     console.error('Could not load content text for mcid', mcid, err);
   }
@@ -1649,7 +1700,7 @@ async function loadPdfPreview(base64Data) {
   state.currentPage = 1;
   state.textContentCache.clear();
   state.mcidTextCache.clear();
-  state.mcidImageRectCache.clear();
+  state.mcidGraphicsCache.clear();
   el.viewerPlaceholder.hidden = true;
   await renderCurrentPage();
   updatePageNavUI();
