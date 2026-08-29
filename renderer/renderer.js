@@ -159,12 +159,18 @@ function renderTree() {
 
 // --- tag tree: filtering ---------------------------------------------------
 //
-// "Headings"/"Figures" swap the nested tree for a flat, document-order list
-// of just the matching tags (any heading level counts as a match, ignoring
-// how deep they're nested) - handy for skimming an outline or auditing alt
-// text without wading through containers. Since it's a flat list, drag
-// reordering doesn't apply here: filtered rows are plain, non-draggable, and
-// get no drop handlers, which is what disables moving tags while filtered.
+// "Headings" swaps the nested tree for a flat, document-order list of just
+// the matching tags (any heading level counts as a match, ignoring how deep
+// they're nested) - handy for skimming an outline without wading through
+// containers. Since it's a flat list, drag reordering doesn't apply here:
+// filtered rows are plain, non-draggable, and get no drop handlers, which is
+// what disables moving tags while filtered.
+// "Figures" instead keeps each matching Figure's real subtree intact - only
+// the path down to each figure is flattened/skipped, not its contents - so
+// alt text, captions, and other nested structure stay browsable with normal
+// collapse/expand (rendered via renderTreeNode, same as the unfiltered
+// tree). Figures nested inside another matched figure aren't listed again
+// at the top level; they just show up as part of their parent's subtree.
 // Up/down arrow navigation keeps working unchanged, since it just walks
 // whatever `.tree-row.selectable` rows are currently in the DOM.
 
@@ -176,14 +182,18 @@ function nodeMatchesFilter(node) {
   return true;
 }
 
-function collectFilteredNodes(node, matches) {
-  if (nodeMatchesFilter(node)) matches.push(node);
-  for (const child of node.children || []) collectFilteredNodes(child, matches);
+function collectFilteredNodes(node, matches, stopAtMatch) {
+  if (nodeMatchesFilter(node)) {
+    matches.push(node);
+    if (stopAtMatch) return;
+  }
+  for (const child of node.children || []) collectFilteredNodes(child, matches, stopAtMatch);
 }
 
 function renderFilteredTree() {
+  const nested = state.filter === 'figures';
   const matches = [];
-  collectFilteredNodes(state.tree, matches);
+  collectFilteredNodes(state.tree, matches, nested);
 
   if (matches.length === 0) {
     const p = document.createElement('p');
@@ -199,7 +209,7 @@ function renderFilteredTree() {
   ul.style.padding = '0';
   ul.style.margin = '0';
   for (const node of matches) {
-    ul.appendChild(renderFilteredRow(node));
+    ul.appendChild(nested ? renderTreeNode(node) : renderFilteredRow(node));
   }
   el.tagTree.appendChild(ul);
 }
@@ -1235,8 +1245,9 @@ window.addEventListener('keydown', (e) => {
 // its own parent - unless it's a content/object-ref leaf and there's an
 // adjacent tag at that same boundary, in which case it jumps straight into
 // that tag's content instead (see moveSelectedSibling()). Disabled while a
-// Headings/Figures filter is active, same as drag-and-drop - the flat
-// filtered list doesn't reflect sibling adjacency in the real tree.
+// Headings/Figures filter is active - the top-level filtered list (flat for
+// Headings, one entry per matched figure for Figures) doesn't reflect
+// sibling adjacency in the real tree.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
   if (!(e.ctrlKey || e.metaKey)) return;
