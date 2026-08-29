@@ -1141,7 +1141,9 @@ window.addEventListener('keydown', (e) => {
 
 // Up/Down arrows step the current selection through the tree in visible
 // order - i.e. the same order rows appear in the DOM, since a collapsed
-// element's children simply aren't rendered (see renderTreeNode).
+// element's children simply aren't rendered (see renderTreeNode). Holding
+// Shift extends the selection instead of replacing it, growing/shrinking
+// from the fixed anchor exactly like shift+click (see extendSelectionTo).
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
   if (e.ctrlKey || e.metaKey) return; // Ctrl/Cmd+Up/Down reorders instead - see below
@@ -1158,7 +1160,12 @@ window.addEventListener('keydown', (e) => {
   if (nextIndex < 0 || nextIndex >= rows.length) return;
 
   e.preventDefault();
-  selectNode(rows[nextIndex].dataset.nodeId);
+  if (e.shiftKey) {
+    if (!state.selectionAnchorId) state.selectionAnchorId = state.selectedNodeId;
+    extendSelectionTo(rows[nextIndex].dataset.nodeId);
+  } else {
+    selectNode(rows[nextIndex].dataset.nodeId);
+  }
 });
 
 // Ctrl/Cmd+Up/Down moves the selected tag one place earlier/later among its
