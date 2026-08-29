@@ -79,60 +79,62 @@
       <form id="details-form" class="details-form" hidden>
         <input type="hidden" id="field-node-id" />
 
-        <label class="field">
-          <span class="field-label">Role</span>
-          <input id="field-role" list="role-options" autocomplete="off" spellcheck="false" />
-          <datalist id="role-options">
-            <option value="Document"></option>
-            <option value="Part"></option>
-            <option value="Sect"></option>
-            <option value="Div"></option>
-            <option value="P"></option>
-            <option value="H1"></option>
-            <option value="H2"></option>
-            <option value="H3"></option>
-            <option value="H4"></option>
-            <option value="H5"></option>
-            <option value="H6"></option>
-            <option value="L"></option>
-            <option value="LI"></option>
-            <option value="Lbl"></option>
-            <option value="LBody"></option>
-            <option value="Table"></option>
-            <option value="THead"></option>
-            <option value="TBody"></option>
-            <option value="TFoot"></option>
-            <option value="TR"></option>
-            <option value="TH"></option>
-            <option value="TD"></option>
-            <option value="Caption"></option>
-            <option value="Figure"></option>
-            <option value="Formula"></option>
-            <option value="Link"></option>
-            <option value="Span"></option>
-            <option value="Quote"></option>
-            <option value="Note"></option>
-            <option value="TOC"></option>
-            <option value="TOCI"></option>
-          </datalist>
-        </label>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Role</span>
+            <input id="field-role" list="role-options" autocomplete="off" spellcheck="false" />
+            <datalist id="role-options">
+              <option value="Document"></option>
+              <option value="Part"></option>
+              <option value="Sect"></option>
+              <option value="Div"></option>
+              <option value="P"></option>
+              <option value="H1"></option>
+              <option value="H2"></option>
+              <option value="H3"></option>
+              <option value="H4"></option>
+              <option value="H5"></option>
+              <option value="H6"></option>
+              <option value="L"></option>
+              <option value="LI"></option>
+              <option value="Lbl"></option>
+              <option value="LBody"></option>
+              <option value="Table"></option>
+              <option value="THead"></option>
+              <option value="TBody"></option>
+              <option value="TFoot"></option>
+              <option value="TR"></option>
+              <option value="TH"></option>
+              <option value="TD"></option>
+              <option value="Caption"></option>
+              <option value="Figure"></option>
+              <option value="Formula"></option>
+              <option value="Link"></option>
+              <option value="Span"></option>
+              <option value="Quote"></option>
+              <option value="Note"></option>
+              <option value="TOC"></option>
+              <option value="TOCI"></option>
+            </datalist>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Language</span>
+            <input id="field-lang" placeholder="e.g. en-US" autocomplete="off" spellcheck="false" />
+          </label>
+        </div>
 
         <label class="field">
           <span class="field-label">Alt text</span>
           <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>
         </label>
 
-        <label class="field">
+        <label class="field field-grow">
           <span class="field-label-row">
             <span class="field-label">Actual text</span>
             <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
           </span>
-          <textarea id="field-actual-text" rows="2" placeholder="Replacement text read instead of the visible content"></textarea>
-        </label>
-
-        <label class="field">
-          <span class="field-label">Language</span>
-          <input id="field-lang" placeholder="e.g. en-US" autocomplete="off" spellcheck="false" />
+          <textarea id="field-actual-text" placeholder="Replacement text read instead of the visible content"></textarea>
         </label>
 
         <div class="field-actions">

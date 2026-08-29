@@ -79,6 +79,7 @@ button {
 /* --- toolbar --- */
 
 .toolbar {
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -165,6 +166,7 @@ button {
 /* --- banner --- */
 
 .banner {
+  grid-row: 2;
   padding: 8px 16px;
   font-size: 12.5px;
   border-bottom: 1px solid var(--border);
@@ -179,6 +181,7 @@ button {
 /* --- workbench layout --- */
 
 .workbench {
+  grid-row: 3;
   display: grid;
   grid-template-columns: minmax(360px, 1.6fr) minmax(280px, 1fr) 300px;
   min-height: 0;
@@ -443,6 +446,8 @@ button {
 }
 
 .details-form {
+  flex: 1;
+  min-height: 0;
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -454,6 +459,27 @@ button {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.field-grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.field-grow textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.field-row .field {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .field-label {
@@ -528,6 +554,7 @@ button {
 /* --- status bar --- */
 
 .statusbar {
+  grid-row: 4;
   padding: 5px 16px;
   font-size: 11.5px;
   color: var(--text-faint);
