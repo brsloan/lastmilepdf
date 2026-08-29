@@ -1965,6 +1965,7 @@ el.btnKillDivs.addEventListener('click', async () => {
 
 el.btnSmartifact.addEventListener('click', async () => {
   if (!state.docId || !state.pdfDoc) return;
+  document.body.classList.add('busy');
   try {
     setStatus('Scanning for full-page images…');
     const ids = await findFullPageImageLeafIds();
@@ -1979,6 +1980,8 @@ el.btnSmartifact.addEventListener('click', async () => {
     setStatus(`Artifacted ${ids.length} full-page image${ids.length === 1 ? '' : 's'}.`);
   } catch (err) {
     reportError('Could not smartify', err);
+  } finally {
+    document.body.classList.remove('busy');
   }
 });
 

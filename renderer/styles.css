@@ -63,6 +63,11 @@ button {
   font-family: inherit;
 }
 
+body.busy,
+body.busy * {
+  cursor: wait !important;
+}
+
 /* --- focus visibility (this app is *about* accessibility - it should walk the walk) --- */
 :focus-visible {
   outline: 2px solid var(--accent-strong);
