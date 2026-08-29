@@ -47,6 +47,7 @@ const el = {
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
   btnKillDivs: document.getElementById('btn-kill-divs'),
+  btnSmartifact: document.getElementById('btn-smartifact'),
   tagFilter: document.getElementById('tag-filter'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
@@ -800,6 +801,60 @@ async function getPageImageRects(pageNumber) {
 
 async function getPageVectorMcids(pageNumber) {
   return (await getPageMcidGraphicsInfo(pageNumber)).vectorMcids;
+}
+
+// A content leaf's image rect must cover at least this fraction of the
+// page's own width/height (independently, not just by area) to count as
+// "the same size as the page" - auto-tagged full-page scans are typically
+// placed with a few points of margin rather than flush to the MediaBox
+// edges (e.g. one real sample: a 499x645 scan on a 514x657 page, ~97%
+// coverage per side), while an intentionally-sized figure sharing the page
+// with other content falls well short of this on at least one axis.
+const FULL_PAGE_LEAF_COVERAGE = 0.9;
+
+// Finds content leaves (bare-MCID leaves whose content is an image `Do`
+// call - see getPageMcidGraphicsInfo()) whose painted rect is essentially
+// the full page. These are almost always a full-page scan background that
+// auto-tagging wrapped in a Figure alongside the real (searchable) text
+// layer - the image itself carries no accessible information a screen
+// reader can use, so it belongs artifacted, not left in a Figure tag. Does
+// not cover /OBJR image leaves (annotation-style object references): they
+// aren't wrapped in marked content, so recovering their placement would
+// mean matching pdf.js's parsed resources back to the specific pikepdf
+// object identity behind /Obj, which isn't currently feasible from here -
+// and in practice this full-page-background pattern shows up as bare MCID
+// leaves, not OBJR ones.
+async function findFullPageImageLeafIds() {
+  if (!state.pdfDoc) return [];
+
+  const leavesByPage = new Map(); // page (0-based) -> [{nodeId, mcid}]
+  for (const [nodeId, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'content' || node.mcid === null || node.mcid === undefined) continue;
+    if (node.page === null || node.page === undefined) continue;
+    const list = leavesByPage.get(node.page);
+    if (list) list.push({ nodeId, mcid: node.mcid });
+    else leavesByPage.set(node.page, [{ nodeId, mcid: node.mcid }]);
+  }
+
+  const matches = [];
+  for (const [page0, leaves] of leavesByPage) {
+    const pageNumber = page0 + 1;
+    if (pageNumber < 1 || pageNumber > state.pageCount) continue;
+    const page = await state.pdfDoc.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: PAGE_SCALE });
+    const { imageRects } = await getPageMcidGraphicsInfo(pageNumber);
+    const minWidth = viewport.width * FULL_PAGE_LEAF_COVERAGE;
+    const minHeight = viewport.height * FULL_PAGE_LEAF_COVERAGE;
+    for (const { nodeId, mcid } of leaves) {
+      const rects = imageRects.get(mcid);
+      if (!rects) continue;
+      if (rects.some((r) => r.width >= minWidth && r.height >= minHeight)) {
+        matches.push(nodeId);
+      }
+    }
+  }
+  return matches;
 }
 
 // Collects a tag's own content text (its content-leaf descendants' text,
@@ -1770,6 +1825,7 @@ async function performOpen() {
     state.savedFilePath = opened.filePath; // Save overwrites the file it was opened from until Save As picks a new one
     el.fileName.textContent = state.fileName;
     el.btnKillDivs.disabled = !opened.hasStructTree;
+    el.btnSmartifact.disabled = !opened.hasStructTree;
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     applyFreshTree(opened.tree || null);
@@ -1834,6 +1890,25 @@ el.btnKillDivs.addEventListener('click', async () => {
     setStatus(result.removed > 0 ? `Removed ${result.removed} Div tag${result.removed === 1 ? '' : 's'}.` : 'No Div tags found.');
   } catch (err) {
     reportError('Could not remove Div tags', err);
+  }
+});
+
+el.btnSmartifact.addEventListener('click', async () => {
+  if (!state.docId || !state.pdfDoc) return;
+  try {
+    setStatus('Scanning for full-page images…');
+    const ids = await findFullPageImageLeafIds();
+    if (ids.length === 0) {
+      setStatus('No full-page image leaves found.');
+      return;
+    }
+    const result = await window.api.deleteNodes(state.docId, ids);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    closeDetails();
+    setStatus(`Artifacted ${ids.length} full-page image${ids.length === 1 ? '' : 's'}.`);
+  } catch (err) {
+    reportError('Could not smartify', err);
   }
 });
 
