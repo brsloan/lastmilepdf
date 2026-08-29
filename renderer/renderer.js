@@ -42,6 +42,7 @@ const state = {
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
+  tablePreviewTableEl: null,   // most recently built <table> (see renderTablePreview()), reused by the Expand dialog
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
@@ -83,6 +84,10 @@ const el = {
   fieldActualTextWrap: document.getElementById('field-actual-text-wrap'),
   tablePreviewWrap: document.getElementById('field-table-preview'),
   tablePreviewContainer: document.getElementById('table-preview-container'),
+  btnExpandTablePreview: document.getElementById('btn-expand-table-preview'),
+  tablePreviewDialog: document.getElementById('table-preview-dialog'),
+  tablePreviewDialogContainer: document.getElementById('table-preview-dialog-container'),
+  btnCloseTablePreview: document.getElementById('btn-close-table-preview'),
   fieldLang: document.getElementById('field-lang'),
   thSection: document.getElementById('field-th-section'),
   fieldScope: document.getElementById('field-scope'),
@@ -731,6 +736,8 @@ function closeDetails() {
   el.fieldActualTextWrap.hidden = false;
   el.tablePreviewWrap.hidden = true;
   state.tablePreviewToken += 1; // invalidate any table-preview build still in flight
+  state.tablePreviewTableEl = null;
+  el.btnExpandTablePreview.disabled = true;
   el.tablePreviewContainer.innerHTML = '';
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
@@ -1083,8 +1090,10 @@ const SCOPE_ICONS = {
 
 async function renderTablePreview(tableNode) {
   const token = ++state.tablePreviewToken;
+  el.btnExpandTablePreview.disabled = true;
 
   if (!state.pdfDoc) {
+    state.tablePreviewTableEl = null;
     el.tablePreviewContainer.innerHTML = '';
     const p = document.createElement('p');
     p.className = 'table-preview-empty';
@@ -1096,6 +1105,7 @@ async function renderTablePreview(tableNode) {
   const rows = collectTableRows(tableNode);
 
   if (rows.length === 0) {
+    state.tablePreviewTableEl = null;
     el.tablePreviewContainer.innerHTML = '';
     const p = document.createElement('p');
     p.className = 'table-preview-empty';
@@ -1134,8 +1144,10 @@ async function renderTablePreview(tableNode) {
   }
 
   if (token !== state.tablePreviewToken) return;
+  state.tablePreviewTableEl = table;
   el.tablePreviewContainer.innerHTML = '';
   el.tablePreviewContainer.appendChild(table);
+  el.btnExpandTablePreview.disabled = false;
 }
 
 // Fills in a content leaf's text preview once pdf.js has parsed its page.
@@ -1564,6 +1576,17 @@ window.api.onMenuRedo(() => performRedo());
 // is handled via the click listener below (clicking the dialog element
 // itself only happens on the backdrop, since the visible content is inside
 // a child that would catch the click first).
+el.btnExpandTablePreview.addEventListener('click', () => {
+  if (!state.tablePreviewTableEl) return;
+  el.tablePreviewDialogContainer.innerHTML = '';
+  el.tablePreviewDialogContainer.appendChild(state.tablePreviewTableEl.cloneNode(true));
+  el.tablePreviewDialog.showModal();
+});
+el.btnCloseTablePreview.addEventListener('click', () => el.tablePreviewDialog.close());
+el.tablePreviewDialog.addEventListener('click', (e) => {
+  if (e.target === el.tablePreviewDialog) el.tablePreviewDialog.close();
+});
+
 window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());
 el.btnCloseShortcuts.addEventListener('click', () => el.shortcutsDialog.close());
 el.shortcutsDialog.addEventListener('click', (e) => {

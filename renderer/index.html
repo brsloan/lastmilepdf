@@ -163,7 +163,10 @@
         </label>
 
         <div class="field field-grow" id="field-table-preview" hidden>
-          <span class="field-label">Table preview</span>
+          <span class="field-label-row">
+            <span class="field-label">Table preview</span>
+            <button type="button" id="btn-expand-table-preview" class="field-label-btn" title="Open the generated table in a larger window">Expand</button>
+          </span>
           <div id="table-preview-container" class="table-preview"></div>
         </div>
 
@@ -177,6 +180,14 @@
   </main>
 
   <footer class="statusbar" id="status-bar">Ready.</footer>
+
+  <dialog id="table-preview-dialog" class="table-preview-dialog">
+    <div class="shortcuts-header">
+      <h2>Table Preview</h2>
+      <button type="button" id="btn-close-table-preview" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <div id="table-preview-dialog-container" class="table-preview-dialog-body"></div>
+  </dialog>
 
   <dialog id="shortcuts-dialog" class="shortcuts-dialog">
     <div class="shortcuts-header">

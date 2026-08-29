@@ -688,6 +688,44 @@ body.busy * {
   border-top: 1px solid var(--border);
 }
 
+/* --- table preview dialog --- */
+/* Reuses .shortcuts-header for its title bar; everything else is sized up
+   for viewing a table rather than a two-column shortcuts list - see the
+   `.shortcuts-dialog[open]` comment below for why `display` is qualified
+   on `[open]` and why overflow is handled on the inner body, not the
+   dialog itself. */
+
+.table-preview-dialog {
+  width: min(1100px, 94vw);
+  height: min(800px, 90vh);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.table-preview-dialog[open] {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-preview-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.table-preview-dialog-body {
+  padding: 16px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.table-preview-dialog-body .generated-table {
+  font-size: 14px;
+}
+
 /* --- shortcuts dialog --- */
 
 .shortcuts-dialog {
