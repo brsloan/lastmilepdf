@@ -1,13 +1,8 @@
-# LastMilePDF (scaffold)
+# LastMilePDF
 
 A standalone Electron app for viewing a PDF and editing its accessibility
 structure tree (the tag tree behind PDF/UA compliance). Vanilla JavaScript,
 no framework, no bundler, no TypeScript.
-
-This is a **starting scaffold**, not a finished tool - it demonstrates the
-architecture end-to-end (open a tagged PDF, see the tree, edit roles/alt
-text/language, drag-reorder, save) but leaves several things for you to
-harden. See **Known limitations** below before relying on it.
 
 ## Architecture
 
@@ -87,14 +82,6 @@ Things this scaffold deliberately does not solve yet:
   page its containing StructElem resolves to - so reparenting one onto a
   tag on a different page is refused rather than silently mislabeling
   which page it points at. Same-page reordering/reparenting is supported.
-- **Drop = append as last child.** There's no drop-position indicator for
-  inserting a node between two specific siblings; dropping onto a node
-  always appends to the end of its children. Worth adding before this is
-  a real editing tool.
-- **Page highlight/click-to-select is text-only.** Both directions of the
-  PDF.js <-> tag tree link work off `getTextContent()`, so a Figure/Formula
-  tag's marked content (normally an image `Do` call) won't highlight, and
-  clicking on an image in the preview won't select its tag.
 - **`RoleMap` / `ParentTree` / `ClassMap` are ignored.** Custom
   (non-standard) role names round-trip as opaque strings; nothing here
   resolves them against a document's `RoleMap`.
