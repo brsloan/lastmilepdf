@@ -52,6 +52,8 @@ const state = {
   walking: false,               // true while the Walk button's auto-advance is running
   walkTimerId: null,
   walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
+  figureDrawActive: false,      // true while the Add Figure button's rubber-band draw mode is armed
+  figureDrawRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -67,6 +69,7 @@ const el = {
   btnKillDivs: document.getElementById('btn-kill-divs'),
   btnScopeTables: document.getElementById('btn-scope-tables'),
   btnSmartifact: document.getElementById('btn-smartifact'),
+  btnAddFigure: document.getElementById('btn-add-figure'),
   btnWalk: document.getElementById('btn-walk'),
   tagFilter: document.getElementById('tag-filter'),
   fileName: document.getElementById('file-name'),
@@ -80,6 +83,7 @@ const el = {
   pageIndicator: document.getElementById('page-indicator'),
   tagTree: document.getElementById('tag-tree'),
   highlightLayer: document.getElementById('highlight-layer'),
+  drawOverlay: document.getElementById('draw-overlay'),
   detailsEmpty: document.getElementById('details-empty'),
   detailsForm: document.getElementById('details-form'),
   fieldNodeId: document.getElementById('field-node-id'),
@@ -1109,6 +1113,27 @@ function collectTargetMcids(nodeId) {
   return targets;
 }
 
+// A tag has no marked content at all when it was created by the "Add
+// Figure" draw tool over a region with no isolable image object (see
+// figure_from_rect()'s "bbox" strategy in tag_worker.py) - it carries a
+// /Layout /BBox attribute instead of any /K. collectTargetMcids() finds
+// nothing for it, so highlightNodeOnPage() needs this parallel walk to
+// still know where the tag is - mirrors collectTargetMcids' shape
+// ({page, ...}, page 0-based) but keyed on a page-space rect instead of an
+// mcid to look up in the text/graphics layers.
+function collectTargetBBoxes(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry) return [];
+  const targets = [];
+  (function visit(node) {
+    if (node.type === 'element' && Array.isArray(node.bbox) && node.page !== null && node.page !== undefined) {
+      targets.push({ bbox: node.bbox, page: node.page });
+    }
+    for (const child of node.children || []) visit(child);
+  })(entry.node);
+  return targets;
+}
+
 async function getPageTextContent(pageNumber) {
   if (state.textContentCache.has(pageNumber)) return state.textContentCache.get(pageNumber);
   const page = await state.pdfDoc.getPage(pageNumber);
@@ -1572,6 +1597,23 @@ function itemRectInViewport(item, viewport) {
   };
 }
 
+// Same corners-through-viewport-transform approach as itemRectInViewport()
+// above, for a plain page-space [x0, y0, x1, y1] rect (a tag's /Layout
+// /BBox) rather than a text item's glyph box.
+function bboxRectInViewport(bbox, viewport) {
+  const [x0, y0, x1, y1] = bbox;
+  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    .map((p) => pdfjsLib.Util.applyTransform(p, viewport.transform));
+  const xs = corners.map((c) => c[0]);
+  const ys = corners.map((c) => c[1]);
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+  };
+}
+
 function computeHighlightRects(textContent, viewport, mcidSet) {
   const rects = [];
   const activeStack = []; // bool per open marked-content span: is it (or an ancestor) a target?
@@ -1645,7 +1687,12 @@ async function findNodeAtPoint(x, y) {
 }
 
 el.canvas.addEventListener('click', async (e) => {
-  if (!state.pdfDoc) return;
+  // A completed rubber-band drag still fires a native 'click' on mouseup
+  // (mousedown and mouseup landed on the same element) - while Add Figure's
+  // draw mode is active, that click means "finished drawing", not "select
+  // the tag under the cursor", so it's handled entirely by the mouseup
+  // listener below instead.
+  if (!state.pdfDoc || state.figureDrawActive) return;
   const rect = el.canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) * (el.canvas.width / rect.width);
   const y = (e.clientY - rect.top) * (el.canvas.height / rect.height);
@@ -1671,10 +1718,12 @@ function unionRects(rects) {
 }
 
 function syncHighlightLayerBounds() {
-  el.highlightLayer.style.left = `${el.canvas.offsetLeft}px`;
-  el.highlightLayer.style.top = `${el.canvas.offsetTop}px`;
-  el.highlightLayer.style.width = `${el.canvas.clientWidth}px`;
-  el.highlightLayer.style.height = `${el.canvas.clientHeight}px`;
+  for (const layer of [el.highlightLayer, el.drawOverlay]) {
+    layer.style.left = `${el.canvas.offsetLeft}px`;
+    layer.style.top = `${el.canvas.offsetTop}px`;
+    layer.style.width = `${el.canvas.clientWidth}px`;
+    layer.style.height = `${el.canvas.clientHeight}px`;
+  }
 }
 
 function renderHighlightRects(boxes, viewport) {
@@ -1744,8 +1793,9 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     : [nodeId];
 
   const targetsByNode = new Map(selectedIds.map((id) => [id, collectTargetMcids(id)]));
-  const activeTargets = targetsByNode.get(nodeId) || [];
-  const allTargets = Array.from(targetsByNode.values()).flat();
+  const bboxTargetsByNode = new Map(selectedIds.map((id) => [id, collectTargetBBoxes(id)]));
+  const activeTargets = [...(targetsByNode.get(nodeId) || []), ...(bboxTargetsByNode.get(nodeId) || [])];
+  const allTargets = [...Array.from(targetsByNode.values()).flat(), ...Array.from(bboxTargetsByNode.values()).flat()];
   if (allTargets.length === 0) {
     clearHighlight();
     return;
@@ -1772,12 +1822,14 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     for (const id of selectedIds) {
       const targets = targetsByNode.get(id) || [];
       const mcidSet = new Set(targets.filter((t) => t.page + 1 === state.currentPage).map((t) => t.mcid));
-      if (mcidSet.size === 0) continue;
-      const rects = computeHighlightRects(textContent, viewport, mcidSet);
+      const rects = mcidSet.size > 0 ? computeHighlightRects(textContent, viewport, mcidSet) : [];
       for (const mcid of mcidSet) {
         const graphicRects = graphicRectMap.get(mcid);
         if (graphicRects) rects.push(...graphicRects);
       }
+      const bboxTargets = (bboxTargetsByNode.get(id) || []).filter((t) => t.page + 1 === state.currentPage);
+      for (const t of bboxTargets) rects.push(bboxRectInViewport(t.bbox, viewport));
+      if (rects.length === 0) continue;
       const rect = unionRects(rects);
       const role = state.nodesById.get(id)?.node.role;
       if (rect) boxes.push({ rect, active: id === nodeId, isFigure: categoryForRole(role) === 'figure' });
@@ -2589,6 +2641,7 @@ async function performOpen() {
     el.btnKillDivs.disabled = !opened.hasStructTree;
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
+    el.btnAddFigure.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
     stopWalking();
 
@@ -2695,6 +2748,128 @@ el.btnSmartifact.addEventListener('click', async () => {
     document.body.classList.remove('busy');
   }
 });
+
+// --- Add Figure: drag a rectangle on the page preview to tag a figure the
+// autotagger missed (backed by figure_from_rect() in tag_worker.py) ------
+//
+// A toggleable draw mode, mirroring Walk's state.walking/button-label
+// pattern below. While active, dragging on the canvas shows a live
+// rubber-band rectangle; releasing sends its PDF-space bounds to the
+// backend, which decides for itself whether a distinct image XObject sits
+// under it (tagged directly via /OBJR) or not (falls back to a /BBox-only
+// Figure - see figure_from_rect's module comment in tag_worker.py for why).
+// The new tag is selected and its Alt text field focused immediately, same
+// as any other freshly created tag needs its Alt text filled in by hand.
+// Stays active after each rectangle rather than a one-shot toggle, since
+// tagging missed figures across a scanned document is usually a batch job.
+
+function setFigureDrawActive(active) {
+  state.figureDrawActive = active;
+  el.btnAddFigure.classList.toggle('btn-figure-draw-active', active);
+  el.btnAddFigure.textContent = active ? 'Cancel Add Figure' : 'Add Figure';
+  el.canvas.classList.toggle('figure-draw-mode', active);
+  if (!active) {
+    state.figureDrawRect = null;
+    el.drawOverlay.innerHTML = '';
+  }
+}
+
+function canvasPointFromEvent(e) {
+  const rect = el.canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (el.canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (el.canvas.height / rect.height),
+  };
+}
+
+function renderFigureDrawRect(viewportWidth, viewportHeight) {
+  el.drawOverlay.innerHTML = '';
+  if (!state.figureDrawRect) return;
+  const { start, current } = state.figureDrawRect;
+  const x = Math.min(start.x, current.x);
+  const y = Math.min(start.y, current.y);
+  const width = Math.abs(current.x - start.x);
+  const height = Math.abs(current.y - start.y);
+  const box = document.createElement('div');
+  box.className = 'draw-box';
+  // Same percentage-of-viewport placement as renderHighlightRects(), so the
+  // box stays aligned even though the canvas is scaled down by CSS.
+  box.style.left = `${(100 * x / viewportWidth).toFixed(3)}%`;
+  box.style.top = `${(100 * y / viewportHeight).toFixed(3)}%`;
+  box.style.width = `${(100 * width / viewportWidth).toFixed(3)}%`;
+  box.style.height = `${(100 * height / viewportHeight).toFixed(3)}%`;
+  el.drawOverlay.appendChild(box);
+}
+
+// A drag shorter than this (in canvas pixels) is treated as an accidental
+// click/jitter rather than a deliberate rectangle.
+const MIN_FIGURE_DRAW_PX = 6;
+
+el.canvas.addEventListener('mousedown', (e) => {
+  if (!state.figureDrawActive || !state.pdfDoc) return;
+  e.preventDefault(); // avoid native text/image drag-selection while dragging
+  const p = canvasPointFromEvent(e);
+  state.figureDrawRect = { start: p, current: p };
+  syncHighlightLayerBounds();
+});
+
+// mousemove/mouseup listen on window rather than the canvas so a drag that
+// briefly leaves the canvas bounds (fast mouse movement) still tracks and
+// completes normally, matching typical rubber-band-select behavior.
+window.addEventListener('mousemove', async (e) => {
+  if (!state.figureDrawRect) return;
+  state.figureDrawRect.current = canvasPointFromEvent(e);
+  const { viewport } = await getPageTextContent(state.currentPage);
+  renderFigureDrawRect(viewport.width, viewport.height);
+});
+
+window.addEventListener('mouseup', async () => {
+  if (!state.figureDrawRect) return;
+  const { start, current } = state.figureDrawRect;
+  state.figureDrawRect = null;
+  el.drawOverlay.innerHTML = '';
+
+  const width = Math.abs(current.x - start.x);
+  const height = Math.abs(current.y - start.y);
+  if (width < MIN_FIGURE_DRAW_PX || height < MIN_FIGURE_DRAW_PX) return;
+
+  try {
+    const { viewport } = await getPageTextContent(state.currentPage);
+    const [px0, py0] = viewport.convertToPdfPoint(start.x, start.y);
+    const [px1, py1] = viewport.convertToPdfPoint(current.x, current.y);
+    const rect = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
+
+    setStatus('Tagging figure…');
+    const result = await window.api.figureFromRect(state.docId, state.currentPage - 1, rect);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (result.newNodeId && state.nodesById.has(result.newNodeId)) {
+      selectNode(result.newNodeId);
+      el.fieldAlt.focus();
+    }
+    setStatus(result.method === 'object'
+      ? 'Tagged figure from its image object - add Alt text below.'
+      : 'Tagged figure region (no separate image object under it, so it got a bounding box instead) - add Alt text below.');
+  } catch (err) {
+    reportError('Could not tag figure', err);
+  }
+});
+
+el.btnAddFigure.addEventListener('click', () => {
+  if (!state.docId) return;
+  setFigureDrawActive(!state.figureDrawActive);
+  if (state.figureDrawActive) setStatus('Drag a rectangle around the figure to tag it (Esc to cancel).');
+});
+
+// Escape exits draw mode without tagging anything - captured ahead of any
+// other keydown handling, same as Walk's speed/stop listener below.
+window.addEventListener('keydown', (e) => {
+  if (!state.figureDrawActive || e.key !== 'Escape') return;
+  e.preventDefault();
+  setFigureDrawActive(false);
+  setStatus('Add Figure cancelled.');
+}, true);
 
 // --- Walk: auto-advance the tag selection --------------------------------
 //

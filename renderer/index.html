@@ -26,6 +26,7 @@
       <button id="btn-kill-divs" class="btn btn-ghost" disabled title="Remove all Div tags, keeping their contents">Kill Divs</button>
       <button id="btn-scope-tables" class="btn btn-ghost" disabled title="Set Row/Column/Both scope on every table's TH cells based on its header shape">Scope Tables</button>
       <button id="btn-smartifact" class="btn btn-ghost" disabled title="Artifact image leaves that are the same size as their page (e.g. full-page scan backgrounds)">Smartifact</button>
+      <button id="btn-add-figure" class="btn btn-ghost" disabled title="Drag a rectangle on the page to tag a missed figure (Esc to cancel)">Add Figure</button>
       <button id="btn-walk" class="btn btn-ghost" disabled title="Walk the tag tree, selecting one tag at a time (+/- to change speed, any other key to stop)">Walk</button>
     </div>
 
@@ -54,6 +55,7 @@
       <div class="canvas-wrap">
         <canvas id="pdf-canvas"></canvas>
         <div id="highlight-layer" class="highlight-layer" aria-hidden="true"></div>
+        <div id="draw-overlay" class="highlight-layer" aria-hidden="true"></div>
         <div id="viewer-placeholder" class="viewer-placeholder">Open a PDF to preview it here.</div>
       </div>
     </section>
@@ -255,6 +257,15 @@
           <div class="shortcut-row"><dt><kbd>R</kbd></dt><dd>Group selection into a Table Row (TH kept, others become TD)</dd></div>
           <div class="shortcut-row"><dt><kbd>D</kbd></dt><dd>Set role to Table Cell (TD)</dd></div>
           <div class="shortcut-row"><dt><kbd>H</kbd></dt><dd>Set role to Table Header Cell (TH)</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
+        <h3>Add Figure</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Add Figure</kbd> button</dt><dd>Toggle draw mode</dd></div>
+          <div class="shortcut-row"><dt><kbd>Drag</kbd></dt><dd>Tag the dragged rectangle as a new Figure</dd></div>
+          <div class="shortcut-row"><dt><kbd>Esc</kbd></dt><dd>Exit draw mode</dd></div>
         </dl>
       </section>
 

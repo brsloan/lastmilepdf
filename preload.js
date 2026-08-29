@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   scopeTables: (docId) => ipcRenderer.invoke('tags:scope-tables', { docId }),
   deleteNodes: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:delete-nodes', { docId, nodeIds }),
+  figureFromRect: (docId, pageIndex, rect) =>
+    ipcRenderer.invoke('tags:figure-from-rect', { docId, pageIndex, rect }),
   setRoleOrWrap: (docId, nodeIds, role) =>
     ipcRenderer.invoke('tags:set-role-or-wrap', { docId, nodeIds, role }),
   convertToParagraph: (docId, nodeIds) =>

@@ -33,8 +33,15 @@ Scope / known limitations (read this before extending):
     so the renderer can't ever hold a stale id that silently points at the
     wrong node after an edit.
   - RoleMap, ParentTree, and ClassMap (optional StructTreeRoot extras) are
-    not read or written. Custom (non-standard) role names will round-trip
-    as opaque strings, but nothing here resolves them against a RoleMap.
+    not read or written, with one exception: figure_from_rect() both reads
+    and writes /ParentTree, since tagging an image via /OBJR requires a
+    ParentTree entry the same way a page's /StructParents array does for
+    bare MCIDs. See that section for the /Kids (multi-level number tree)
+    limitation this comes with.
+  - Every command here mutates the struct tree only - except
+    figure_from_rect(), which also *reads* (never writes) a page's content
+    stream, to recover where image XObjects are actually placed. See its
+    section for why and how.
   - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
     bytes) before each mutation, rather than recording inverse edits. Simple
     and correct by construction, at the cost of an O(document size) copy per
@@ -129,6 +136,33 @@ def _find_table_attr_obj(struct_obj):
     for item in candidates:
         if isinstance(item, pikepdf.Dictionary) and str(item.get("/O", "")).lstrip("/") == "Table":
             return item
+    return None
+
+
+def _find_layout_bbox(struct_obj):
+    """The /BBox off `struct_obj`'s /Layout-owned attribute entry (PDF
+    32000-1 14.8.5.4.3), as a 4-float [x0, y0, x1, y1] in the page's default
+    user space, or None if there isn't one. Only figure_from_rect()'s "bbox"
+    strategy writes this today (a Figure with no isolable marked content -
+    see its section), but any /Layout /BBox round-trips here the same way,
+    same /A-may-be-a-single-dict-or-an-array handling as
+    _find_table_attr_obj."""
+    a = struct_obj.get("/A")
+    if isinstance(a, pikepdf.Dictionary):
+        candidates = [a]
+    elif isinstance(a, pikepdf.Array):
+        candidates = list(a)
+    else:
+        return None
+    for item in candidates:
+        if not isinstance(item, pikepdf.Dictionary):
+            continue
+        if str(item.get("/O", "")).lstrip("/") != "Layout" or "/BBox" not in item:
+            continue
+        try:
+            return [float(v) for v in item["/BBox"]]
+        except (TypeError, ValueError):
+            return None
     return None
 
 
@@ -699,7 +733,12 @@ def _resolve_objref_subtype(kid):
         target = kid.get("/Obj")
     except Exception:
         return None
-    if not isinstance(target, pikepdf.Dictionary) or "/Subtype" not in target:
+    # An Image XObject is a stream (pixel data plus a dict of keys), not a
+    # plain Dictionary - pikepdf.Stream isn't a subclass of pikepdf.
+    # Dictionary, so it needs checking here too, or every /OBJR pointing at
+    # an image (including ones figure_from_rect() creates) resolves to no
+    # subtype at all.
+    if not isinstance(target, (pikepdf.Dictionary, pikepdf.Stream)) or "/Subtype" not in target:
         return None
     try:
         subtype = str(target["/Subtype"])
@@ -753,6 +792,7 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
         "scope": table_attrs["scope"],
         "colSpan": table_attrs["colSpan"],
         "rowSpan": table_attrs["rowSpan"],
+        "bbox": _find_layout_bbox(struct_obj),
         "page": own_page,
         "children": [],
     }
@@ -1463,6 +1503,294 @@ def delete_nodes(doc_id, node_ids):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+# --- figure-from-rectangle tagging ----------------------------------------
+#
+# Backs the "Add Figure" draw tool: the renderer lets the user drag a
+# rectangle over the PDF preview (in PDF page-space, already converted from
+# canvas pixels via pdf.js's viewport.convertToPdfPoint() - see renderer.js),
+# and this turns that rectangle into a new /Figure struct element. This is
+# the one command in this file that reads a page's content stream - but only
+# ever reads it, to recover where each image XObject is actually placed
+# (pikepdf/qpdf exposes no ready-made "what's under this rectangle" query).
+# It never adds or rewrites marked-content (BDC/EMC) operators.
+#
+# Two outcomes, chosen automatically per rectangle - the caller doesn't pick:
+#   - "object": the rectangle matches a distinct image XObject reasonably
+#     tightly. Tag it directly via an /OBJR object reference - no
+#     content-stream edit needed at all, since /OBJR exists precisely for
+#     referencing an object that was never wrapped in BDC/EMC marked content
+#     (the same mechanism annotations use).
+#   - "bbox": no distinct image matches closely enough - most commonly
+#     because the whole page is one big scanned background image, which a
+#     rectangle drawn over any one figure on it will also overlap, just at
+#     far lower coverage than a real match (see FULL_PAGE_IMAGE_COVERAGE).
+#     The Figure gets a /BBox layout attribute and no /K instead. This is
+#     the same fallback Acrobat itself uses when you manually draw a figure
+#     region with nothing distinct underneath: the Alt text still reads out
+#     in tree order, it's just not tied to any specific marked content.
+
+def _mat_mult(m1, m2):
+    """Composes two PDF transformation matrices as `m1` applied first, `m2`
+    second - i.e. a point transforms as `point * m1 * m2`. This is the order
+    a content stream's `cm` operator combines with the CTM already in
+    effect: the new matrix describes the *inner* (most recently established)
+    coordinate system."""
+    a1, b1, c1, d1, e1, f1 = m1
+    a2, b2, c2, d2, e2, f2 = m2
+    return (
+        a1 * a2 + b1 * c2,
+        a1 * b2 + b1 * d2,
+        c1 * a2 + d1 * c2,
+        c1 * b2 + d1 * d2,
+        e1 * a2 + f1 * c2 + e2,
+        e1 * b2 + f1 * d2 + f2,
+    )
+
+
+def _mat_apply(point, m):
+    x, y = point
+    a, b, c, d, e, f = m
+    return (a * x + c * y + e, b * x + d * y + f)
+
+
+def _rect_area(r):
+    x0, y0, x1, y1 = r
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _rect_intersection_area(a, b):
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+    return _rect_area((x0, y0, x1, y1))
+
+
+def _resolve_inherited(page_obj, key, default=None):
+    """Walks /Parent (the Pages tree) for a page attribute that's allowed to
+    be inherited rather than set directly on the page itself - /Resources
+    and /MediaBox both are, and a scanned document built from one shared
+    template per section often relies on that instead of repeating them on
+    every page."""
+    node = page_obj
+    seen = set()
+    while node is not None:
+        if key in node:
+            return node[key]
+        parent = node.get("/Parent")
+        if not isinstance(parent, pikepdf.Dictionary):
+            return default
+        if getattr(parent, "is_indirect", False):
+            if parent.objgen in seen:
+                return default
+            seen.add(parent.objgen)
+        node = parent
+    return default
+
+
+def _page_image_placements(page):
+    """Every top-level (not inside a nested Form XObject) `Do` call onto an
+    Image XObject on `page`, as {"xobject": <the resolved image stream>,
+    "bbox": (x0, y0, x1, y1)} in the page's default user space. Computed by
+    replaying just enough of the content stream to track the CTM (q/Q/cm) -
+    Form XObjects are out of scope (their own nested coordinate system would
+    need this same treatment recursively, and scanned pages/pasted photos
+    are essentially always plain Image XObjects, not Forms)."""
+    resources = _resolve_inherited(page.obj, "/Resources")
+    xobjects = resources.get("/XObject") if isinstance(resources, pikepdf.Dictionary) else None
+    if not xobjects:
+        return []
+
+    placements = []
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    stack = []
+    try:
+        instructions = pikepdf.parse_content_stream(page, "q Q cm Do")
+    except Exception:
+        return []
+
+    for instr in instructions:
+        op = str(instr.operator)
+        if op == "q":
+            stack.append(ctm)
+        elif op == "Q":
+            if stack:
+                ctm = stack.pop()
+        elif op == "cm" and len(instr.operands) == 6:
+            try:
+                m = tuple(float(v) for v in instr.operands)
+            except (TypeError, ValueError):
+                continue
+            ctm = _mat_mult(m, ctm)
+        elif op == "Do" and instr.operands:
+            xobj = xobjects.get(str(instr.operands[0]))
+            # An Image XObject is a *stream* (pixel data plus a dict of
+            # keys), not a plain Dictionary - pikepdf.Stream isn't a
+            # subclass of pikepdf.Dictionary, so both need checking here.
+            if not isinstance(xobj, (pikepdf.Dictionary, pikepdf.Stream)):
+                continue
+            if str(xobj.get("/Subtype", "")) != "/Image":
+                continue
+            corners = [_mat_apply(p, ctm) for p in ((0, 0), (1, 0), (1, 1), (0, 1))]
+            xs, ys = [p[0] for p in corners], [p[1] for p in corners]
+            placements.append({"xobject": xobj, "bbox": (min(xs), min(ys), max(xs), max(ys))})
+
+    return placements
+
+
+# A candidate image covering this much of the page's own area is treated as
+# the scan background, not a distinct figure - same threshold and rationale
+# as FULL_PAGE_LEAF_COVERAGE in renderer.js (that one works from already-
+# tagged MCID leaves; this one works from raw content-stream placements, so
+# it can't share the constant, but the two should stay in sync).
+FULL_PAGE_IMAGE_COVERAGE = 0.9
+
+# How much of the smaller of {drawn rectangle, candidate image} their
+# intersection must cover for the candidate to count as "this *is* the
+# figure the user meant", rather than just some image the rectangle happens
+# to overlap a corner of.
+MIN_XOBJECT_OVERLAP = 0.6
+
+
+def _next_struct_parent_key(struct_root):
+    """Allocates a fresh top-level key in /StructTreeRoot's /ParentTree
+    number tree, for a struct element reached via /OBJR rather than a bare
+    MCID (see _register_struct_parent). Prefers /ParentTreeNextKey (PDF
+    32000-1 14.7.4.4 says a writer should trust and advance it); falls back
+    to scanning /ParentTree's /Nums for the highest existing key if it's
+    absent."""
+    next_key = struct_root.get("/ParentTreeNextKey")
+    if next_key is not None:
+        try:
+            return int(next_key)
+        except (TypeError, ValueError):
+            pass
+    parent_tree = struct_root.get("/ParentTree")
+    if isinstance(parent_tree, pikepdf.Dictionary) and "/Kids" in parent_tree:
+        raise ValueError(
+            "This document's structure ParentTree uses /Kids (a multi-level "
+            "number tree), which isn't supported yet"
+        )
+    max_key = -1
+    if isinstance(parent_tree, pikepdf.Dictionary) and "/Nums" in parent_tree:
+        nums = parent_tree["/Nums"]
+        for i in range(0, len(nums) - 1, 2):
+            try:
+                max_key = max(max_key, int(nums[i]))
+            except (TypeError, ValueError):
+                continue
+    return max_key + 1
+
+
+def _register_struct_parent(doc, key, struct_elem):
+    """Adds `key -> struct_elem` to /StructTreeRoot's /ParentTree and
+    advances /ParentTreeNextKey past it - the object-reference counterpart
+    of a page's /StructParents array (which does the same for bare-MCID
+    content, just nested one level deeper as an array-per-page). Shares
+    _next_struct_parent_key's /Kids limitation."""
+    struct_root = doc["elements"]["root"]
+    parent_tree = struct_root.get("/ParentTree")
+    if not isinstance(parent_tree, pikepdf.Dictionary):
+        parent_tree = doc["pdf"].make_indirect(pikepdf.Dictionary({"/Nums": pikepdf.Array([])}))
+        struct_root["/ParentTree"] = parent_tree
+    if "/Nums" not in parent_tree:
+        raise ValueError(
+            "This document's structure ParentTree uses /Kids (a multi-level "
+            "number tree), which isn't supported yet"
+        )
+
+    nums = list(parent_tree["/Nums"])
+    insert_at = len(nums)
+    for i in range(0, len(nums) - 1, 2):
+        if int(nums[i]) > key:
+            insert_at = i
+            break
+    nums[insert_at:insert_at] = [key, struct_elem]
+    parent_tree["/Nums"] = pikepdf.Array(nums)
+
+    prior_next = struct_root.get("/ParentTreeNextKey")
+    prior_next = int(prior_next) if prior_next is not None else 0
+    struct_root["/ParentTreeNextKey"] = max(prior_next, key + 1)
+
+
+def _new_figure_shell(doc, page):
+    return doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/Figure"),
+        "/P": doc["elements"]["root"],
+        "/Pg": page.obj,
+    }))
+
+
+def figure_from_rect(doc_id, page_index, rect):
+    """Tags a user-drawn rectangle (page-space [x0, y0, x1, y1], PDF default
+    user space) as a new top-level /Figure, picking between the "object" and
+    "bbox" strategies described in this section's comment automatically -
+    the caller doesn't need to know which one ran, though `method` is
+    returned in case the UI wants to say. Alt text isn't set here: like
+    every other freshly created tag in this file (make_list/make_table's
+    items, set_role_or_wrap's wrapped leaves), it starts empty and is filled
+    in afterward through the normal update_node path."""
+    doc = documents[doc_id]
+    if "/StructTreeRoot" not in doc["pdf"].Root:
+        raise ValueError("This document has no structure tree yet")
+
+    pdf = doc["pdf"]
+    if not (0 <= page_index < len(pdf.pages)):
+        raise ValueError(f"Invalid page index: {page_index}")
+    page = pdf.pages[page_index]
+
+    x0, y0, x1, y1 = rect
+    norm_rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    rect_area = _rect_area(norm_rect)
+    if rect_area <= 0:
+        raise ValueError("Figure rectangle has zero area")
+
+    mediabox = _resolve_inherited(page.obj, "/MediaBox")
+    page_area = _rect_area(tuple(float(v) for v in mediabox)) if mediabox is not None else 0.0
+
+    best, best_overlap = None, 0.0
+    for cand in _page_image_placements(page):
+        cand_area = _rect_area(cand["bbox"])
+        if cand_area <= 0:
+            continue
+        if page_area > 0 and cand_area / page_area >= FULL_PAGE_IMAGE_COVERAGE:
+            continue  # the scan background, not a distinct figure
+        inter = _rect_intersection_area(norm_rect, cand["bbox"])
+        if inter <= 0:
+            continue
+        overlap = inter / min(rect_area, cand_area)
+        if overlap > best_overlap:
+            best, best_overlap = cand, overlap
+
+    _push_undo_snapshot(doc)
+
+    if best is not None and best_overlap >= MIN_XOBJECT_OVERLAP:
+        figure = _new_figure_shell(doc, page)
+        key = _next_struct_parent_key(doc["elements"]["root"])
+        best["xobject"]["/StructParent"] = key
+        figure["/K"] = pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/OBJR"),
+            "/Pg": page.obj,
+            "/Obj": best["xobject"],
+        })
+        _register_struct_parent(doc, key, figure)
+        method = "object"
+    else:
+        figure = _new_figure_shell(doc, page)
+        figure["/A"] = pikepdf.Dictionary({
+            "/O": pikepdf.Name("/Layout"),
+            "/BBox": pikepdf.Array([float(v) for v in norm_rect]),
+        })
+        method = "bbox"
+
+    struct_root = doc["elements"]["root"]
+    _insert_kid(struct_root, figure, len(_iter_kids(struct_root)))
+
+    tree = _rebuild_registry(doc_id)
+    new_node_id = next((nid for nid, obj in doc["elements"].items() if _same_object(obj, figure)), None)
+
+    return {"tree": tree, "newNodeId": new_node_id, "method": method, **_undo_state(doc)}
+
+
 def _reindex_pages(doc):
     """Rebuilds page_index_by_objgen against doc["pdf"]'s current page
     objects - qpdf renumbers objects on save/reload, so the mapping built at
@@ -1548,6 +1876,8 @@ def main():
                 result = scope_tables(request["docId"])
             elif cmd == "delete_nodes":
                 result = delete_nodes(request["docId"], request["nodeIds"])
+            elif cmd == "figure_from_rect":
+                result = figure_from_rect(request["docId"], request["pageIndex"], request["rect"])
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
             elif cmd == "convert_to_paragraph":

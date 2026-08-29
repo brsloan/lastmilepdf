@@ -180,6 +180,18 @@ body.busy * {
   border-color: var(--accent-strong);
 }
 
+.btn-figure-draw-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10201c;
+  font-weight: 600;
+}
+
+.btn-figure-draw-active:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
 /* --- banner --- */
 
 .banner {
@@ -277,6 +289,10 @@ body.busy * {
   cursor: pointer;
 }
 
+#pdf-canvas.figure-draw-mode {
+  cursor: crosshair;
+}
+
 .viewer-placeholder {
   position: absolute;
   inset: 0;
@@ -323,6 +339,16 @@ body.busy * {
   position: absolute;
   background: red;
   box-shadow: 0 0 0 0.5px red;
+}
+
+/* --- in-progress "Add Figure" rubber-band rectangle, overlaid above
+   .highlight-layer (see #draw-overlay in index.html) --- */
+
+.draw-box {
+  position: absolute;
+  background: color-mix(in srgb, #ffb020 22%, transparent);
+  border: 1.5px dashed #ffb020;
+  border-radius: 2px;
 }
 
 /* --- tag tree --- */

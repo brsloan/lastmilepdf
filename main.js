@@ -262,6 +262,10 @@ ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
   return callWorker('delete_nodes', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:figure-from-rect', async (_event, { docId, pageIndex, rect }) => {
+  return callWorker('figure_from_rect', { docId, pageIndex, rect });
+});
+
 ipcMain.handle('tags:set-role-or-wrap', async (_event, { docId, nodeIds, role }) => {
   return callWorker('set_role_or_wrap', { docId, nodeIds, role });
 });
