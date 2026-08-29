@@ -378,10 +378,32 @@ body.busy * {
   background: var(--panel-alt);
 }
 
-.tree-row.drag-over {
+.tree-row.drag-over-into {
   border-color: var(--accent-strong);
   background: var(--panel-alt);
 }
+
+/* Drop-between indicator: a thin line at the row's top/bottom edge showing
+   where the dragged tag(s) would land as a sibling, rather than a child. */
+.tree-row.drag-over-before,
+.tree-row.drag-over-after {
+  position: relative;
+}
+
+.tree-row.drag-over-before::before,
+.tree-row.drag-over-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-strong);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.tree-row.drag-over-before::before { top: -1px; }
+.tree-row.drag-over-after::after { bottom: -1px; }
 
 .tree-toggle {
   display: inline-flex;

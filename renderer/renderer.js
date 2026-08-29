@@ -305,7 +305,8 @@ function renderTreeNode(node) {
     row.appendChild(meta);
     // Root can't be selected or dragged, but it IS a valid drop target
     // (for promoting a node to top-level), so it still gets drop handlers.
-    attachDropHandlers(row, node.id);
+    // It has no parent/siblings of its own, so only "into" makes sense.
+    attachDropHandlers(row, node.id, { allowBeforeAfter: false });
   } else if (node.type === 'element') {
     row.className = 'tree-row selectable';
     applySelectionClasses(row, node.id);
@@ -345,9 +346,9 @@ function renderTreeNode(node) {
   } else {
     // 'content' (bare MCID / MCR) or 'object-ref' (OBJR) - not editable, but
     // (like element tags) selectable and movable: dragged/reordered the same
-    // way, just never a drop *target* since a leaf can't hold children (see
-    // attachDropHandlers, which is deliberately not attached below, and the
-    // backend's _is_container check).
+    // way. It can't hold children (see the backend's _is_container check),
+    // so it's never an "into" drop target - but it can still anchor a
+    // before/after drop, letting a tag land beside a leaf in the list.
     row.className = 'tree-row selectable';
     applySelectionClasses(row, node.id);
     row.draggable = true;
@@ -388,6 +389,7 @@ function renderTreeNode(node) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', node.id);
     });
+    attachDropHandlers(row, node.id, { allowInto: false });
   }
 
   li.appendChild(row);
@@ -405,37 +407,89 @@ function renderTreeNode(node) {
   return li;
 }
 
-function attachDropHandlers(row, targetNodeId) {
+const DRAG_OVER_CLASSES = ['drag-over-into', 'drag-over-before', 'drag-over-after'];
+
+// Which third of a row the pointer is over decides the drop zone: the top
+// and bottom bands mean "insert as a sibling before/after this row", the
+// middle band means "append as a child of this row". A row that can't
+// accept children (allowInto: false, e.g. a content/object-ref leaf) skips
+// straight to a 50/50 split between before/after. A row with no siblings of
+// its own to insert next to (allowBeforeAfter: false, i.e. the root) is
+// always "into".
+function dropZoneForEvent(e, row, { allowInto, allowBeforeAfter }) {
+  if (!allowBeforeAfter) return 'into';
+  const rect = row.getBoundingClientRect();
+  const frac = rect.height === 0 ? 0.5 : (e.clientY - rect.top) / rect.height;
+  if (!allowInto) return frac < 0.5 ? 'before' : 'after';
+  if (frac < 0.25) return 'before';
+  if (frac > 0.75) return 'after';
+  return 'into';
+}
+
+// Where a node lands among `newParentId`'s children once every dragged id
+// has already been removed from wherever it used to live - matching how the
+// backend computes it (reorder_node/reorder_many both remove first, then
+// insert at newIndex against that already-reduced list). Computing it the
+// same way here means a drop that reorders within the same parent lands
+// exactly on the requested side of the target, not off-by-one.
+function computeDropIndex(newParentId, targetSiblingId, zone, excludeIds) {
+  const parentEntry = state.nodesById.get(newParentId);
+  const children = (parentEntry?.node.children || []).map((c) => c.id);
+  const reduced = children.filter((id) => !excludeIds.has(id));
+  if (zone === 'into') return reduced.length;
+  const idx = reduced.indexOf(targetSiblingId);
+  const base = idx === -1 ? reduced.length : idx;
+  return zone === 'after' ? base + 1 : base;
+}
+
+function attachDropHandlers(row, targetNodeId, opts = {}) {
+  const allowInto = opts.allowInto !== false;
+  const allowBeforeAfter = opts.allowBeforeAfter !== false;
+
   row.addEventListener('dragover', (e) => {
     if (!state.draggedNodeId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    row.classList.add('drag-over');
+    const zone = dropZoneForEvent(e, row, { allowInto, allowBeforeAfter });
+    row.dataset.dropZone = zone;
+    row.classList.remove(...DRAG_OVER_CLASSES);
+    row.classList.add(`drag-over-${zone}`);
   });
-  row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+  row.addEventListener('dragleave', () => {
+    row.classList.remove(...DRAG_OVER_CLASSES);
+    delete row.dataset.dropZone;
+  });
   row.addEventListener('drop', async (e) => {
     e.preventDefault();
-    row.classList.remove('drag-over');
+    const zone = row.dataset.dropZone || 'into';
+    row.classList.remove(...DRAG_OVER_CLASSES);
+    delete row.dataset.dropZone;
     const draggedIds = state.draggedNodeIds ? Array.from(state.draggedNodeIds) : [];
     state.draggedNodeId = null;
     state.draggedNodeIds = null;
     if (draggedIds.length === 0) return;
 
-    // v1 drop semantics: dropping onto a node appends the dragged tag(s) as
-    // its new last child/children. Precise above/below sibling positioning
-    // would need a drop-position indicator; left as a follow-up.
-    const targetEntry = state.nodesById.get(targetNodeId);
-    const newIndex = targetEntry.node.children ? targetEntry.node.children.length : 0;
+    // "into" the hovered row makes it the new parent; "before"/"after"
+    // instead makes ITS parent the new parent, and the hovered row the
+    // sibling to land next to.
+    let newParentId = targetNodeId;
+    let siblingId = null;
+    if (zone !== 'into') {
+      const targetEntry = state.nodesById.get(targetNodeId);
+      if (!targetEntry || targetEntry.parentId === null) return;
+      newParentId = targetEntry.parentId;
+      siblingId = targetNodeId;
+    }
 
     if (draggedIds.length === 1) {
       const draggedId = draggedIds[0];
-      if (draggedId === targetNodeId) return;
-      if (isDescendant(draggedId, targetNodeId)) {
+      if (isDescendant(draggedId, newParentId)) {
         setStatus("Can't move a tag into its own descendant.");
         return;
       }
+      const newIndex = computeDropIndex(newParentId, siblingId, zone, new Set([draggedId]));
       try {
-        const result = await window.api.reorderNode(state.docId, draggedId, targetNodeId, newIndex);
+        const result = await window.api.reorderNode(state.docId, draggedId, newParentId, newIndex);
         applyFreshTree(result.tree);
         applyUndoState(result);
         setStatus('Moved tag.');
@@ -453,13 +507,15 @@ function attachDropHandlers(row, targetNodeId) {
     const orderedIds = rows.map((r) => r.dataset.nodeId).filter((id) => draggedIds.includes(id));
     const topLevelIds = orderedIds.filter((id) => !orderedIds.some((other) => other !== id && isDescendant(other, id)));
 
-    if (topLevelIds.some((id) => isDescendant(id, targetNodeId))) {
+    if (topLevelIds.some((id) => isDescendant(id, newParentId))) {
       setStatus("Can't move tags into their own selection or descendants.");
       return;
     }
+    if (siblingId && topLevelIds.includes(siblingId)) return;
 
+    const newIndex = computeDropIndex(newParentId, siblingId, zone, new Set(topLevelIds));
     try {
-      const result = await window.api.reorderMany(state.docId, topLevelIds, targetNodeId, newIndex);
+      const result = await window.api.reorderMany(state.docId, topLevelIds, newParentId, newIndex);
       applyFreshTree(result.tree);
       applyUndoState(result);
       setStatus(`Moved ${topLevelIds.length} tags.`);
