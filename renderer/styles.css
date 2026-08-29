@@ -168,6 +168,18 @@ body.busy * {
   background: transparent;
 }
 
+.btn-walk-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10201c;
+  font-weight: 600;
+}
+
+.btn-walk-active:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
 /* --- banner --- */
 
 .banner {

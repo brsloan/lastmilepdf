@@ -13,6 +13,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 // --- app state ---------------------------------------------------------
 
+// Referenced by loadWalkSpeed() below, which runs immediately as part of
+// `state`'s own initialization - must be declared (not just hoisted, which
+// wouldn't be enough for `const`) before that point.
+const WALK_SPEED_STORAGE_KEY = 'pdfTagEditor.walkTagsPerSecond';
+const WALK_SPEED_DEFAULT = 1;
+const WALK_SPEED_MIN = 0.5;
+const WALK_SPEED_MAX = 10;
+const WALK_SPEED_STEP = 0.5;
+
 const state = {
   docId: null,
   fileName: null,
@@ -34,6 +43,9 @@ const state = {
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' - see renderFilteredTree()
+  walking: false,               // true while the Walk button's auto-advance is running
+  walkTimerId: null,
+  walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -48,6 +60,7 @@ const el = {
   btnRedo: document.getElementById('btn-redo'),
   btnKillDivs: document.getElementById('btn-kill-divs'),
   btnSmartifact: document.getElementById('btn-smartifact'),
+  btnWalk: document.getElementById('btn-walk'),
   tagFilter: document.getElementById('tag-filter'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
@@ -1896,6 +1909,8 @@ async function performOpen() {
     el.fileName.textContent = state.fileName;
     el.btnKillDivs.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
+    el.btnWalk.disabled = !opened.hasStructTree;
+    stopWalking();
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     applyFreshTree(opened.tree || null);
@@ -1984,6 +1999,129 @@ el.btnSmartifact.addEventListener('click', async () => {
     document.body.classList.remove('busy');
   }
 });
+
+// --- Walk: auto-advance the tag selection --------------------------------
+//
+// Steps state.selectedNodeId forward through whatever `.tree-row.selectable`
+// rows are currently in the DOM (same document-order list arrow-key nav and
+// drag reordering use), one tag at a time, at state.walkSpeed tags/second.
+// Starts from the currently selected tag if there is one, else the first row.
+// While walking, +/- adjust the speed (and persist it as the new default for
+// next time - see saveWalkSpeed()); any other key stops the walk. Re-reads
+// the row list and the current selection's position fresh on every tick
+// rather than caching an index, so it stays correct even though
+// selectNode() re-renders the tree (expanding ancestors, changing which rows
+// exist) on every step.
+
+function loadWalkSpeed() {
+  try {
+    const raw = Number(localStorage.getItem(WALK_SPEED_STORAGE_KEY));
+    if (Number.isFinite(raw) && raw >= WALK_SPEED_MIN && raw <= WALK_SPEED_MAX) return raw;
+  } catch (err) {
+    // localStorage unavailable (e.g. disabled storage) - fall through to default
+  }
+  return WALK_SPEED_DEFAULT;
+}
+
+function saveWalkSpeed(speed) {
+  try {
+    localStorage.setItem(WALK_SPEED_STORAGE_KEY, String(speed));
+  } catch (err) {
+    // ignore - speed just won't persist this session
+  }
+}
+
+function getWalkRows() {
+  return Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+}
+
+function updateWalkButtonUI() {
+  el.btnWalk.textContent = state.walking ? 'Stop Walk' : 'Walk';
+  el.btnWalk.classList.toggle('btn-walk-active', state.walking);
+}
+
+function startWalking() {
+  if (state.walking) return;
+  const rows = getWalkRows();
+  if (rows.length === 0) return;
+
+  if (!state.selectedNodeId || !rows.some((r) => r.dataset.nodeId === state.selectedNodeId)) {
+    selectNode(rows[0].dataset.nodeId);
+  }
+
+  state.walking = true;
+  updateWalkButtonUI();
+  setStatus(`Walking at ${state.walkSpeed}/sec…`);
+  scheduleWalkTick();
+}
+
+function stopWalking() {
+  if (!state.walking) return;
+  state.walking = false;
+  if (state.walkTimerId !== null) {
+    clearTimeout(state.walkTimerId);
+    state.walkTimerId = null;
+  }
+  updateWalkButtonUI();
+}
+
+function scheduleWalkTick() {
+  if (state.walkTimerId !== null) clearTimeout(state.walkTimerId);
+  state.walkTimerId = setTimeout(walkTick, 1000 / state.walkSpeed);
+}
+
+function walkTick() {
+  if (!state.walking) return;
+  const rows = getWalkRows();
+  const currentIndex = rows.findIndex((r) => r.dataset.nodeId === state.selectedNodeId);
+  const nextIndex = currentIndex + 1;
+  if (currentIndex === -1 || nextIndex >= rows.length) {
+    stopWalking();
+    setStatus(currentIndex === -1 ? 'Walk stopped.' : 'Walk finished.');
+    return;
+  }
+  selectNode(rows[nextIndex].dataset.nodeId);
+  scheduleWalkTick();
+}
+
+function adjustWalkSpeed(direction) {
+  const next = Math.min(WALK_SPEED_MAX, Math.max(WALK_SPEED_MIN, state.walkSpeed + direction * WALK_SPEED_STEP));
+  if (next === state.walkSpeed) return;
+  state.walkSpeed = next;
+  saveWalkSpeed(next);
+  setStatus(`Walk speed: ${next}/sec`);
+  if (state.walking) scheduleWalkTick(); // apply the new rate starting from the next tick
+}
+
+el.btnWalk.addEventListener('click', () => {
+  if (state.walking) {
+    stopWalking();
+    setStatus('Walk stopped.');
+  } else {
+    startWalking();
+  }
+});
+
+// Captured ahead of every other keydown listener so that, while walking,
+// +/- adjust speed and nothing else (arrow-key nav, delete, role shortcuts,
+// etc.) fires - and any other key stops the walk instead.
+window.addEventListener('keydown', (e) => {
+  if (!state.walking) return;
+  if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta'
+    || e.key === 'CapsLock' || e.key === 'NumLock' || e.key === 'ScrollLock' || e.key === 'AltGraph') {
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === '+' || e.key === '=') {
+    adjustWalkSpeed(1);
+  } else if (e.key === '-' || e.key === '_') {
+    adjustWalkSpeed(-1);
+  } else {
+    stopWalking();
+    setStatus('Walk stopped.');
+  }
+}, true);
 
 el.tagFilter.addEventListener('change', () => {
   state.filter = el.tagFilter.value;
