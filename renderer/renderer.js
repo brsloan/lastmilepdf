@@ -1103,6 +1103,7 @@ function syncHighlightLayerBounds() {
 
 function renderHighlightRects(boxes, viewport) {
   el.highlightLayer.innerHTML = '';
+  let activeBox = null;
   for (const { rect: r, active, isFigure } of boxes) {
     const box = document.createElement('div');
     box.className = active ? 'highlight-box' : 'highlight-box secondary';
@@ -1113,8 +1114,13 @@ function renderHighlightRects(boxes, viewport) {
     box.style.width = `${(100 * r.width / viewport.width).toFixed(3)}%`;
     box.style.height = `${(100 * r.height / viewport.height).toFixed(3)}%`;
     el.highlightLayer.appendChild(box);
+    if (active) activeBox = box;
     if (isFigure) for (const line of buildCrosshair(r, viewport)) el.highlightLayer.appendChild(line);
   }
+  // Tall/wide pages can overflow the canvas-wrap pane (it scrolls), so the
+  // newly-selected tag's box may be off-screen even though it's on the
+  // current page - bring it into view, but don't scroll if already visible.
+  activeBox?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // Figures can be tiny relative to the page, so a plain box is easy to miss.
