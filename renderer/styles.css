@@ -290,6 +290,13 @@ button {
   border-radius: 2px;
 }
 
+/* Other members of a multi-tag selection - a lighter tint than the active
+   tag's box, mirroring .tree-row.multi-selected in the tag tree. */
+.highlight-box.secondary {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+}
+
 /* --- tag tree --- */
 
 .tag-tree {

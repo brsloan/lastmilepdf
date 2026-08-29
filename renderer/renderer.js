@@ -949,11 +949,11 @@ function syncHighlightLayerBounds() {
   el.highlightLayer.style.height = `${el.canvas.clientHeight}px`;
 }
 
-function renderHighlightRects(rects, viewport) {
+function renderHighlightRects(boxes, viewport) {
   el.highlightLayer.innerHTML = '';
-  for (const r of rects) {
+  for (const { rect: r, active } of boxes) {
     const box = document.createElement('div');
-    box.className = 'highlight-box';
+    box.className = active ? 'highlight-box' : 'highlight-box secondary';
     // Percentages of the viewport's own pixel size so boxes stay aligned
     // even though the canvas is scaled down by CSS (max-width: 100%).
     box.style.left = `${(100 * r.x / viewport.width).toFixed(3)}%`;
@@ -975,15 +975,25 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     return;
   }
 
-  const targets = collectTargetMcids(nodeId);
-  if (targets.length === 0) {
+  // With a multi-tag selection, highlight every member (not just the active
+  // one) - one box per tag, the active tag's box styled like a single
+  // selection and the rest tinted like .tree-row.multi-selected.
+  const selectedIds = state.selectedNodeIds.has(nodeId) && state.selectedNodeIds.size > 1
+    ? Array.from(state.selectedNodeIds)
+    : [nodeId];
+
+  const targetsByNode = new Map(selectedIds.map((id) => [id, collectTargetMcids(id)]));
+  const activeTargets = targetsByNode.get(nodeId) || [];
+  const allTargets = Array.from(targetsByNode.values()).flat();
+  if (allTargets.length === 0) {
     clearHighlight();
     return;
   }
 
-  const hasContentOnCurrentPage = targets.some((t) => t.page + 1 === state.currentPage);
+  const hasContentOnCurrentPage = allTargets.some((t) => t.page + 1 === state.currentPage);
   if (!hasContentOnCurrentPage && allowPageJump) {
-    const candidatePages = targets.map((t) => t.page + 1).filter((p) => p >= 1 && p <= state.pageCount);
+    const pageSourceTargets = activeTargets.length > 0 ? activeTargets : allTargets;
+    const candidatePages = pageSourceTargets.map((t) => t.page + 1).filter((p) => p >= 1 && p <= state.pageCount);
     if (candidatePages.length > 0) {
       state.currentPage = Math.min(...candidatePages);
       await renderCurrentPage();
@@ -992,26 +1002,26 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     }
   }
 
-  const mcidSet = new Set(
-    targets.filter((t) => t.page + 1 === state.currentPage).map((t) => t.mcid)
-  );
-  if (mcidSet.size === 0) {
-    clearHighlight();
-    return;
-  }
-
   try {
     const { textContent, viewport } = await getPageTextContent(state.currentPage);
     const imageRectMap = await getPageImageRects(state.currentPage);
     if (token !== state.highlightToken) return;
-    const rects = computeHighlightRects(textContent, viewport, mcidSet);
-    for (const mcid of mcidSet) {
-      const imageRects = imageRectMap.get(mcid);
-      if (imageRects) rects.push(...imageRects);
+
+    const boxes = [];
+    for (const id of selectedIds) {
+      const targets = targetsByNode.get(id) || [];
+      const mcidSet = new Set(targets.filter((t) => t.page + 1 === state.currentPage).map((t) => t.mcid));
+      if (mcidSet.size === 0) continue;
+      const rects = computeHighlightRects(textContent, viewport, mcidSet);
+      for (const mcid of mcidSet) {
+        const imageRects = imageRectMap.get(mcid);
+        if (imageRects) rects.push(...imageRects);
+      }
+      const rect = unionRects(rects);
+      if (rect) boxes.push({ rect, active: id === nodeId });
     }
-    const box = unionRects(rects);
     syncHighlightLayerBounds();
-    renderHighlightRects(box ? [box] : [], viewport);
+    renderHighlightRects(boxes, viewport);
   } catch (err) {
     console.error('Could not compute tag highlight:', err);
   }
