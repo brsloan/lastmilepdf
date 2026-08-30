@@ -3,14 +3,57 @@
   "version": "0.1.0",
   "description": "Standalone Electron app for viewing and editing PDF accessibility (tag) structure trees.",
   "main": "main.js",
+  "author": "Ben Sloan",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
+    "dist:win": "npm run build:worker && electron-builder --win"
   },
   "dependencies": {
     "pdfjs-dist": "^4.6.82"
   },
   "devDependencies": {
-    "electron": "^31.0.0"
+    "electron": "^31.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.bensloan.lastmilepdf",
+    "productName": "LastMilePDF",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "node_modules/**/*",
+      "!python/**",
+      "!python-dist/**",
+      "!.venv/**"
+    ],
+    "extraResources": [
+      {
+        "from": "python-dist/tag_worker.exe",
+        "to": "python/tag_worker.exe"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "perMachine": false,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    }
   }
 }

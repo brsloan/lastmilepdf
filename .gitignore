@@ -6,5 +6,9 @@ out/
 __pycache__/
 *.pyc
 
+python-dist/
+build/pyinstaller/
+build/*.spec
+
 .DS_Store
 *.log

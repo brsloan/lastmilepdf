@@ -20,6 +20,10 @@ main.js         - BrowserWindow, native dialogs, owns the Python sidecar process
 python/
   tag_worker.py - long-running pikepdf sidecar, speaks JSON-lines over stdio
   requirements.txt
+
+build/           - installer icon (icon.ico/icon.png)
+python-dist/      - PyInstaller output (tag_worker.exe), gitignored
+dist/             - electron-builder output (installer/portable exe), gitignored
 ```
 
 `main.js` spawns `python/tag_worker.py` once at startup and keeps it alive
@@ -72,6 +76,37 @@ interpreter, e.g. `PYTHON_BIN=$(pwd)/.venv/bin/python npm start`.
 ```
 npm start
 ```
+
+## Packaging
+
+For distribution to users who don't have Node or Python installed, the app
+ships with the tag worker compiled into a standalone exe (via PyInstaller)
+rather than spawning a system Python:
+
+```
+pip install pyinstaller   # into .venv, alongside pikepdf
+npm run dist:win
+```
+
+This runs two steps:
+
+1. `build:worker` - compiles `python/tag_worker.py` (with `pikepdf` and its
+   bundled `qpdf`/`msvc` DLLs) into `python-dist/tag_worker.exe`.
+2. `electron-builder --win` - bundles the app plus that exe (as
+   `resources/python/tag_worker.exe`) into `dist/`, producing:
+   - `LastMilePDF Setup <version>.exe` - a per-user NSIS installer
+     (`perMachine: false`, so it installs to the user's own AppData and
+     never triggers a UAC/admin prompt).
+   - `LastMilePDF-<version>-portable.exe` - a single portable exe, no
+     install step at all.
+
+`main.js` picks between the dev path (`.venv` + `tag_worker.py`) and the
+packaged exe automatically via `app.isPackaged` - see `packagedWorkerPath()`.
+
+Neither build is code-signed, so first launch on another machine will show
+a SmartScreen "Windows protected your PC" warning (unrelated to admin
+rights - dismiss via "More info" -> "Run anyway"). Getting rid of that
+warning requires a paid code-signing certificate.
 
 ## Known limitations
 

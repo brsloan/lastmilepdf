@@ -17,10 +17,17 @@ const readline = require('readline');
 
 // --- Python sidecar -------------------------------------------------------
 
-// Prefer a project-local .venv (see README setup) if one exists - it's
-// self-contained and side-steps system/user-site-packages resolution being
-// unreliable on some machines. Falls back to PYTHON_BIN, then to "python"/
-// "python3" on PATH.
+// In a packaged build there's no Python interpreter on the user's machine,
+// so the worker ships as a PyInstaller-compiled exe (see python/tag_worker.py
+// and the "build:worker" script) under extraResources. In dev, fall back to
+// a project-local .venv (see README setup) - self-contained and side-steps
+// system/user-site-packages resolution being unreliable on some machines -
+// then PYTHON_BIN, then "python"/"python3" on PATH.
+function packagedWorkerPath() {
+  const exeName = process.platform === 'win32' ? 'tag_worker.exe' : 'tag_worker';
+  return path.join(process.resourcesPath, 'python', exeName);
+}
+
 function defaultPythonBin() {
   const venvPython = process.platform === 'win32'
     ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
@@ -29,8 +36,11 @@ function defaultPythonBin() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
-const PYTHON_BIN = process.env.PYTHON_BIN || defaultPythonBin();
-const WORKER_SCRIPT = path.join(__dirname, 'python', 'tag_worker.py');
+// When packaged, the worker is a standalone exe invoked directly (no script
+// argument); in dev it's PYTHON_BIN running tag_worker.py.
+const WORKER_COMMAND = app.isPackaged
+  ? { bin: packagedWorkerPath(), args: [] }
+  : { bin: process.env.PYTHON_BIN || defaultPythonBin(), args: [path.join(__dirname, 'python', 'tag_worker.py')] };
 
 let workerProcess = null;
 let requestCounter = 0;
@@ -44,7 +54,7 @@ function startWorker() {
   // "exited unexpectedly" message.
   let lastUnmatchedError = null;
 
-  workerProcess = spawn(PYTHON_BIN, [WORKER_SCRIPT], {
+  workerProcess = spawn(WORKER_COMMAND.bin, WORKER_COMMAND.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
