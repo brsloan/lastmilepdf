@@ -32,12 +32,18 @@ Scope / known limitations (read this before extending):
     node ids are just a fresh depth-first counter assigned on each rebuild,
     so the renderer can't ever hold a stale id that silently points at the
     wrong node after an edit.
-  - RoleMap, ParentTree, and ClassMap (optional StructTreeRoot extras) are
-    not read or written, with one exception: figure_from_rect() both reads
-    and writes /ParentTree, since tagging an image via /OBJR requires a
-    ParentTree entry the same way a page's /StructParents array does for
-    bare MCIDs. See that section for the /Kids (multi-level number tree)
-    limitation this comes with.
+  - RoleMap and ClassMap (optional StructTreeRoot extras) are not read or
+    written. /ParentTree is: it's the reverse of /K - the map a consumer
+    follows from a piece of marked content back to the tag that owns it -
+    so leaving it alone while rewriting /K would make the two directions
+    disagree. _rebuild_after_mutation() regenerates it from the tree after
+    every mutating command (see _rebuild_parent_tree), reusing whatever
+    /StructParents and /StructParent keys the document already has and
+    allocating new ones only where something tagged doesn't have one yet.
+    It always writes a flat /Nums, so a document whose /ParentTree arrived
+    as a multi-level /Kids number tree is simply converted on first edit.
+    Read-only paths (open_document, undo/redo) deliberately skip this, so
+    that merely opening a file never modifies it.
   - Every command here mutates the struct tree only - except
     figure_from_rect(), which also *reads* (never writes) a page's content
     stream, to recover where image XObjects are actually placed. See its
@@ -470,7 +476,7 @@ def set_role_or_wrap(doc_id, node_ids, role):
         else:
             _wrap_leaf(doc, node_id, role)
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 # Roles the 'P' shortcut's flatten dissolves rather than preserves, when
@@ -479,10 +485,17 @@ _TRANSPARENT_ROLES = ("L", "Span", "Div", "LI", "Lbl", "LBody")
 
 
 def _direct_child_ids(doc, node_id):
-    """Direct children of node_id, in document order - relies on
-    doc["parent_map"] preserving insertion order from the last
-    _rebuild_registry, which walks kids left-to-right (see _walk)."""
-    return [cid for cid, pid in doc["parent_map"].items() if pid == node_id]
+    """Direct children of node_id, in document order.
+
+    Reads the index _rebuild_registry() builds by inverting parent_map in
+    one pass, which preserves document order for the same reason scanning
+    parent_map directly used to: _walk() inserts kids left-to-right, and
+    dicts keep insertion order. The index matters because the recursive
+    callers here (_collect_leaf_ids, _paragraphize_children,
+    _first_positioned_descendant) call this once per node they descend
+    through - against a full-document scan that made them quadratic in the
+    node count."""
+    return doc["children_map"].get(node_id, [])
 
 
 def _make_paragraph(doc, leaf_ids):
@@ -669,7 +682,7 @@ def convert_to_paragraph(doc_id, node_ids):
         else:
             _wrap_leaf(doc, node_id, "P")
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def _collect_leaf_ids(doc, node_id):
@@ -766,7 +779,7 @@ def convert_to_figure(doc_id, node_ids):
         else:
             _wrap_leaf(doc, node_id, "Figure")
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def _group_into_container(doc_id, node_ids, container_role, item_role, preserved_roles, cant_group_msg):
@@ -842,7 +855,7 @@ def _group_into_container(doc_id, node_ids, container_role, item_role, preserved
 
     _insert_kid(parent_obj, new_container, first_index)
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def make_list(doc_id, node_ids):
@@ -1024,12 +1037,172 @@ def _walk(doc, struct_obj, node_id, inherited_page=None):
     return node
 
 
+def _content_owners(doc):
+    """Reverse of the /K walk: who owns each piece of marked content, as
+    ({page_index: {mcid: owning_elem}}, [(objr_target, owning_elem), ...]).
+    Built from the registry, so it reflects the tree exactly as it stands
+    after the mutation that just ran."""
+    per_page = {}
+    per_object = []
+    for node_id, kind in doc["node_kind"].items():
+        if kind not in ("content-int", "content-dict"):
+            continue
+        parent_id = doc["parent_map"].get(node_id)
+        owner = doc["elements"].get(parent_id) if parent_id is not None else None
+        if not isinstance(owner, pikepdf.Dictionary):
+            continue
+        obj = doc["elements"][node_id]
+        page = doc["node_pages"].get(node_id)
+        if kind == "content-int":
+            if page is not None:
+                per_page.setdefault(page, {})[int(obj)] = owner
+            continue
+        if str(obj.get("/Type")) == "/OBJR":
+            target = obj.get("/Obj")
+            if isinstance(target, (pikepdf.Dictionary, pikepdf.Stream)):
+                per_object.append((target, owner))
+        elif "/MCID" in obj and page is not None:
+            try:
+                per_page.setdefault(page, {})[int(obj["/MCID"])] = owner
+            except (TypeError, ValueError):
+                pass
+    return per_page, per_object
+
+
+def _rebuild_parent_tree(doc):
+    """Rewrites /StructTreeRoot's /ParentTree from the tree as it now
+    stands.
+
+    /ParentTree is the reverse of /K: it maps a piece of marked content
+    back to the struct element that owns it, keyed by the page's
+    /StructParents (an array indexed by MCID) or by an object's own
+    /StructParent (a single element, for content reached via /OBJR). It's
+    what a consumer uses to go from content to structure - the direction
+    that answers "which tag does this text belong to?".
+
+    Nothing here used to maintain it, so every command that re-parented or
+    dropped a leaf left the two directions disagreeing: /K said one thing,
+    /ParentTree still named whichever element owned that content before the
+    edit, including elements no longer anywhere in the tree.
+
+    Rebuilding wholesale (rather than patching entries) is the same trade
+    _rebuild_registry() already makes, and for the same reason: it's
+    correct by construction, and the cost is bounded by document size on an
+    operation that already re-walks the whole tree.
+
+    Existing /StructParents and /StructParent keys are reused wherever a
+    page or object already has one - they're referenced from the page and
+    object dictionaries, and renumbering them on every edit would rewrite
+    every page object for no benefit. Only a page or object that owns
+    tagged content without a key yet gets a freshly allocated one.
+
+    The result is always written as a flat /Nums. That's a valid number
+    tree whatever the input used, which is what lets figure_from_rect()
+    stop refusing documents whose /ParentTree came as a multi-level /Kids
+    tree."""
+    pdf = doc["pdf"]
+    struct_root = doc["elements"]["root"]
+    per_page, per_object = _content_owners(doc)
+
+    used_keys = set()
+    for page in pdf.pages:
+        existing = page.obj.get("/StructParents")
+        if existing is not None:
+            try:
+                used_keys.add(int(existing))
+            except (TypeError, ValueError):
+                pass
+    for target, _owner in per_object:
+        existing = target.get("/StructParent")
+        if existing is not None:
+            try:
+                used_keys.add(int(existing))
+            except (TypeError, ValueError):
+                pass
+
+    next_key = max(used_keys) + 1 if used_keys else 0
+    try:
+        declared = int(struct_root.get("/ParentTreeNextKey"))
+        next_key = max(next_key, declared)
+    except (TypeError, ValueError):
+        pass
+
+    def allocate():
+        nonlocal next_key
+        key = next_key
+        next_key += 1
+        return key
+
+    entries = {}  # key -> value object
+
+    for page_index, page in enumerate(pdf.pages):
+        owners = per_page.get(page_index)
+        key = page.obj.get("/StructParents")
+        try:
+            key = int(key) if key is not None else None
+        except (TypeError, ValueError):
+            key = None
+        if key is None:
+            if not owners:
+                continue  # nothing tagged on this page and no key to honour
+            key = allocate()
+            page.obj["/StructParents"] = key
+        # A page that has a key keeps an entry even with nothing tagged on
+        # it any more (everything on it was artifacted), so its
+        # /StructParents doesn't dangle into a missing key.
+        size = max(owners) + 1 if owners else 0
+        entries[key] = pikepdf.Array([
+            owners.get(mcid) if owners else None for mcid in range(size)
+        ])
+
+    for target, owner in per_object:
+        key = target.get("/StructParent")
+        try:
+            key = int(key) if key is not None else None
+        except (TypeError, ValueError):
+            key = None
+        if key is None:
+            key = allocate()
+            target["/StructParent"] = key
+        entries[key] = owner
+
+    nums = []
+    for key in sorted(entries):
+        nums.append(key)
+        nums.append(entries[key])
+
+    parent_tree = struct_root.get("/ParentTree")
+    if isinstance(parent_tree, pikepdf.Dictionary):
+        if "/Kids" in parent_tree:
+            del parent_tree["/Kids"]  # replaced wholesale by the flat /Nums below
+        parent_tree["/Nums"] = pikepdf.Array(nums)
+    else:
+        struct_root["/ParentTree"] = pdf.make_indirect(
+            pikepdf.Dictionary({"/Nums": pikepdf.Array(nums)})
+        )
+    struct_root["/ParentTreeNextKey"] = next_key
+
+
+def _rebuild_after_mutation(doc_id):
+    """What every mutating command returns its tree from: re-index the tree
+    (assigning fresh node ids), then bring /ParentTree back in line with it.
+    Read-only paths - open_document(), and undo/redo, whose snapshots
+    already carry a consistent /ParentTree - use _rebuild_registry()
+    directly so that merely opening a file never modifies it."""
+    tree = _rebuild_registry(doc_id)
+    doc = documents[doc_id]
+    if doc["elements"].get("root") is not None:
+        _rebuild_parent_tree(doc)
+    return tree
+
+
 def _rebuild_registry(doc_id):
     doc = documents[doc_id]
     doc["elements"] = {}
     doc["parent_map"] = {}
     doc["node_pages"] = {}
     doc["node_kind"] = {}
+    doc["children_map"] = {}
     doc["counter"] = 0
     # An untagged PDF has no tree to walk. Every tag-editing command fails
     # long before it reaches here (there's no node id for the caller to
@@ -1044,7 +1217,13 @@ def _rebuild_registry(doc_id):
         return None
     struct_root = doc["pdf"].Root["/StructTreeRoot"]
     doc["elements"]["root"] = struct_root
-    return _walk(doc, struct_root, "root")
+    tree = _walk(doc, struct_root, "root")
+    # Invert parent_map once, rather than re-scanning it per node in
+    # _direct_child_ids(). parent_map is populated in _walk's own
+    # left-to-right order, so grouping it preserves document order.
+    for child_id, parent_id in doc["parent_map"].items():
+        doc["children_map"].setdefault(parent_id, []).append(child_id)
+    return tree
 
 
 # --- outline (bookmarks) ----------------------------------------------
@@ -1261,7 +1440,7 @@ def open_document(path):
     doc_id = str(uuid.uuid4())
     documents[doc_id] = {
         "pdf": pdf, "elements": {}, "parent_map": {}, "node_pages": {},
-        "node_kind": {}, "counter": 0,
+        "node_kind": {}, "children_map": {}, "counter": 0,
         "page_index_by_objgen": {page.objgen: i for i, page in enumerate(pdf.pages)},
         "undo_stack": [], "redo_stack": [],
     }
@@ -1306,7 +1485,7 @@ def update_node(doc_id, node_id, changes):
         _set_or_clear_string(elem, "/Lang", changes["lang"])
     _apply_table_attr_changes(doc, elem, changes)
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def update_nodes(doc_id, node_ids, changes):
@@ -1342,7 +1521,7 @@ def update_nodes(doc_id, node_ids, changes):
             _set_or_clear_string(elem, "/Lang", changes["lang"])
         _apply_table_attr_changes(doc, elem, changes)
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def shift_heading_levels(doc_id, node_ids, direction):
@@ -1375,7 +1554,7 @@ def shift_heading_levels(doc_id, node_ids, direction):
         if 1 <= new_level <= 6:
             elem["/S"] = pikepdf.Name(f"/H{new_level}")
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def reorder_node(doc_id, node_id, new_parent_id, new_index):
@@ -1422,7 +1601,7 @@ def reorder_node(doc_id, node_id, new_parent_id, new_index):
     if isinstance(node_obj, pikepdf.Dictionary):
         node_obj["/P"] = new_parent_obj
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def reorder_many(doc_id, node_ids, new_parent_id, new_index):
@@ -1491,7 +1670,7 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
             node_obj["/P"] = new_parent_obj
         insertion_index += 1
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def _count_divs(struct_obj):
@@ -1539,7 +1718,7 @@ def kill_divs(doc_id):
 
     _push_undo_snapshot(doc)
     _flatten_divs(struct_root)
-    return {"tree": _rebuild_registry(doc_id), "removed": removed, **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), "removed": removed, **_undo_state(doc)}
 
 
 def _role_of(struct_obj):
@@ -1652,7 +1831,7 @@ def scope_tables(doc_id):
     for cell_obj, scope_value in pending:
         _set_cell_scope(doc, cell_obj, scope_value)
 
-    return {"tree": _rebuild_registry(doc_id), "tablesScoped": scoped, **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), "tablesScoped": scoped, **_undo_state(doc)}
 
 
 def delete_nodes(doc_id, node_ids):
@@ -1687,7 +1866,7 @@ def delete_nodes(doc_id, node_ids):
         if parent_obj is not None:
             _remove_kid(parent_obj, node_obj)
 
-    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 # --- figure-from-rectangle tagging ----------------------------------------
@@ -1859,65 +2038,6 @@ FULL_PAGE_IMAGE_COVERAGE = 0.9
 MIN_XOBJECT_OVERLAP = 0.6
 
 
-def _next_struct_parent_key(struct_root):
-    """Allocates a fresh top-level key in /StructTreeRoot's /ParentTree
-    number tree, for a struct element reached via /OBJR rather than a bare
-    MCID (see _register_struct_parent). Prefers /ParentTreeNextKey (PDF
-    32000-1 14.7.4.4 says a writer should trust and advance it); falls back
-    to scanning /ParentTree's /Nums for the highest existing key if it's
-    absent."""
-    next_key = struct_root.get("/ParentTreeNextKey")
-    if next_key is not None:
-        try:
-            return int(next_key)
-        except (TypeError, ValueError):
-            pass
-    parent_tree = struct_root.get("/ParentTree")
-    if isinstance(parent_tree, pikepdf.Dictionary) and "/Kids" in parent_tree:
-        raise ValueError(
-            "This document's structure ParentTree uses /Kids (a multi-level "
-            "number tree), which isn't supported yet"
-        )
-    max_key = -1
-    if isinstance(parent_tree, pikepdf.Dictionary) and "/Nums" in parent_tree:
-        nums = parent_tree["/Nums"]
-        for i in range(0, len(nums) - 1, 2):
-            try:
-                max_key = max(max_key, int(nums[i]))
-            except (TypeError, ValueError):
-                continue
-    return max_key + 1
-
-
-def _register_struct_parent(doc, key, struct_elem):
-    """Adds `key -> struct_elem` to /StructTreeRoot's /ParentTree and
-    advances /ParentTreeNextKey past it - the object-reference counterpart
-    of a page's /StructParents array (which does the same for bare-MCID
-    content, just nested one level deeper as an array-per-page). Shares
-    _next_struct_parent_key's /Kids limitation."""
-    struct_root = doc["elements"]["root"]
-    parent_tree = struct_root.get("/ParentTree")
-    if not isinstance(parent_tree, pikepdf.Dictionary):
-        parent_tree = doc["pdf"].make_indirect(pikepdf.Dictionary({"/Nums": pikepdf.Array([])}))
-        struct_root["/ParentTree"] = parent_tree
-    if "/Nums" not in parent_tree:
-        raise ValueError(
-            "This document's structure ParentTree uses /Kids (a multi-level "
-            "number tree), which isn't supported yet"
-        )
-
-    nums = list(parent_tree["/Nums"])
-    insert_at = len(nums)
-    for i in range(0, len(nums) - 1, 2):
-        if int(nums[i]) > key:
-            insert_at = i
-            break
-    nums[insert_at:insert_at] = [key, struct_elem]
-    parent_tree["/Nums"] = pikepdf.Array(nums)
-
-    prior_next = struct_root.get("/ParentTreeNextKey")
-    prior_next = int(prior_next) if prior_next is not None else 0
-    struct_root["/ParentTreeNextKey"] = max(prior_next, key + 1)
 
 
 def _page_anchor_info(page):
@@ -2207,14 +2327,18 @@ def figure_from_rect(doc_id, page_index, rect):
 
     if best is not None and best_overlap >= MIN_XOBJECT_OVERLAP:
         figure = _new_figure_shell(doc, page, parent_obj)
-        key = _next_struct_parent_key(doc["elements"]["root"])
-        best["xobject"]["/StructParent"] = key
+        # Just link the object; _rebuild_parent_tree() (via
+        # _rebuild_after_mutation below) allocates the image's
+        # /StructParent and writes the matching /ParentTree entry, the same
+        # way it does for every other tagged object. That's also what
+        # retired this branch's old refusal of documents whose /ParentTree
+        # came as a multi-level /Kids tree - the rebuild emits a flat /Nums
+        # regardless of what the input used.
         figure["/K"] = pikepdf.Dictionary({
             "/Type": pikepdf.Name("/OBJR"),
             "/Pg": page.obj,
             "/Obj": best["xobject"],
         })
-        _register_struct_parent(doc, key, figure)
         method = "object"
     else:
         figure = _new_figure_shell(doc, page, parent_obj)
@@ -2227,7 +2351,7 @@ def figure_from_rect(doc_id, page_index, rect):
     insert_index = _estimate_insert_index(doc, parent_node_id, page_index, norm_rect[3])
     _insert_kid(parent_obj, figure, insert_index)
 
-    tree = _rebuild_registry(doc_id)
+    tree = _rebuild_after_mutation(doc_id)
     new_node_id = next((nid for nid, obj in doc["elements"].items() if _same_object(obj, figure)), None)
 
     return {"tree": tree, "newNodeId": new_node_id, "method": method, **_undo_state(doc)}
@@ -2298,6 +2422,7 @@ def close_document(doc_id):
     doc["redo_stack"].clear()
     doc["elements"].clear()
     doc["parent_map"].clear()
+    doc["children_map"].clear()
     try:
         doc["pdf"].close()
     except Exception:
