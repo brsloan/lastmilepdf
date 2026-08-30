@@ -2287,6 +2287,24 @@ window.addEventListener('resize', () => {
 // elements) rather than requiring an explicit Apply button.
 el.detailsForm.addEventListener('change', applyDetailsChange);
 
+// True if `changes` would leave the tag exactly as it already is. Every
+// mutating worker call costs an undo snapshot - a full serialization of the
+// PDF, see _push_undo_snapshot() in tag_worker.py - so applying a form
+// nobody actually edited shouldn't push one. It matters most on the
+// /Document tag, where Title/Author/Language go out as a *second* call:
+// without this, editing just the title left an empty node-level edit
+// sitting in front of it, and the first Ctrl+Z appeared to do nothing.
+// Every field is compared as the trimmed string the form holds, against
+// the node's own value normalized the same way (null/undefined -> '',
+// numeric spans -> their digits).
+function nodeChangesAreNoOp(node, changes) {
+  const normalized = (current) =>
+    current === null || current === undefined ? '' : String(current);
+  return Object.entries(changes).every(
+    ([key, value]) => value === normalized(node[key]),
+  );
+}
+
 async function applyDetailsChange() {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
@@ -2341,9 +2359,14 @@ async function applyDetailsChange() {
         changes.colSpan = el.fieldColSpan.value.trim();
         changes.rowSpan = el.fieldRowSpan.value.trim();
       }
-      result = await window.api.updateNode(state.docId, nodeId, changes);
-      applyFreshTree(result.tree);
-      applyUndoState(result);
+      const entry = state.nodesById.get(nodeId);
+      let changedAnything = false;
+      if (!entry || !nodeChangesAreNoOp(entry.node, changes)) {
+        result = await window.api.updateNode(state.docId, nodeId, changes);
+        applyFreshTree(result.tree);
+        applyUndoState(result);
+        changedAnything = true;
+      }
 
       // Title/Author/Language here are PDF document-info/catalog fields,
       // not struct-element attributes, so they're edited via a separate
@@ -2363,10 +2386,11 @@ async function applyDetailsChange() {
           const infoResult = await window.api.updateDocInfo(state.docId, { title, author, lang });
           state.docInfo = infoResult.docInfo;
           applyUndoState(infoResult);
+          changedAnything = true;
         }
       }
 
-      setStatus('Updated tag.');
+      setStatus(changedAnything ? 'Updated tag.' : 'No changes to apply.');
       // Keep the same node selected/visible after the tree re-renders.
       selectNode(nodeId);
     }
