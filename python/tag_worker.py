@@ -126,11 +126,42 @@ def _get_doc_info(doc):
     (trailer /Info), read directly off the trailer rather than through
     pikepdf's `Pdf.docinfo` property - that property auto-vivifies an /Info
     dict on first access, which would dirty documents that don't have one
-    just from opening them or selecting the /Document tag."""
-    info = doc["pdf"].trailer.get("/Info")
-    if not isinstance(info, pikepdf.Dictionary):
-        return {"title": None, "author": None}
-    return {"title": _get_string(info, "/Title"), "author": _get_string(info, "/Author")}
+    just from opening them or selecting the /Document tag.
+
+    Also carries a few read-only fields the Verify report needs: the
+    catalog's primary /Lang, the /MarkInfo Marked flag (what Acrobat's
+    "Tagged PDF" check actually looks at - a StructTreeRoot can exist
+    without this being set), and the "extract for accessibility"
+    permission bit. None of these are edited anywhere in this file, so
+    they're just read fresh each time _get_doc_info() is called rather
+    than threaded through update_doc_info()."""
+    pdf = doc["pdf"]
+    info = pdf.trailer.get("/Info")
+    title = _get_string(info, "/Title") if isinstance(info, pikepdf.Dictionary) else None
+    author = _get_string(info, "/Author") if isinstance(info, pikepdf.Dictionary) else None
+
+    lang = _get_string(pdf.Root, "/Lang")
+
+    mark_info = pdf.Root.get("/MarkInfo")
+    marked = bool(
+        isinstance(mark_info, pikepdf.Dictionary)
+        and mark_info.get("/Marked", False)
+    )
+
+    try:
+        accessibility_permission = bool(pdf.allow.accessibility)
+    except Exception:
+        # Unencrypted PDFs (the common case) implicitly allow everything;
+        # fail open rather than let a report crash on an odd/legacy file.
+        accessibility_permission = True
+
+    return {
+        "title": title,
+        "author": author,
+        "lang": lang,
+        "markedTagged": marked,
+        "accessibilityPermission": accessibility_permission,
+    }
 
 
 def update_doc_info(doc_id, changes):

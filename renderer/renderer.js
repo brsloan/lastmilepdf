@@ -60,6 +60,7 @@ const state = {
   figureDrawActive: false,      // true while the Add Figure button's rubber-band draw mode is armed
   figureDrawRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
   docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
+  hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -77,6 +78,7 @@ const el = {
   btnSmartifact: document.getElementById('btn-smartifact'),
   btnAddFigure: document.getElementById('btn-add-figure'),
   btnWalk: document.getElementById('btn-walk'),
+  btnVerify: document.getElementById('btn-verify'),
   tagFilter: document.getElementById('tag-filter'),
   fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
@@ -127,6 +129,9 @@ const el = {
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
   helpDialog: document.getElementById('help-dialog'),
   btnCloseHelp: document.getElementById('btn-close-help'),
+  verifyDialog: document.getElementById('verify-dialog'),
+  btnCloseVerify: document.getElementById('btn-close-verify'),
+  verifyBody: document.getElementById('verify-body'),
   tabProperties: document.getElementById('tab-properties'),
   tabBookmarks: document.getElementById('tab-bookmarks'),
   panelProperties: document.getElementById('panel-properties'),
@@ -3043,6 +3048,418 @@ async function shiftSelectedHeadingLevels(direction) {
   }
 }
 
+// --- accessibility verify --------------------------------------------------
+//
+// A lightweight, local approximation of Adobe Acrobat's "Full Check" report,
+// scoped to what this editor's own data already covers: document-level
+// metadata (docInfo, from _get_doc_info() in tag_worker.py), the tag tree,
+// and the outline/page count already loaded for the current document. It
+// does not attempt anything that needs rendering pixels (colour contrast),
+// form fields, or raw content-stream analysis (reading order, tab order,
+// scripts) - those aren't backed by any data this app reads today.
+//
+// Each check returns zero or more "instances" - specific tag ids the issue
+// was found on - which the report renders as clickable rows (see
+// jumpToVerifyInstance()) that select the tag, matching how clicking a row
+// in the Tag Tree itself works.
+
+function walkTree(node, visit) {
+  visit(node);
+  for (const child of node.children || []) walkTree(child, visit);
+}
+
+function parentOf(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry || entry.parentId === null) return null;
+  return state.nodesById.get(entry.parentId)?.node || null;
+}
+
+const HEADING_LEVELS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
+
+// Flags a heading whose level is more than one deeper than the deepest
+// heading level seen so far in document order (e.g. an H3 with no preceding
+// H2) - the same "don't skip a level" rule Acrobat's heading check applies.
+function checkHeadingOrder() {
+  const instances = [];
+  let maxSeen = 0;
+  walkTree(state.tree, (node) => {
+    if (node.type !== 'element') return;
+    const level = HEADING_LEVELS[node.role];
+    if (!level) return;
+    if (level > maxSeen + 1) {
+      instances.push({
+        nodeId: node.id,
+        detail: `${node.role} follows a heading no deeper than H${maxSeen} – skips H${maxSeen + 1}`,
+      });
+    }
+    if (level > maxSeen) maxSeen = level;
+  });
+  return instances;
+}
+
+function checkListStructure() {
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element') continue;
+    if (node.role === 'LI') {
+      const parent = parentOf(id);
+      if (!parent || parent.role !== 'L') {
+        instances.push({ nodeId: id, detail: `List item (LI) is not a child of a List (L) tag – parent is ${parent?.role || 'untagged content'}` });
+      }
+    } else if (node.role === 'Lbl' || node.role === 'LBody') {
+      const parent = parentOf(id);
+      if (!parent || parent.role !== 'LI') {
+        instances.push({ nodeId: id, detail: `${node.role} is not a child of a List Item (LI) tag – parent is ${parent?.role || 'untagged content'}` });
+      }
+    }
+  }
+  return instances;
+}
+
+function checkTableRowStructure() {
+  const validParents = new Set(['Table', 'THead', 'TBody', 'TFoot']);
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element' || node.role !== 'TR') continue;
+    const parent = parentOf(id);
+    if (!parent || !validParents.has(parent.role)) {
+      instances.push({ nodeId: id, detail: `Table row (TR) is not a child of Table/THead/TBody/TFoot – parent is ${parent?.role || 'untagged content'}` });
+    }
+  }
+  return instances;
+}
+
+function checkTableCellStructure() {
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element' || (node.role !== 'TH' && node.role !== 'TD')) continue;
+    const parent = parentOf(id);
+    if (!parent || parent.role !== 'TR') {
+      instances.push({ nodeId: id, detail: `${node.role} is not a child of a table row (TR) – parent is ${parent?.role || 'untagged content'}` });
+    }
+  }
+  return instances;
+}
+
+// Rows directly inside `tableNode` (through THead/TBody/TFoot, but not
+// descending into a nested Table's own rows).
+function getTableRows(tableNode) {
+  const rows = [];
+  (function walk(node) {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      if (child.role === 'TR') rows.push(child);
+      else if (child.role !== 'Table') walk(child);
+    }
+  })(tableNode);
+  return rows;
+}
+
+function getRowCells(rowNode) {
+  const cells = [];
+  (function walk(node) {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      if (child.role === 'TH' || child.role === 'TD') cells.push(child);
+      else walk(child);
+    }
+  })(rowNode);
+  return cells;
+}
+
+// Heuristic: every row's cell count (ColSpan-weighted) should agree. Doesn't
+// account for RowSpan carrying a cell down into a following row, so a table
+// that relies heavily on RowSpan can produce a false positive here - flagged
+// as a warning rather than a failure for that reason.
+function checkTableRegularity() {
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element' || node.role !== 'Table') continue;
+    const rows = getTableRows(node);
+    if (rows.length < 2) continue;
+    const widths = rows.map((r) => getRowCells(r).reduce((sum, c) => sum + (c.colSpan || 1), 0)).filter((w) => w > 0);
+    const distinct = [...new Set(widths)].sort((a, b) => a - b);
+    if (distinct.length > 1) {
+      instances.push({ nodeId: id, detail: `Rows have inconsistent column counts (${distinct.join(', ')}) – may indicate a missing or extra cell` });
+    }
+  }
+  return instances;
+}
+
+// Approximates Acrobat's "Headers" check (data cells must be identifiable
+// via Scope or a /Headers reference): this app manages Scope, not raw
+// /Headers ids, so a table needs at least one TH, and every TH needs Scope
+// set, to pass.
+function checkTableHeaders() {
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element' || node.role !== 'Table') continue;
+    const cells = getTableRows(node).flatMap(getRowCells);
+    const thCells = cells.filter((c) => c.role === 'TH');
+    if (thCells.length === 0) {
+      instances.push({ nodeId: id, detail: 'Table has no header (TH) cells' });
+      continue;
+    }
+    for (const cell of thCells) {
+      if (!cell.scope) instances.push({ nodeId: cell.id, detail: 'Header cell (TH) has no Scope set (Row/Column/Both)' });
+    }
+  }
+  return instances;
+}
+
+function checkFigureAltText() {
+  const instances = [];
+  for (const [id, entry] of state.nodesById) {
+    const node = entry.node;
+    if (node.type !== 'element' || (node.role !== 'Figure' && node.role !== 'Formula')) continue;
+    if (!node.alt || !node.alt.trim()) {
+      instances.push({ nodeId: id, detail: `${node.role} tag has no alternate text` });
+    }
+  }
+  return instances;
+}
+
+function countLabel(n, singular, plural = `${singular}s`) {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+function buildDocumentGroup() {
+  const checks = [];
+  const tagged = !!state.hasStructTree && !!state.docInfo.markedTagged;
+  checks.push({
+    title: 'Tagged PDF',
+    status: tagged ? 'pass' : 'fail',
+    detail: !state.hasStructTree
+      ? 'Document has no accessibility structure tree.'
+      : state.docInfo.markedTagged
+        ? 'Document has a structure tree and is marked as tagged.'
+        : 'Document has a structure tree, but is not marked as tagged (MarkInfo/Marked is not set).',
+    instances: [],
+  });
+
+  const title = (state.docInfo.title || '').trim();
+  checks.push({
+    title: 'Document title',
+    status: title ? 'pass' : 'fail',
+    detail: title ? `Title is set to “${title}”.` : 'No document title is set.',
+    instances: [],
+  });
+
+  const lang = (state.docInfo.lang || '').trim();
+  checks.push({
+    title: 'Primary language',
+    status: lang ? 'pass' : 'fail',
+    detail: lang ? `Document language is set to “${lang}”.` : 'No primary document language is set.',
+    instances: [],
+  });
+
+  const accessible = state.docInfo.accessibilityPermission !== false;
+  checks.push({
+    title: 'Accessibility permission flag',
+    status: accessible ? 'pass' : 'fail',
+    detail: accessible ? 'Content extraction for accessibility is allowed.' : 'The document’s security settings block content extraction for accessibility.',
+    instances: [],
+  });
+
+  return { name: 'Document', checks };
+}
+
+function buildBookmarksGroup() {
+  const hasBookmarks = !!(state.outline && state.outline.length > 0);
+  const longDoc = state.pageCount >= 20;
+  let status, detail;
+  if (hasBookmarks) {
+    status = 'pass';
+    detail = 'Document has bookmarks.';
+  } else if (longDoc) {
+    status = 'warn';
+    detail = `Document has ${state.pageCount} pages and no bookmarks – consider adding them for easier navigation.`;
+  } else {
+    status = 'na';
+    detail = 'Document has no bookmarks (not required for a document this short).';
+  }
+  return { name: 'Bookmarks', checks: [{ title: 'Bookmarks present for long documents', status, detail, instances: [] }] };
+}
+
+function buildHeadingsGroup() {
+  const instances = checkHeadingOrder();
+  return {
+    name: 'Headings',
+    checks: [{
+      title: 'Heading levels are not skipped',
+      status: instances.length ? 'fail' : 'pass',
+      detail: instances.length ? `${countLabel(instances.length, 'heading')} skip a level.` : 'No skipped heading levels found.',
+      instances,
+    }],
+  };
+}
+
+function buildListsGroup() {
+  const instances = checkListStructure();
+  return {
+    name: 'Lists',
+    checks: [{
+      title: 'List items are correctly nested',
+      status: instances.length ? 'fail' : 'pass',
+      detail: instances.length ? `${countLabel(instances.length, 'tag')} incorrectly nested.` : 'List items and labels are correctly nested.',
+      instances,
+    }],
+  };
+}
+
+function buildTablesGroup() {
+  const rowInstances = checkTableRowStructure();
+  const cellInstances = checkTableCellStructure();
+  const regularityInstances = checkTableRegularity();
+  const headerInstances = checkTableHeaders();
+  return {
+    name: 'Tables',
+    checks: [
+      {
+        title: 'Rows',
+        status: rowInstances.length ? 'fail' : 'pass',
+        detail: rowInstances.length ? `${countLabel(rowInstances.length, 'row')} not contained in Table/THead/TBody/TFoot.` : 'Every row is correctly contained.',
+        instances: rowInstances,
+      },
+      {
+        title: 'TH and TD',
+        status: cellInstances.length ? 'fail' : 'pass',
+        detail: cellInstances.length ? `${countLabel(cellInstances.length, 'cell')} not contained in a row.` : 'Every header/data cell is correctly contained in a row.',
+        instances: cellInstances,
+      },
+      {
+        title: 'Regularity',
+        status: regularityInstances.length ? 'warn' : 'pass',
+        detail: regularityInstances.length ? `${countLabel(regularityInstances.length, 'table')} with inconsistent row widths.` : 'Table rows have consistent column counts.',
+        instances: regularityInstances,
+      },
+      {
+        title: 'Headers',
+        status: headerInstances.length ? 'fail' : 'pass',
+        detail: headerInstances.length ? `${countLabel(headerInstances.length, 'issue')} with table headers.` : 'Every table has identified header cells.',
+        instances: headerInstances,
+      },
+    ],
+  };
+}
+
+function buildAltTextGroup() {
+  const instances = checkFigureAltText();
+  return {
+    name: 'Alternate Text',
+    checks: [{
+      title: 'Figures and formulas',
+      status: instances.length ? 'fail' : 'pass',
+      detail: instances.length ? `${countLabel(instances.length, 'tag')} missing alternate text.` : 'Every figure/formula has alternate text.',
+      instances,
+    }],
+  };
+}
+
+function computeAccessibilityChecks() {
+  const groups = [buildDocumentGroup(), buildBookmarksGroup()];
+  if (state.hasStructTree) {
+    groups.push(buildHeadingsGroup(), buildListsGroup(), buildTablesGroup(), buildAltTextGroup());
+  } else {
+    groups.push({
+      name: 'Structure',
+      checks: [{
+        title: 'Tag-tree checks',
+        status: 'na',
+        detail: 'This document has no tag tree, so heading/list/table/alternate-text checks do not apply.',
+        instances: [],
+      }],
+    });
+  }
+  return groups;
+}
+
+function renderVerifyResults() {
+  const groups = computeAccessibilityChecks();
+  const allChecks = groups.flatMap((g) => g.checks);
+  const failCount = allChecks.filter((c) => c.status === 'fail').length;
+  const warnCount = allChecks.filter((c) => c.status === 'warn').length;
+
+  el.verifyBody.innerHTML = '';
+
+  const summary = document.createElement('p');
+  summary.className = 'verify-summary';
+  if (failCount === 0 && warnCount === 0) {
+    summary.innerHTML = '<strong>No issues found.</strong>';
+  } else {
+    const parts = [];
+    if (failCount) parts.push(`<strong>${countLabel(failCount, 'failed check')}</strong>`);
+    if (warnCount) parts.push(`<strong>${countLabel(warnCount, 'warning')}</strong>`);
+    summary.innerHTML = parts.join(', ') + '.';
+  }
+  el.verifyBody.appendChild(summary);
+
+  for (const group of groups) {
+    const section = document.createElement('section');
+    section.className = 'verify-group';
+    const h3 = document.createElement('h3');
+    h3.textContent = group.name;
+    section.appendChild(h3);
+
+    for (const check of group.checks) {
+      const row = document.createElement('div');
+      row.className = 'verify-check';
+
+      const header = document.createElement('div');
+      header.className = 'verify-check-header';
+      const dot = document.createElement('span');
+      dot.className = `verify-status verify-status-${check.status}`;
+      const title = document.createElement('span');
+      title.className = 'verify-check-title';
+      title.textContent = check.title;
+      const detail = document.createElement('span');
+      detail.className = 'verify-check-detail';
+      detail.textContent = check.detail;
+      header.append(dot, title, detail);
+      row.appendChild(header);
+
+      if (check.instances.length > 0) {
+        const list = document.createElement('ul');
+        list.className = 'verify-instances';
+        for (const instance of check.instances.slice(0, 100)) {
+          const li = document.createElement('li');
+          li.className = 'verify-instance';
+          li.textContent = instance.detail;
+          li.addEventListener('click', () => jumpToVerifyInstance(instance.nodeId));
+          list.appendChild(li);
+        }
+        row.appendChild(list);
+      }
+
+      section.appendChild(row);
+    }
+
+    el.verifyBody.appendChild(section);
+  }
+}
+
+function jumpToVerifyInstance(nodeId) {
+  if (!state.nodesById.has(nodeId)) return;
+  el.verifyDialog.close();
+  setActivePanel('properties');
+  selectNode(nodeId);
+}
+
+el.btnVerify.addEventListener('click', () => {
+  if (!state.docId) return;
+  renderVerifyResults();
+  el.verifyDialog.showModal();
+});
+el.btnCloseVerify.addEventListener('click', () => el.verifyDialog.close());
+el.verifyDialog.addEventListener('click', (e) => {
+  if (e.target === el.verifyDialog) el.verifyDialog.close();
+});
+
 // --- PDF.js viewer -------------------------------------------------------
 
 function base64ToUint8Array(base64) {
@@ -3123,6 +3540,8 @@ async function performOpen() {
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnAddFigure.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
+    state.hasStructTree = !!opened.hasStructTree;
+    el.btnVerify.disabled = false; // Verify's Document-level checks apply even to an untagged PDF
     stopWalking();
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
