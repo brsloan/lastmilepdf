@@ -185,8 +185,16 @@ function buildAppMenu() {
         { role: 'selectAll' },
       ],
     },
-    { role: 'viewMenu' },
-    { role: 'windowMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
     {
       label: 'Help',
       submenu: [
