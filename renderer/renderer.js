@@ -3147,6 +3147,10 @@ window.addEventListener('keydown', (e) => {
 el.tagFilter.addEventListener('change', () => {
   state.filter = el.tagFilter.value;
   renderTree();
+  // Move focus off the <select> and back to the tree so arrow keys
+  // immediately navigate rows again - keyboard tree nav bails out
+  // whenever document.activeElement is an INPUT/TEXTAREA/SELECT.
+  el.tagFilter.blur();
   // Switching back to the full tree can leave the still-selected tag
   // scrolled out of view (it may have been far from the filtered rows
   // that were showing) - bring it back into sight without touching the
