@@ -87,7 +87,6 @@ const el = {
   btnWalk: document.getElementById('btn-walk'),
   btnVerify: document.getElementById('btn-verify'),
   tagFilter: document.getElementById('tag-filter'),
-  statusMessage: document.getElementById('status-message'),
   statusBar: document.getElementById('status-bar'),
   noStructBanner: document.getElementById('no-struct-banner'),
   canvas: document.getElementById('pdf-canvas'),
@@ -157,7 +156,6 @@ const el = {
 const DEFAULT_ACTUAL_TEXT_PLACEHOLDER = el.fieldActualText.placeholder;
 
 function setStatus(message) {
-  el.statusMessage.textContent = message;
   el.statusBar.textContent = message;
 }
 
