@@ -22,6 +22,13 @@ const WALK_SPEED_MIN = 0.5;
 const WALK_SPEED_MAX = 10;
 const WALK_SPEED_STEP = 0.5;
 
+const APP_NAME = 'LastMilePDF';
+
+function setFileName(fileName) {
+  state.fileName = fileName;
+  document.title = fileName ? `${APP_NAME} — ${fileName}` : APP_NAME;
+}
+
 const state = {
   docId: null,
   fileName: null,
@@ -80,7 +87,6 @@ const el = {
   btnWalk: document.getElementById('btn-walk'),
   btnVerify: document.getElementById('btn-verify'),
   tagFilter: document.getElementById('tag-filter'),
-  fileName: document.getElementById('file-name'),
   statusMessage: document.getElementById('status-message'),
   statusBar: document.getElementById('status-bar'),
   noStructBanner: document.getElementById('no-struct-banner'),
@@ -3566,9 +3572,8 @@ async function performOpen() {
     }
 
     state.docId = opened.docId;
-    state.fileName = opened.filePath.split(/[\\/]/).pop();
+    setFileName(opened.filePath.split(/[\\/]/).pop());
     state.savedFilePath = opened.filePath; // Save overwrites the file it was opened from until Save As picks a new one
-    el.fileName.textContent = state.fileName;
     el.btnKillDivs.disabled = !opened.hasStructTree;
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
@@ -3623,8 +3628,7 @@ async function performSaveAs() {
     const savedPath = await window.api.savePdf(state.docId, suggested);
     if (savedPath) {
       state.savedFilePath = savedPath;
-      state.fileName = savedPath.split(/[\\/]/).pop();
-      el.fileName.textContent = state.fileName;
+      setFileName(savedPath.split(/[\\/]/).pop());
     }
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
   } catch (err) {

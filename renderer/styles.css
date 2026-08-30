@@ -125,14 +125,6 @@ body.busy * {
   min-width: 0;
 }
 
-.file-name {
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 320px;
-}
-
 .status-message {
   color: var(--text-dim);
 }
