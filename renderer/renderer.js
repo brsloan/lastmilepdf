@@ -1298,23 +1298,45 @@ async function getPageMcidGraphicsInfo(pageNumber) {
   const vectorMcids = new Set();
   const mcidStack = [];
   const ctmStack = [];
+  const clipStack = [];
   let ctm = [1, 0, 0, 1, 0, 0];
+  // The active clip region, as [minX, minY, maxX, maxY] in viewport pixel
+  // space (already fixed by the CTM in effect when it was set - PDF clip
+  // regions don't move with later `cm`s), or null when nothing restricts
+  // painting. Needed because a placed image/path can be declared far larger
+  // than what's actually visible - e.g. one shared full-page background
+  // image reused by several Figures, each clipped down to just its own
+  // small on-page region - and painting there is a poor proxy for a Figure's
+  // real footprint unless that clip is accounted for.
+  let activeClip = null;
   let currentPathMinMax = null; // [minX, minY, maxX, maxY] in user space, or null once painted
 
   const currentMcid = () => (mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null);
 
-  const rectFromCorners = (corners) => {
+  const boundsFromCorners = (corners) => {
     const transformed = corners
       .map((p) => Util.applyTransform(p, ctm))
       .map((p) => Util.applyTransform(p, viewport.transform));
     const xs = transformed.map((c) => c[0]);
     const ys = transformed.map((c) => c[1]);
     return {
-      x: Math.min(...xs),
-      y: Math.min(...ys),
-      width: Math.max(...xs) - Math.min(...xs),
-      height: Math.max(...ys) - Math.min(...ys),
+      minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys),
     };
+  };
+
+  const boundsToRect = (b) => ({
+    x: b.minX, y: b.minY, width: Math.max(0, b.maxX - b.minX), height: Math.max(0, b.maxY - b.minY),
+  });
+
+  const rectFromCorners = (corners) => {
+    let bounds = boundsFromCorners(corners);
+    if (activeClip) {
+      bounds = {
+        minX: Math.max(bounds.minX, activeClip[0]), minY: Math.max(bounds.minY, activeClip[1]),
+        maxX: Math.min(bounds.maxX, activeClip[2]), maxY: Math.min(bounds.maxY, activeClip[3]),
+      };
+    }
+    return boundsToRect(bounds);
   };
 
   const unitSquareRectForCurrentMcid = () => {
@@ -1331,19 +1353,23 @@ async function getPageMcidGraphicsInfo(pageNumber) {
     switch (fn) {
       case OPS.save:
         ctmStack.push(ctm);
+        clipStack.push(activeClip);
         break;
       case OPS.restore:
         ctm = ctmStack.length > 0 ? ctmStack.pop() : ctm;
+        activeClip = clipStack.length > 0 ? clipStack.pop() : activeClip;
         break;
       case OPS.transform:
         ctm = Util.transform(ctm, args);
         break;
       case OPS.paintFormXObjectBegin:
         ctmStack.push(ctm);
+        clipStack.push(activeClip);
         if (args && args[0]) ctm = Util.transform(ctm, args[0]);
         break;
       case OPS.paintFormXObjectEnd:
         ctm = ctmStack.length > 0 ? ctmStack.pop() : ctm;
+        activeClip = clipStack.length > 0 ? clipStack.pop() : activeClip;
         break;
       case OPS.beginMarkedContentProps:
         mcidStack.push(typeof args[1] === 'number' ? args[1] : null);
@@ -1362,6 +1388,21 @@ async function getPageMcidGraphicsInfo(pageNumber) {
         break;
       case OPS.constructPath:
         currentPathMinMax = args[2];
+        break;
+      // A clip path restricts everything painted afterward (until the next
+      // restore) to its bounds - intersect it into activeClip rather than
+      // replacing it outright, since clips nest (a q...Q inside an already-
+      // clipped region only ever shrinks further).
+      case OPS.clip:
+      case OPS.eoClip:
+        if (currentPathMinMax && Number.isFinite(currentPathMinMax[0])) {
+          const [minX, minY, maxX, maxY] = currentPathMinMax;
+          const b = boundsFromCorners([[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]);
+          activeClip = activeClip
+            ? [Math.max(activeClip[0], b.minX), Math.max(activeClip[1], b.minY),
+              Math.min(activeClip[2], b.maxX), Math.min(activeClip[3], b.maxY)]
+            : [b.minX, b.minY, b.maxX, b.maxY];
+        }
         break;
       // A path is built by constructPath and only actually painted by one
       // of these - a clip-only path (W n with no stroke/fill) shouldn't
@@ -2225,12 +2266,28 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
   // (e.g. a Table whose own dict has a stale /BBox but no /Pg, inheriting an
   // ancestor's page while every /TR's content sits many pages later). Using
   // that bbox page as a highlight/jump target there would fight the real,
-  // per-leaf-resolved content pages, so bbox targets only apply as a
-  // fallback when mcid targets came up empty.
+  // per-leaf-resolved content pages, so for page-selection purposes bbox
+  // targets only apply as a fallback when mcid targets came up empty.
   const targetsByNode = new Map(selectedIds.map((id) => [id, collectTargetMcids(id)]));
   const bboxTargetsByNode = new Map(selectedIds.map((id) => [
     id, targetsByNode.get(id).length > 0 ? [] : collectTargetBBoxes(id),
   ]));
+  // For drawing the box on whichever page we land on, though, a Figure's own
+  // bbox is worth including even when it also has mcid content - e.g. a
+  // Figure whose /Layout /BBox covers its whole drawn region but whose
+  // content is just one text leaf dragged into it (or, for a Figure built
+  // around a full-size image clipped down to a small visible slice, whose
+  // content rect balloons out past the clip - see getPageMcidGraphicsInfo).
+  // Unioning the bbox in (rather than swapping to it) only ever grows the
+  // box toward the tag's real footprint, never shrinks a correct one, and
+  // it's filtered to the current page below, so it can't fight the page
+  // chosen above. Scoped to the 'figure' category (Figure/Formula) rather
+  // than every element, so this doesn't resurrect the stale-Table-bbox risk
+  // the comment above warns about.
+  const renderBBoxTargetsByNode = new Map(selectedIds.map((id) => {
+    const role = state.nodesById.get(id)?.node.role;
+    return [id, categoryForRole(role) === 'figure' ? collectTargetBBoxes(id) : []];
+  }));
   const activeTargets = [...(targetsByNode.get(nodeId) || []), ...(bboxTargetsByNode.get(nodeId) || [])];
   const allTargets = [...Array.from(targetsByNode.values()).flat(), ...Array.from(bboxTargetsByNode.values()).flat()];
   if (allTargets.length === 0) {
@@ -2264,7 +2321,7 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
         const graphicRects = graphicRectMap.get(mcid);
         if (graphicRects) rects.push(...graphicRects);
       }
-      const bboxTargets = (bboxTargetsByNode.get(id) || []).filter((t) => t.page + 1 === state.currentPage);
+      const bboxTargets = (renderBBoxTargetsByNode.get(id) || []).filter((t) => t.page + 1 === state.currentPage);
       for (const t of bboxTargets) rects.push(bboxRectInViewport(t.bbox, viewport));
       if (rects.length === 0) continue;
       const rect = unionRects(rects);
