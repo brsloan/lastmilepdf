@@ -1408,30 +1408,62 @@ async function findFullPageImageLeafIds() {
   return matches;
 }
 
+// Resolves a single content leaf's display text: its own text run if it has
+// one, else a bracketed type label for an image `Do` call or a stroked/
+// filled vector path (see getPageMcidGraphicsInfo()) - the same fallback
+// loadContentText() uses for a content leaf's tree-row preview. Null when
+// the mcid is out of page range or matches nothing (silently dropped by
+// callers, same as before this was factored out of pullContentText()).
+async function resolveMcidText(page0, mcid) {
+  const pageNumber = page0 + 1;
+  if (pageNumber < 1 || pageNumber > state.pageCount) return null;
+  const map = await getPageMcidTextMap(pageNumber);
+  const text = map.get(mcid);
+  if (text) return text;
+  const { imageRects, vectorMcids } = await getPageMcidGraphicsInfo(pageNumber);
+  if (imageRects.has(mcid)) return '[Image]';
+  if (vectorMcids.has(mcid)) return '[Graphic]';
+  return null;
+}
+
 // Collects a tag's own content text (its content-leaf descendants' text,
 // per collectTargetMcids), joined with a single space between blocks - used
-// by the "Pull Content" button to seed Actual Text, and by the table preview
-// (see renderTablePreview()) to fill in each generated cell. A leaf with no
-// text run of its own (an image `Do` call or a stroked/filled vector path -
-// see getPageMcidGraphicsInfo()) contributes a bracketed type label instead
-// of being silently dropped, the same fallback loadContentText() uses for a
-// content leaf's tree-row preview.
+// by the "Pull Content" button to seed Actual Text. See pullCellText() for
+// the table preview's variant, which special-cases nested Figure tags.
 async function pullContentText(nodeId) {
   const targets = collectTargetMcids(nodeId);
   const parts = [];
   for (const target of targets) {
-    const pageNumber = target.page + 1;
-    if (pageNumber < 1 || pageNumber > state.pageCount) continue;
-    const map = await getPageMcidTextMap(pageNumber);
-    const text = map.get(target.mcid);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const { imageRects, vectorMcids } = await getPageMcidGraphicsInfo(pageNumber);
-    if (imageRects.has(target.mcid)) parts.push('[Image]');
-    else if (vectorMcids.has(target.mcid)) parts.push('[Graphic]');
+    const text = await resolveMcidText(target.page, target.mcid);
+    if (text) parts.push(text);
   }
+  return parts.join(' ');
+}
+
+// Like pullContentText(), but for a table preview cell (see
+// renderTablePreview()): a nested Figure tag contributes a single "[Figure]"
+// marker in its place rather than being descended into for its own content
+// leaves' text/image labels. That keeps a cell mixing a Figure with ordinary
+// text (e.g. a caption alongside an image) readable - the real text is
+// pulled as usual and only the figure's portion collapses to "[Figure]",
+// instead of one Figure anywhere in the cell blanking out all of it.
+async function pullCellText(cellNode) {
+  const parts = [];
+  async function visit(node) {
+    if (node.type === 'content') {
+      if (node.mcid !== null && node.mcid !== undefined && node.page !== null && node.page !== undefined) {
+        const text = await resolveMcidText(node.page, node.mcid);
+        if (text) parts.push(text);
+      }
+      return;
+    }
+    if (node.role === 'Figure') {
+      parts.push('[Figure]');
+      return;
+    }
+    for (const child of node.children || []) await visit(child);
+  }
+  for (const child of cellNode.children || []) await visit(child);
   return parts.join(' ');
 }
 
@@ -1543,7 +1575,7 @@ async function renderTablePreview(tableNode) {
     const trEl = document.createElement('tr');
     for (const cell of collectRowCells(tr)) {
       const isHeader = cell.role === 'TH';
-      const text = await pullContentText(cell.id);
+      const text = await pullCellText(cell);
       if (token !== state.tablePreviewToken) return; // selection changed mid-flight
 
       const cellEl = document.createElement(isHeader ? 'th' : 'td');
