@@ -1189,6 +1189,16 @@ kbd {
   background: rgba(0, 0, 0, 0.55);
 }
 
+.verify-notice {
+  margin: 0;
+  padding: 10px 20px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: rgba(127, 127, 127, 0.1);
+  border-bottom: 1px solid var(--border);
+}
+
 .verify-body {
   padding: 4px 20px 20px;
   overflow-y: auto;
