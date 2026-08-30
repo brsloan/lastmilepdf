@@ -633,6 +633,64 @@ def convert_to_paragraph(doc_id, node_ids):
     return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
 
 
+def _collect_leaf_ids(doc, node_id):
+    """Every content/object-ref leaf anywhere under `node_id`, in document
+    order - descends through struct-element children of any role (unlike
+    _leaves_through_spans, which only tunnels through Span, or _paragraphize,
+    which stops at the first non-transparent role). Used by the 'F' shortcut
+    to flatten a converted tag's whole subtree down to just its content
+    leaves, discarding whatever structure used to sit between them."""
+    leaves = []
+    for child_id in _direct_child_ids(doc, node_id):
+        if doc["node_kind"].get(child_id) == "element":
+            leaves.extend(_collect_leaf_ids(doc, child_id))
+        else:
+            leaves.append(child_id)
+    return leaves
+
+
+def convert_to_figure(doc_id, node_ids):
+    """Converts each selected tag to a Figure. A Figure is expected to hold
+    its content directly rather than through nested structure, so a
+    converted struct element has its whole subtree collapsed first (see
+    _collect_leaf_ids): every content/object-ref leaf under it becomes a
+    direct child, and every struct element in between - along with whatever
+    else it held, like a discarded List's dissolved LIs - is simply dropped
+    from the tree. A content/object-ref leaf selected on its own is just
+    wrapped in a new Figure, same as set_role_or_wrap() handles H1-H6/LI (a
+    single leaf is already "just the content leaves"). Backs the tag tree's
+    'F' shortcut."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot convert the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    top_level = _top_level_selection(doc, node_ids)
+
+    _push_undo_snapshot(doc)
+    for node_id in top_level:
+        if doc["node_kind"].get(node_id) == "element":
+            elem = doc["elements"][node_id]
+            leaf_ids = _collect_leaf_ids(doc, node_id)
+            leaf_objs = [doc["elements"][lid] for lid in leaf_ids]
+            elem["/S"] = pikepdf.Name("/Figure")
+            if leaf_objs:
+                elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
+                page_index = doc["node_pages"].get(leaf_ids[0])
+                if page_index is not None:
+                    elem["/Pg"] = doc["pdf"].pages[page_index].obj
+            elif "/K" in elem:
+                del elem["/K"]
+        else:
+            _wrap_leaf(doc, node_id, "Figure")
+
+    return {"tree": _rebuild_registry(doc_id), **_undo_state(doc)}
+
+
 def _group_into_container(doc_id, node_ids, container_role, item_role, preserved_roles, cant_group_msg):
     """Shared shape behind the 'L'/'T'/'R' shortcuts: groups the selected
     tags into a newly created container struct element (List/Table/TR).
@@ -2184,6 +2242,8 @@ def main():
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
             elif cmd == "convert_to_paragraph":
                 result = convert_to_paragraph(request["docId"], request["nodeIds"])
+            elif cmd == "convert_to_figure":
+                result = convert_to_figure(request["docId"], request["nodeIds"])
             elif cmd == "make_list":
                 result = make_list(request["docId"], request["nodeIds"])
             elif cmd == "make_table":

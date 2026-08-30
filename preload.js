@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:set-role-or-wrap', { docId, nodeIds, role }),
   convertToParagraph: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:convert-to-paragraph', { docId, nodeIds }),
+  convertToFigure: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:convert-to-figure', { docId, nodeIds }),
   makeList: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:make-list', { docId, nodeIds }),
   makeTable: (docId, nodeIds) =>

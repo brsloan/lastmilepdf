@@ -2450,12 +2450,12 @@ async function deleteSelection() {
   }
 }
 
-// 1-6/P/L/I/T/R/D/H convert the current selection's role, each via a
+// 1-6/P/L/I/T/R/D/H/F convert the current selection's role, each via a
 // dedicated backend op (set_role_or_wrap/convert_to_paragraph/make_list/
-// make_table/make_tr in tag_worker.py) rather than a plain Role edit, since
-// a content/object-ref leaf has no role of its own to set - these wrap it
-// in a brand-new struct element instead. See each handler below for what
-// its shortcut actually does structurally.
+// make_table/make_tr/convert_to_figure in tag_worker.py) rather than a plain
+// Role edit, since a content/object-ref leaf has no role of its own to set -
+// these wrap it in a brand-new struct element instead. See each handler
+// below for what its shortcut actually does structurally.
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (state.selectedNodeIds.size === 0) return;
@@ -2491,6 +2491,9 @@ window.addEventListener('keydown', (e) => {
   } else if (key === 'h') {
     e.preventDefault();
     applyRoleShortcut('TH');
+  } else if (key === 'f') {
+    e.preventDefault();
+    convertSelectionToFigure();
   }
 });
 
@@ -2563,6 +2566,34 @@ async function convertSelectionToParagraph() {
     setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to paragraph.`);
   } catch (err) {
     reportError('Could not convert to paragraph', err);
+  }
+}
+
+// Backs the 'F' shortcut: converts each selected tag to a Figure, collapsing
+// its whole subtree down to just its content/object-ref leaves (see
+// convert_to_figure() in tag_worker.py for why - a Figure holds its content
+// directly rather than through nested structure). Reselects on a single
+// target the same way convertSelectionToParagraph() does. A multi-target
+// conversion can restructure arbitrarily much of the tree at once, so it
+// just clears the selection instead.
+async function convertSelectionToFigure() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  try {
+    const result = await window.api.convertToFigure(state.docId, topLevelIds);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
+      selectNode(topLevelIds[0]);
+    } else {
+      closeDetails();
+    }
+    setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to figure.`);
+  } catch (err) {
+    reportError('Could not convert to figure', err);
   }
 }
 

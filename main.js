@@ -280,6 +280,10 @@ ipcMain.handle('tags:convert-to-paragraph', async (_event, { docId, nodeIds }) =
   return callWorker('convert_to_paragraph', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:convert-to-figure', async (_event, { docId, nodeIds }) => {
+  return callWorker('convert_to_figure', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds }) => {
   return callWorker('make_list', { docId, nodeIds });
 });
