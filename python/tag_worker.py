@@ -688,6 +688,42 @@ def _collect_leaf_ids(doc, node_id):
     return leaves
 
 
+def _figure_kid_for_leaf(doc, leaf_id, figure_page):
+    """The object to put in a Figure's /K to reference the leaf at
+    `leaf_id`, given the Figure resolves to `figure_page`.
+
+    Usually that's just the leaf itself. The exception is a bare MCID
+    coming from a different page: it's a plain integer with no dict of its
+    own to carry /Pg, so it resolves against whatever page its *containing*
+    element does (see the module docstring). Collapsing a subtree that
+    spans a page break - which _collect_leaf_ids() happily does, since it
+    descends through struct elements of any role and any /Pg - would
+    therefore silently repoint every later-page leaf at the Figure's page.
+    That's not a cosmetic mislabel: those MCIDs then name whatever marked
+    content happens to share their numbers on the Figure's page (already
+    owned by other tags, since MCIDs restart per page), while the content
+    they actually came from is left referenced by nothing at all.
+
+    reorder_node() refuses this move outright rather than corrupt the tree
+    that way. Here we can do better than refuse, because an /MCR carries
+    its own /Pg and so isn't bound to its parent's page: promote just the
+    off-page bare MCIDs to /MCR and they keep pointing exactly where they
+    always did. Everything already on the Figure's page - which is every
+    leaf in the ordinary single-page conversion - is returned untouched,
+    so that path is unchanged."""
+    obj = doc["elements"][leaf_id]
+    if doc["node_kind"].get(leaf_id) != "content-int":
+        return obj  # /MCR and /OBJR already carry their own /Pg
+    page = doc["node_pages"].get(leaf_id)
+    if page is None or page == figure_page:
+        return obj  # inherits the right page anyway
+    return pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/MCR"),
+        "/Pg": doc["pdf"].pages[page].obj,
+        "/MCID": int(obj),
+    })
+
+
 def convert_to_figure(doc_id, node_ids):
     """Converts each selected tag to a Figure. A Figure is expected to hold
     its content directly rather than through nested structure, so a
@@ -715,13 +751,16 @@ def convert_to_figure(doc_id, node_ids):
         if doc["node_kind"].get(node_id) == "element":
             elem = doc["elements"][node_id]
             leaf_ids = _collect_leaf_ids(doc, node_id)
-            leaf_objs = [doc["elements"][lid] for lid in leaf_ids]
             elem["/S"] = pikepdf.Name("/Figure")
-            if leaf_objs:
-                elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
+            if leaf_ids:
+                # Resolve the Figure's own page first: it decides which
+                # leaves inherit the right page as-is and which have to
+                # carry their own - see _figure_kid_for_leaf().
                 page_index = doc["node_pages"].get(leaf_ids[0])
                 if page_index is not None:
                     elem["/Pg"] = doc["pdf"].pages[page_index].obj
+                leaf_objs = [_figure_kid_for_leaf(doc, lid, page_index) for lid in leaf_ids]
+                elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
             elif "/K" in elem:
                 del elem["/K"]
         else:
