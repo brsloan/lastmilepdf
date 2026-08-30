@@ -1,0 +1,35 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LastMilePDF icon">
+  <title>LastMilePDF</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#24262d"/>
+      <stop offset="100%" stop-color="#1b1c21"/>
+    </linearGradient>
+    <linearGradient id="markGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5fb3a3"/>
+      <stop offset="100%" stop-color="#86d9c7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- app tile -->
+  <rect x="8" y="8" width="496" height="496" rx="96" fill="url(#bgGrad)" stroke="#383b46" stroke-width="4"/>
+
+  <!-- page, with folded top-right corner -->
+  <path d="M56 32 H392 L456 96 V472 A16 16 0 0 1 440 488 H56 A16 16 0 0 1 40 472 V48 A16 16 0 0 1 56 32 Z"
+        fill="#ffffff"/>
+  <path d="M392 32 L456 96 H408 A16 16 0 0 1 392 80 Z" fill="#c7c9ce"/>
+
+  <!-- tag structure lines on the page, echoing the tag tree -->
+  <g stroke="#9a9ea9" stroke-width="12" stroke-linecap="round">
+    <line x1="96" y1="166" x2="256" y2="166"/>
+    <line x1="96" y1="210" x2="320" y2="210"/>
+  </g>
+
+  <!-- brand mark: /> -->
+  <text x="248" y="400" font-family="Consolas, 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace"
+        font-size="220" font-weight="700" text-anchor="middle" fill="url(#markGrad)">/&gt;</text>
+
+  <!-- accessibility check dot -->
+  <circle cx="412" cy="428" r="38" fill="#1b1c21" stroke="#7fd9a8" stroke-width="6"/>
+  <path d="M395 428 L408 441 L432 413" fill="none" stroke="#7fd9a8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
