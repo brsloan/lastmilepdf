@@ -2958,9 +2958,9 @@ window.addEventListener('keydown', (e) => {
 
 // Ctrl/Cmd+Right/Left steps a heading tag (H1-H6) down/up a level. No-op on
 // anything else, including the bare "H" role, which has no numbered level -
-// in which case it instead expands every tag in the tree (Right) or
-// collapses every tag except /Document and its direct children, so the
-// top-level list of /Document's contents stays visible (Left).
+// in which case Ctrl/Cmd+Left instead collapses every tag except /Document
+// and its direct children, so the top-level list of /Document's contents
+// stays visible.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
@@ -2972,19 +2972,17 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
+  if (e.key !== 'ArrowLeft') return;
   if (!state.tree) return;
 
   e.preventDefault();
-  const collapse = e.key === 'ArrowLeft';
   walkTree(state.tree, (node) => {
     if (node.type !== 'element') return;
-    if (collapse) {
-      // Keep /Document's own children expanded, so its top-level contents
-      // stay visible as a list - only collapse what's nested inside them.
-      const parentId = state.nodesById.get(node.id)?.parentId;
-      if (node.id === state.tree.id || parentId === state.tree.id) return;
-    }
-    state.collapseOverrides.set(node.id, collapse);
+    // Keep /Document's own children expanded, so its top-level contents
+    // stay visible as a list - only collapse what's nested inside them.
+    const parentId = state.nodesById.get(node.id)?.parentId;
+    if (node.id === state.tree.id || parentId === state.tree.id) return;
+    state.collapseOverrides.set(node.id, true);
   });
   renderTree();
 });
