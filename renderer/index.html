@@ -28,6 +28,7 @@
       <button id="btn-scope-tables" class="btn btn-ghost" disabled title="Set Row/Column/Both scope on every table's TH cells based on its header shape">Scope Tables</button>
       <button id="btn-smartifact" class="btn btn-ghost" disabled title="Artifact image leaves that are the same size as their page (e.g. full-page scan backgrounds)">Smartifact</button>
       <button id="btn-add-figure" class="btn btn-ghost" disabled title="Drag a rectangle on the page to tag a missed figure (Esc to cancel)">Add Figures</button>
+      <button id="btn-add-p" class="btn btn-ghost" disabled title="Insert a new Paragraph tag after the selected tag (Ctrl+P)">Add P</button>
       <button id="btn-walk" class="btn btn-ghost" disabled title="Walk the tag tree, selecting one tag at a time (+/- to change speed, any other key to stop)">Walk</button>
       <button id="btn-verify" class="btn btn-ghost" disabled title="Check the document against common accessibility rules">Verify</button>
     </div>
@@ -292,6 +293,7 @@
         <dl>
           <div class="shortcut-row"><dt><kbd>1</kbd>&ndash;<kbd>6</kbd></dt><dd>Set role to H1&ndash;H6</dd></div>
           <div class="shortcut-row"><dt><kbd>P</kbd></dt><dd>Convert to Paragraph</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd></dt><dd>Insert a new Paragraph tag after the selection</dd></div>
           <div class="shortcut-row"><dt><kbd>L</kbd></dt><dd>Group selection into a List</dd></div>
           <div class="shortcut-row"><dt><kbd>I</kbd></dt><dd>Set role to List Item</dd></div>
           <div class="shortcut-row"><dt><kbd>T</kbd></dt><dd>Group selection into a Table (TH/TR kept, others become TD)</dd></div>
@@ -299,6 +301,7 @@
           <div class="shortcut-row"><dt><kbd>D</kbd></dt><dd>Set role to Table Cell (TD)</dd></div>
           <div class="shortcut-row"><dt><kbd>H</kbd></dt><dd>Set role to Table Header Cell (TH)</dd></div>
           <div class="shortcut-row"><dt><kbd>F</kbd></dt><dd>Convert to Figure (flattens contents to just content leaves)</dd></div>
+          <div class="shortcut-row"><dt><kbd>C</kbd></dt><dd>Set role to Caption</dd></div>
         </dl>
       </section>
 
@@ -363,7 +366,7 @@
 
       <section class="help-section">
         <h3>Tagging shortcuts</h3>
-        <p>With one or more tags selected, single-key shortcuts apply a role or restructure the selection: <kbd>1</kbd>&ndash;<kbd>6</kbd> set heading level H1&ndash;H6, <kbd>P</kbd> converts to Paragraph, <kbd>I</kbd> sets List Item, <kbd>D</kbd>/<kbd>H</kbd> set Table Cell/Table Header Cell, and <kbd>F</kbd> converts to a Figure, flattening its contents down to plain content leaves. <kbd>L</kbd> groups the whole selection into a new List, <kbd>T</kbd> groups it into a new Table (keeping any existing TH/TR tags, turning the rest into TD), and <kbd>R</kbd> groups it into a single Table Row the same way. See the Shortcuts dialog for the complete list, including selection and reordering keys.</p>
+        <p>With one or more tags selected, single-key shortcuts apply a role or restructure the selection: <kbd>1</kbd>&ndash;<kbd>6</kbd> set heading level H1&ndash;H6, <kbd>P</kbd> converts to Paragraph, <kbd>I</kbd> sets List Item, <kbd>D</kbd>/<kbd>H</kbd> set Table Cell/Table Header Cell, and <kbd>F</kbd> converts to a Figure, flattening its contents down to plain content leaves. <kbd>L</kbd> groups the whole selection into a new List, <kbd>T</kbd> groups it into a new Table (keeping any existing TH/TR tags, turning the rest into TD), and <kbd>R</kbd> groups it into a single Table Row the same way. <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd> (or the <strong>Add P</strong> button) instead inserts a brand-new, empty Paragraph tag right after the current selection, rather than converting it. See the Shortcuts dialog for the complete list, including selection and reordering keys.</p>
       </section>
 
       <section class="help-section">
@@ -373,6 +376,7 @@
           <div class="help-item"><dt>Scope Tables</dt><dd>Looks at each table's header shape and sets Row/Column/Both scope on its TH cells automatically.</dd></div>
           <div class="help-item"><dt>Smartifact</dt><dd>Finds image leaves that are the same size as their page &mdash; typically full-page scan backgrounds &mdash; and marks them as artifacts (decorative, skipped by screen readers).</dd></div>
           <div class="help-item"><dt>Add Figures</dt><dd>Toggles draw mode: drag a rectangle on the page preview to tag whatever's underneath as a new Figure. Press Esc to end draw mode.</dd></div>
+          <div class="help-item"><dt>Add P</dt><dd>Inserts a new, empty Paragraph tag into the tree immediately after the selected tag (or at the end of the document if nothing is selected). Same as <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd>.</dd></div>
           <div class="help-item"><dt>Walk</dt><dd>Steps through the tag tree automatically, one tag at a time, so you can read along with the preview. While walking, <kbd>+</kbd>/<kbd>-</kbd> adjust the speed (remembered for next time) and any other key stops it.</dd></div>
           <div class="help-item"><dt>Verify</dt><dd>Runs a set of common PDF accessibility checks (tagging, title, language, headings, lists, tables, alternate text, bookmarks) and opens the results in their own window. Click a listed issue to jump straight to the offending tag.</dd></div>
         </dl>

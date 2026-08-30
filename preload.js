@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:delete-nodes', { docId, nodeIds }),
   figureFromRect: (docId, pageIndex, rect) =>
     ipcRenderer.invoke('tags:figure-from-rect', { docId, pageIndex, rect }),
+  insertParagraphAfter: (docId, nodeId) =>
+    ipcRenderer.invoke('tags:insert-paragraph-after', { docId, nodeId }),
   setRoleOrWrap: (docId, nodeIds, role) =>
     ipcRenderer.invoke('tags:set-role-or-wrap', { docId, nodeIds, role }),
   convertToParagraph: (docId, nodeIds) =>

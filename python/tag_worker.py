@@ -2357,6 +2357,52 @@ def figure_from_rect(doc_id, page_index, rect):
     return {"tree": tree, "newNodeId": new_node_id, "method": method, **_undo_state(doc)}
 
 
+def insert_paragraph_after(doc_id, node_id):
+    """Inserts a new, empty /P struct element as the next sibling right
+    after `node_id` - backs the tag tree's Ctrl/Cmd+P shortcut and "Add P"
+    button. Unlike the bare 'P' shortcut (convert_to_paragraph()), which
+    relabels/wraps the existing selection in place, this always creates a
+    brand-new tag alongside it. With no selection, or the document root
+    selected, there's no sibling slot to anchor to, so it falls back to
+    appending under the document's insertion parent - the same place
+    figure_from_rect() attaches a new top-level tag. Like every other freshly
+    created tag in this file, it starts empty and is filled in afterward
+    through the normal update_node path."""
+    doc = documents[doc_id]
+    if "/StructTreeRoot" not in doc["pdf"].Root:
+        raise ValueError("This document has no structure tree yet")
+
+    if node_id and node_id != "root" and node_id in doc["elements"]:
+        parent_id = doc["parent_map"][node_id]
+        parent_obj = doc["elements"][parent_id]
+        node_obj = doc["elements"][node_id]
+        index = _kid_index(parent_obj, node_obj)
+        if index == -1:
+            raise ValueError("Could not locate selected tag in its parent")
+        index += 1
+        page_index = doc["node_pages"].get(node_id)
+    else:
+        parent_obj, _ = _document_insertion_parent(doc)
+        index = len(_iter_kids(parent_obj))
+        page_index = None
+
+    new_p = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/P"),
+        "/P": parent_obj,
+    }))
+    if page_index is not None:
+        new_p["/Pg"] = doc["pdf"].pages[page_index].obj
+
+    _push_undo_snapshot(doc)
+    _insert_kid(parent_obj, new_p, index)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_node_id = _node_id_for_object(doc, new_p)
+
+    return {"tree": tree, "newNodeId": new_node_id, **_undo_state(doc)}
+
+
 def _reindex_pages(doc):
     """Rebuilds page_index_by_objgen against doc["pdf"]'s current page
     objects - qpdf renumbers objects on save/reload, so the mapping built at
@@ -2478,6 +2524,8 @@ def main():
                 result = delete_nodes(request["docId"], request["nodeIds"])
             elif cmd == "figure_from_rect":
                 result = figure_from_rect(request["docId"], request["pageIndex"], request["rect"])
+            elif cmd == "insert_paragraph_after":
+                result = insert_paragraph_after(request["docId"], request.get("nodeId"))
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
             elif cmd == "convert_to_paragraph":

@@ -90,6 +90,7 @@ const el = {
   btnScopeTables: document.getElementById('btn-scope-tables'),
   btnSmartifact: document.getElementById('btn-smartifact'),
   btnAddFigure: document.getElementById('btn-add-figure'),
+  btnAddP: document.getElementById('btn-add-p'),
   btnWalk: document.getElementById('btn-walk'),
   btnVerify: document.getElementById('btn-verify'),
   tagFilter: document.getElementById('tag-filter'),
@@ -2636,6 +2637,21 @@ window.addEventListener('keydown', (e) => {
   else performRedo();
 });
 
+// Ctrl/Cmd+P inserts a new Paragraph tag after the selection - see
+// insertParagraphAfterSelection(). Distinct from the bare 'P' shortcut
+// handled further below, which converts the selection instead of inserting
+// next to it.
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key.toLowerCase() !== 'p') return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  e.preventDefault();
+  insertParagraphAfterSelection();
+});
+
 // Up/Down arrows step the current selection through the tree in visible
 // order - i.e. the same order rows appear in the DOM, since a collapsed
 // element's children simply aren't rendered (see renderTreeNode). Holding
@@ -2936,7 +2952,7 @@ async function deleteSelection() {
   }
 }
 
-// 1-6/P/L/I/T/R/D/H/F convert the current selection's role, each via a
+// 1-6/P/L/I/T/R/D/H/F/C convert the current selection's role, each via a
 // dedicated backend op (set_role_or_wrap/convert_to_paragraph/make_list/
 // make_table/make_tr/convert_to_figure in tag_worker.py) rather than a plain
 // Role edit, since a content/object-ref leaf has no role of its own to set -
@@ -2980,6 +2996,9 @@ window.addEventListener('keydown', (e) => {
   } else if (key === 'f') {
     e.preventDefault();
     convertSelectionToFigure();
+  } else if (key === 'c') {
+    e.preventDefault();
+    applyRoleShortcut('Caption');
   }
 });
 
@@ -3052,6 +3071,28 @@ async function convertSelectionToParagraph() {
     setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to paragraph.`);
   } catch (err) {
     reportError('Could not convert to paragraph', err);
+  }
+}
+
+// Backs the Ctrl/Cmd+P shortcut and the "Add P" button: inserts a brand-new,
+// empty Paragraph tag right after the current selection (or at the end of
+// the document if nothing is selected) - unlike the bare 'P' shortcut above,
+// which converts the existing selection in place, this always creates a
+// fresh tag alongside it. See insert_paragraph_after() in tag_worker.py.
+async function insertParagraphAfterSelection() {
+  if (!state.docId) return;
+
+  try {
+    const result = await window.api.insertParagraphAfter(state.docId, state.selectedNodeId || null);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (result.newNodeId && state.nodesById.has(result.newNodeId)) {
+      selectNode(result.newNodeId);
+    }
+    setStatus('Inserted new paragraph tag.');
+  } catch (err) {
+    reportError('Could not insert paragraph', err);
   }
 }
 
@@ -3764,6 +3805,7 @@ async function performOpen() {
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnAddFigure.disabled = !opened.hasStructTree;
+    el.btnAddP.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
     state.hasStructTree = !!opened.hasStructTree;
     el.btnVerify.disabled = false; // Verify's Document-level checks apply even to an untagged PDF
@@ -4007,6 +4049,10 @@ el.btnAddFigure.addEventListener('click', () => {
   if (!state.docId) return;
   setFigureDrawActive(!state.figureDrawActive);
   if (state.figureDrawActive) setStatus('Drag a rectangle around the figure to tag it (Esc to cancel).');
+});
+
+el.btnAddP.addEventListener('click', () => {
+  insertParagraphAfterSelection();
 });
 
 // Escape exits draw mode without tagging anything - captured ahead of any

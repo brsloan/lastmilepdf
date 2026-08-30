@@ -419,6 +419,10 @@ ipcMain.handle('tags:figure-from-rect', async (_event, { docId, pageIndex, rect 
   return callWorker('figure_from_rect', { docId, pageIndex, rect });
 });
 
+ipcMain.handle('tags:insert-paragraph-after', async (_event, { docId, nodeId }) => {
+  return callWorker('insert_paragraph_after', { docId, nodeId });
+});
+
 ipcMain.handle('tags:set-role-or-wrap', async (_event, { docId, nodeIds, role }) => {
   return callWorker('set_role_or_wrap', { docId, nodeIds, role });
 });
