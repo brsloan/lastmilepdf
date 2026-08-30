@@ -2901,7 +2901,7 @@ async function moveSelectedBlock(direction) {
 // attemptHeadingLevelChange().
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  if (e.ctrlKey || e.metaKey) return; // handled by the Ctrl/Cmd+Left/Right listener below
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return; // handled by the Shift/Ctrl/Cmd+Left/Right listeners below
   if (!state.selectedNodeId) return;
 
   const tag = document.activeElement?.tagName;
@@ -2933,17 +2933,60 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// Ctrl/Cmd+Right/Left steps a heading tag (H1-H6) down/up a level. No-op on
-// anything else, including the bare "H" role, which has no numbered level.
+// Shift+Left/Right collapses/expands the current selection AND every tag
+// nested under it, recursively (vs. plain Left/Right above, which only
+// toggles the selected tag itself).
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!e.shiftKey || e.ctrlKey || e.metaKey) return;
   if (!state.selectedNodeId) return;
 
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-  if (attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+  const entry = state.nodesById.get(state.selectedNodeId);
+  if (!entry || entry.node.type !== 'element') return;
+  if (!entry.node.children || entry.node.children.length === 0) return;
+
+  e.preventDefault();
+  const collapse = e.key === 'ArrowLeft';
+  walkTree(entry.node, (node) => {
+    if (node.type === 'element') state.collapseOverrides.set(node.id, collapse);
+  });
+  renderTree();
+});
+
+// Ctrl/Cmd+Right/Left steps a heading tag (H1-H6) down/up a level. No-op on
+// anything else, including the bare "H" role, which has no numbered level -
+// in which case it instead expands every tag in the tree (Right) or
+// collapses every tag except /Document and its direct children, so the
+// top-level list of /Document's contents stays visible (Left).
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  if (state.selectedNodeId && attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) {
+    e.preventDefault();
+    return;
+  }
+  if (!state.tree) return;
+
+  e.preventDefault();
+  const collapse = e.key === 'ArrowLeft';
+  walkTree(state.tree, (node) => {
+    if (node.type !== 'element') return;
+    if (collapse) {
+      // Keep /Document's own children expanded, so its top-level contents
+      // stay visible as a list - only collapse what's nested inside them.
+      const parentId = state.nodesById.get(node.id)?.parentId;
+      if (node.id === state.tree.id || parentId === state.tree.id) return;
+    }
+    state.collapseOverrides.set(node.id, collapse);
+  });
+  renderTree();
 });
 
 // Delete removes the current selection from the struct tree. A tag
