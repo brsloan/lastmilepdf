@@ -120,9 +120,6 @@ Things this scaffold deliberately does not solve yet:
 - **`RoleMap` / `ParentTree` / `ClassMap` are ignored.** Custom
   (non-standard) role names round-trip as opaque strings; nothing here
   resolves them against a document's `RoleMap`.
-- **No accessibility validation.** This was intentionally left out (no
-  veraPDF integration). Check output against PDF/UA with an external tool
-  (e.g. veraPDF or PAC) until/unless you wire in a validator.
 - **Whole-file IPC transfer.** The opened PDF is read into memory and
   passed to the renderer as base64 in one shot. Fine for typical
   documents; a very large PDF would benefit from streaming instead.

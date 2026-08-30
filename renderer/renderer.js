@@ -129,6 +129,9 @@ const el = {
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
   helpDialog: document.getElementById('help-dialog'),
   btnCloseHelp: document.getElementById('btn-close-help'),
+  aboutDialog: document.getElementById('about-dialog'),
+  btnCloseAbout: document.getElementById('btn-close-about'),
+  aboutVersion: document.getElementById('about-version'),
   verifyDialog: document.getElementById('verify-dialog'),
   btnCloseVerify: document.getElementById('btn-close-verify'),
   verifyBody: document.getElementById('verify-body'),
@@ -2467,6 +2470,15 @@ window.api.onMenuHelpDoc(() => el.helpDialog.showModal());
 el.btnCloseHelp.addEventListener('click', () => el.helpDialog.close());
 el.helpDialog.addEventListener('click', (e) => {
   if (e.target === el.helpDialog) el.helpDialog.close();
+});
+
+window.api.onMenuAbout((_event, data) => {
+  el.aboutVersion.textContent = data?.version || '';
+  el.aboutDialog.showModal();
+});
+el.btnCloseAbout.addEventListener('click', () => el.aboutDialog.close());
+el.aboutDialog.addEventListener('click', (e) => {
+  if (e.target === el.aboutDialog) el.aboutDialog.close();
 });
 
 window.addEventListener('keydown', (e) => {

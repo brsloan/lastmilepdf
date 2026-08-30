@@ -146,11 +146,13 @@ function createWindow() {
 // live in the renderer's own state, so the Edit menu can't run them
 // directly - it just forwards the command as an IPC event and lets the
 // renderer's existing performUndo()/performRedo() (see renderer.js) do the
-// actual work, same as the toolbar buttons and Ctrl+Z/Ctrl+Y do. No
-// accelerator is set here deliberately: the renderer already binds
-// Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z itself and steps aside when a text field is
-// focused so native field-undo still works there - a menu accelerator
-// would fire regardless of focus and bypass that.
+// actual work, same as the toolbar buttons and Ctrl+Z/Ctrl+Y do. The
+// accelerators below use registerAccelerator: false - they're shown in the
+// menu for reference only and don't register as OS-level shortcuts, since
+// the renderer already binds Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z itself and steps
+// aside when a text field is focused so native field-undo still works
+// there - a real menu accelerator would fire regardless of focus and
+// bypass that.
 // Open/Save/Save As are driven the same way as Undo/Redo above: forwarded
 // as IPC events to the renderer, which owns the docId and does the actual
 // work (performOpen()/performSave()/performSaveAs() in renderer.js) -
@@ -174,8 +176,8 @@ function buildAppMenu() {
     {
       label: 'Edit',
       submenu: [
-        { label: 'Undo', click: (_item, win) => win?.webContents.send('menu:undo') },
-        { label: 'Redo', click: (_item, win) => win?.webContents.send('menu:redo') },
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, click: (_item, win) => win?.webContents.send('menu:undo') },
+        { label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, click: (_item, win) => win?.webContents.send('menu:redo') },
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },
@@ -190,6 +192,8 @@ function buildAppMenu() {
       submenu: [
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => win?.webContents.send('menu:shortcuts') },
         { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => win?.webContents.send('menu:help-doc') },
+        { type: 'separator' },
+        { label: 'About LastMilePDF', click: (_item, win) => win?.webContents.send('menu:about', { version: app.getVersion() }) },
       ],
     },
   ];
