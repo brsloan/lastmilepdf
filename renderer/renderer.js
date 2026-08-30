@@ -3856,7 +3856,7 @@ el.btnSmartifact.addEventListener('click', async () => {
 function setFigureDrawActive(active) {
   state.figureDrawActive = active;
   el.btnAddFigure.classList.toggle('btn-figure-draw-active', active);
-  el.btnAddFigure.textContent = active ? 'Cancel Add Figure' : 'Add Figure';
+  el.btnAddFigure.textContent = active ? 'End Adding Figures' : 'Add Figures';
   el.canvas.classList.toggle('figure-draw-mode', active);
   if (!active) {
     state.figureDrawRect = null;
