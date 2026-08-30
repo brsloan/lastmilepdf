@@ -119,6 +119,7 @@ const el = {
   btnTableEditorToTh: document.getElementById('btn-table-editor-to-th'),
   btnTableEditorToTd: document.getElementById('btn-table-editor-to-td'),
   fieldLang: document.getElementById('field-lang'),
+  fieldLangLabel: document.getElementById('field-lang-label'),
   thSection: document.getElementById('field-th-section'),
   fieldScopeWrap: document.getElementById('field-scope-wrap'),
   fieldScope: document.getElementById('field-scope'),
@@ -1067,7 +1068,14 @@ function refreshDetailsForSelection() {
   if (isDocument) {
     el.fieldDocTitle.value = state.docInfo.title || '';
     el.fieldDocAuthor.value = state.docInfo.author || '';
+    // The /Document tag's own /Lang attribute is rarely set and, per the
+    // PDF spec, isn't what governs the document's overall language - the
+    // catalog's /Lang is. Same field, different backing value: source it
+    // from docInfo here instead of node.lang (set above), and route the
+    // Apply-side write through updateDocInfo() below to match.
+    el.fieldLang.value = state.docInfo.lang || '';
   }
+  el.fieldLangLabel.textContent = isDocument ? 'Document language' : 'Language';
 
   // Table-cell attributes (Scope/Column span/Row span, PDF's Table attribute
   // owner - see _get_table_attrs() in tag_worker.py). Column span/Row span
@@ -2277,12 +2285,20 @@ async function applyDetailsChange() {
       setStatus(`Updated role for ${selectedIds.length} tags.`);
       refreshDetailsForSelection();
     } else {
+      // /Document tag selected: the Language field shows/edits the
+      // catalog's overall /Lang rather than this struct element's own -
+      // route it through updateDocInfo() below (alongside Title/Author)
+      // instead of into the node-level change, so it doesn't clobber
+      // whatever /Lang the /Document struct element itself happens to hold.
+      const isDocument = !el.fieldDocInfoSection.hidden;
       const changes = {
         role: el.fieldRole.value.trim(),
         alt: el.fieldAlt.value.trim(),
         actualText: el.fieldActualText.value.trim(),
-        lang: el.fieldLang.value.trim(),
       };
+      if (!isDocument) {
+        changes.lang = el.fieldLang.value.trim();
+      }
       if (!el.fieldScopeWrap.hidden) {
         changes.scope = el.fieldScope.value;
       }
@@ -2294,16 +2310,22 @@ async function applyDetailsChange() {
       applyFreshTree(result.tree);
       applyUndoState(result);
 
-      // /Document tag selected: Title/Author (PDF document-info, not a
-      // struct-element attribute) are edited via a separate call, and only
-      // when actually changed - unlike alt/actualText/lang above, there's no
-      // single combined undo step for both, so an unconditional call here
-      // would push an empty undo snapshot on every unrelated field edit.
-      if (!el.fieldDocInfoSection.hidden) {
+      // Title/Author/Language here are PDF document-info/catalog fields,
+      // not struct-element attributes, so they're edited via a separate
+      // call, and only when actually changed - unlike the node-level
+      // changes above, there's no single combined undo step for all three,
+      // so an unconditional call here would push an empty undo snapshot on
+      // every unrelated field edit.
+      if (isDocument) {
         const title = el.fieldDocTitle.value.trim();
         const author = el.fieldDocAuthor.value.trim();
-        if (title !== (state.docInfo.title || '') || author !== (state.docInfo.author || '')) {
-          const infoResult = await window.api.updateDocInfo(state.docId, { title, author });
+        const lang = el.fieldLang.value.trim();
+        if (
+          title !== (state.docInfo.title || '')
+          || author !== (state.docInfo.author || '')
+          || lang !== (state.docInfo.lang || '')
+        ) {
+          const infoResult = await window.api.updateDocInfo(state.docId, { title, author, lang });
           state.docInfo = infoResult.docInfo;
           applyUndoState(infoResult);
         }

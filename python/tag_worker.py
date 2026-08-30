@@ -128,13 +128,12 @@ def _get_doc_info(doc):
     dict on first access, which would dirty documents that don't have one
     just from opening them or selecting the /Document tag.
 
-    Also carries a few read-only fields the Verify report needs: the
-    catalog's primary /Lang, the /MarkInfo Marked flag (what Acrobat's
-    "Tagged PDF" check actually looks at - a StructTreeRoot can exist
-    without this being set), and the "extract for accessibility"
-    permission bit. None of these are edited anywhere in this file, so
-    they're just read fresh each time _get_doc_info() is called rather
-    than threaded through update_doc_info()."""
+    Also carries a few fields the Verify report needs beyond /Info: the
+    catalog's primary /Lang (editable via update_doc_info(), same as
+    Title/Author), the /MarkInfo Marked flag (what Acrobat's "Tagged PDF"
+    check actually looks at - a StructTreeRoot can exist without this being
+    set), and the "extract for accessibility" permission bit - those latter
+    two are read-only and not threaded through update_doc_info()."""
     pdf = doc["pdf"]
     info = pdf.trailer.get("/Info")
     title = _get_string(info, "/Title") if isinstance(info, pikepdf.Dictionary) else None
@@ -173,7 +172,14 @@ def update_doc_info(doc_id, changes):
     Also mirrors the change into XMP (dc:title/dc:creator): Acrobat's
     Document Properties dialog reads Title/Author from XMP whenever an XMP
     stream is present, and ignores /Info entirely in that case, so writing
-    only the legacy /Info dict left Acrobat showing stale values."""
+    only the legacy /Info dict left Acrobat showing stale values.
+
+    "lang" sets the catalog's primary /Lang (the document's overall
+    language, per the PDF spec) rather than anything in /Info - the Tag
+    Properties panel repurposes the same Language field used for a struct
+    element's own /Lang attribute when the /Document tag is selected, since
+    that's the one place in the tree that maps onto this document-wide
+    setting."""
     doc = documents[doc_id]
     _push_undo_snapshot(doc)
     info = doc["pdf"].docinfo
@@ -183,6 +189,8 @@ def update_doc_info(doc_id, changes):
         _set_or_clear_string(info, "/Author", changes["author"])
     with doc["pdf"].open_metadata() as meta:
         meta.load_from_docinfo(info, delete_missing=True)
+    if "lang" in changes:
+        _set_or_clear_string(doc["pdf"].Root, "/Lang", changes["lang"])
     return {"docInfo": _get_doc_info(doc), **_undo_state(doc)}
 
 
