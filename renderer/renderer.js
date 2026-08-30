@@ -26,7 +26,10 @@ const APP_NAME = 'LastMilePDF';
 
 function setFileName(fileName) {
   state.fileName = fileName;
-  document.title = fileName ? `${APP_NAME} — ${fileName}` : APP_NAME;
+  // A leading * is the conventional "unsaved changes" marker; markDirty()
+  // re-calls this whenever that state flips.
+  const marker = state.dirty ? '*' : '';
+  document.title = fileName ? `${APP_NAME} — ${marker}${fileName}` : APP_NAME;
 }
 
 const state = {
@@ -48,6 +51,9 @@ const state = {
   pdfDoc: null,          // pdf.js document proxy
   currentPage: 1,
   pageCount: 0,
+  renderTask: null,      // in-flight pdf.js RenderTask, so a new page render can cancel it
+  renderToken: 0,        // invalidates a render whose getPage() await was overtaken - see renderCurrentPage()
+  dirty: false,          // tag edits made since the last save - see markDirty()
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
@@ -164,9 +170,28 @@ function reportError(context, err) {
   setStatus(`${context}: ${err.message || err}`);
 }
 
+// Tracks whether there are tag edits that aren't on disk, and mirrors the
+// answer into the title bar and up to the main process (which owns the
+// window-close prompt - see main.js). Deliberately conservative: undoing
+// back to the original state still counts as dirty, since the file on disk
+// may already have been written to in between. Erring toward one extra
+// prompt is the safe direction; erring the other way loses work silently.
+function markDirty(dirty) {
+  if (state.dirty === dirty) return;
+  state.dirty = dirty;
+  setFileName(state.fileName); // re-renders the title with/without its * marker
+  window.api.setDirty(dirty);
+}
+
+// Called after every successful mutating worker call - which makes it the
+// one place that reliably sees "the document just changed", so dirty
+// tracking hangs off it too. The three non-mutating callers (performOpen,
+// and undo/redo, which genuinely do move the document away from the saved
+// file) set the flag themselves.
 function applyUndoState(result) {
   el.btnUndo.disabled = !result.canUndo;
   el.btnRedo.disabled = !result.canRedo;
+  markDirty(true);
 }
 
 // --- role -> visual category (drives tag-chip color) ---------------------
@@ -185,8 +210,14 @@ function categoryForRole(role) {
 
 // --- tag tree: build the nodesById index -------------------------------
 
+// `tree` is null for an untagged PDF (no /StructTreeRoot - see
+// _rebuild_registry in tag_worker.py), which is a state the app supports
+// rather than an error: the tag tree just stays empty behind the
+// no-structure banner while the preview, bookmarks and document properties
+// all still work. Bail out to an empty index instead of walking it.
 function indexTree(tree) {
   const map = new Map();
+  if (!tree) return map;
   (function visit(node, parentId) {
     map.set(node.id, { node, parentId });
     for (const child of node.children || []) visit(child, node.id);
@@ -3508,6 +3539,22 @@ function base64ToUint8Array(base64) {
 }
 
 async function loadPdfPreview(base64Data) {
+  // Drop the outgoing document before adopting the new one: a render still
+  // in flight would otherwise paint the old file's page onto the canvas
+  // after the swap, and each PDFDocumentProxy left undestroyed keeps its
+  // pdf.js worker-side document (and the file's bytes) alive for the rest
+  // of the session.
+  if (state.renderTask) {
+    state.renderTask.cancel();
+    state.renderTask = null;
+  }
+  state.renderToken++;
+  if (state.pdfDoc) {
+    const previous = state.pdfDoc;
+    state.pdfDoc = null;
+    previous.destroy().catch(() => {}); // best-effort; never block the new load
+  }
+
   const bytes = base64ToUint8Array(base64Data);
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   state.pdfDoc = await loadingTask.promise;
@@ -3526,14 +3573,46 @@ async function loadPdfPreview(base64Data) {
   renderTree();
 }
 
+// pdf.js refuses two concurrent render() calls against the same canvas - it
+// tracks in-use canvases in a static set and throws outright - so every
+// render has to be either finished or explicitly cancelled before the next
+// one starts. Overlapping calls are routine here, not exotic: Walk schedules
+// its next tick without awaiting the render the previous one kicked off (at
+// up to 10 tags/sec), and holding down Next Page does the same. Two things
+// are needed to serialize them, because there's an await in the middle:
+//   - cancel any render already in flight (RenderTask.cancel() releases the
+//     canvas synchronously, so the new render can claim it immediately), and
+//   - a token, for the window between getPage() being awaited and render()
+//     being called, where a second caller would otherwise sail past the
+//     cancel check (there's no task to cancel yet) and collide anyway.
 async function renderCurrentPage() {
   if (!state.pdfDoc) return;
+
+  if (state.renderTask) {
+    state.renderTask.cancel();
+    state.renderTask = null;
+  }
+  const token = ++state.renderToken;
+
   const page = await state.pdfDoc.getPage(state.currentPage);
+  if (token !== state.renderToken) return; // a newer render started while we waited
+
   const viewport = page.getViewport({ scale: PAGE_SCALE });
   const context = el.canvas.getContext('2d');
   el.canvas.width = viewport.width;
   el.canvas.height = viewport.height;
-  await page.render({ canvasContext: context, viewport }).promise;
+
+  const task = page.render({ canvasContext: context, viewport });
+  state.renderTask = task;
+  try {
+    await task.promise;
+  } catch (err) {
+    // Being superseded is the expected outcome here, not a failure.
+    if (err && err.name === 'RenderingCancelledException') return;
+    throw err;
+  } finally {
+    if (state.renderTask === task) state.renderTask = null;
+  }
 }
 
 function updatePageNavUI() {
@@ -3560,13 +3639,41 @@ el.btnNextPage.addEventListener('click', async () => {
 
 // --- open / save ----------------------------------------------------------
 
+// Shared gate in front of anything that would throw away the current
+// document's unsaved edits. Returns false if the user backed out (or asked
+// to save first and that save didn't happen), in which case the caller must
+// abandon whatever it was about to do.
+async function confirmDiscardChanges(detail) {
+  if (!state.dirty || !state.docId) return true;
+  const choice = await window.api.confirmDiscard(detail);
+  if (choice === 'cancel') return false;
+  if (choice === 'save') return performSave();
+  return true;
+}
+
 async function performOpen() {
+  if (!(await confirmDiscardChanges('Save them before opening another PDF?'))) {
+    setStatus('Ready.');
+    return;
+  }
   try {
     setStatus('Opening\u2026');
     const opened = await window.api.openPdf();
     if (!opened) {
       setStatus('Ready.');
       return;
+    }
+
+    // The worker keeps every document it has opened - along with its undo
+    // snapshots, which for a large PDF dwarf the file itself - until it's
+    // told to let go. Release the outgoing one now that its replacement is
+    // safely open (not before: if the open above had failed, we'd have
+    // thrown away a document the user still had on screen).
+    const previousDocId = state.docId;
+    if (previousDocId && previousDocId !== opened.docId) {
+      window.api.closeDoc(previousDocId).catch((err) => {
+        console.error('Could not release the previous document', err);
+      });
     }
 
     state.docId = opened.docId;
@@ -3588,6 +3695,7 @@ async function performOpen() {
     applyFreshOutline(opened.outline || []);
     el.btnGenerateBookmarks.disabled = !opened.hasStructTree;
     applyUndoState(opened);
+    markDirty(false); // freshly opened: applyUndoState above assumes a mutation
     closeDetails();
 
     await loadPdfPreview(opened.pdfBase64);
@@ -3603,39 +3711,61 @@ window.api.onMenuOpen(() => performOpen());
 // Save overwrites the current file (the path it was opened from, or
 // wherever Save As last pointed it). Falls back to the Save As dialog in
 // the (normally unreachable) case there's no known path yet.
+// Both save paths return true only if the file actually reached disk -
+// confirmDiscardChanges() and the window-close prompt both rely on that to
+// decide whether it's safe to drop the document.
 async function performSave() {
-  if (!state.docId) return;
+  if (!state.docId) return false;
   if (!state.savedFilePath) {
-    await performSaveAs();
-    return;
+    return performSaveAs();
   }
   try {
     setStatus('Saving\u2026');
     await window.api.saveToPath(state.docId, state.savedFilePath);
+    markDirty(false);
     setStatus(`Saved to ${state.savedFilePath}`);
+    return true;
   } catch (err) {
     reportError('Could not save PDF', err);
+    return false;
   }
 }
 
 async function performSaveAs() {
-  if (!state.docId) return;
+  if (!state.docId) return false;
   try {
     setStatus('Saving\u2026');
     const suggested = state.fileName ? state.fileName : '.pdf';
     const savedPath = await window.api.savePdf(state.docId, suggested);
     if (savedPath) {
       state.savedFilePath = savedPath;
+      markDirty(false);
       setFileName(savedPath.split(/[\\/]/).pop());
     }
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
+    return !!savedPath; // false when the user cancelled the dialog
   } catch (err) {
     reportError('Could not save PDF', err);
+    return false;
   }
 }
 
 window.api.onMenuSave(() => performSave());
 window.api.onMenuSaveAs(() => performSaveAs());
+
+// The window-close prompt's "Save" button (see createWindow in main.js).
+// Main can't run the save itself - the docId and the target path live here -
+// so it defers the close until we report back. A failed save (or a
+// cancelled Save As dialog) reports false, which leaves the window open
+// with the changes intact rather than closing over the error.
+window.api.onMenuSaveAndClose(async () => {
+  let saved = false;
+  try {
+    saved = await performSave();
+  } finally {
+    window.api.reportSaveComplete(saved);
+  }
+});
 
 el.btnKillDivs.addEventListener('click', async () => {
   if (!state.docId) return;
