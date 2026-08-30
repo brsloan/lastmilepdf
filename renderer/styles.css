@@ -1008,6 +1008,99 @@ body.busy * {
   text-align: right;
 }
 
+/* --- help dialog ---
+   Reuses .shortcuts-header for the title bar (see above); everything below
+   is its own single-column prose layout rather than the two-column
+   key/description grid .shortcuts-body uses, since help entries are
+   sentences, not key/value pairs. */
+
+.help-dialog {
+  width: min(680px, 92vw);
+  max-height: 84vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.help-dialog[open] {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.help-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.help-body {
+  padding: 4px 20px 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.help-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-section:last-child {
+  border-bottom: none;
+}
+
+.help-section h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.help-section p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.help-section p:last-child {
+  margin-bottom: 0;
+}
+
+.help-section code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.help-list {
+  margin: 0;
+}
+
+.help-item {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.help-item:first-child {
+  border-top: none;
+}
+
+.help-item dt {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.help-item dd {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 kbd {
   display: inline-block;
   padding: 1px 6px;

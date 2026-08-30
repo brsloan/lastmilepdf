@@ -178,6 +178,7 @@ function buildAppMenu() {
       label: 'Help',
       submenu: [
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => win?.webContents.send('menu:shortcuts') },
+        { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => win?.webContents.send('menu:help-doc') },
       ],
     },
   ];

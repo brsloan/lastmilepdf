@@ -125,6 +125,8 @@ const el = {
   btnPullContent: document.getElementById('btn-pull-content'),
   shortcutsDialog: document.getElementById('shortcuts-dialog'),
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
+  helpDialog: document.getElementById('help-dialog'),
+  btnCloseHelp: document.getElementById('btn-close-help'),
   tabProperties: document.getElementById('tab-properties'),
   tabBookmarks: document.getElementById('tab-bookmarks'),
   panelProperties: document.getElementById('panel-properties'),
@@ -2454,6 +2456,12 @@ window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());
 el.btnCloseShortcuts.addEventListener('click', () => el.shortcutsDialog.close());
 el.shortcutsDialog.addEventListener('click', (e) => {
   if (e.target === el.shortcutsDialog) el.shortcutsDialog.close();
+});
+
+window.api.onMenuHelpDoc(() => el.helpDialog.showModal());
+el.btnCloseHelp.addEventListener('click', () => el.helpDialog.close());
+el.helpDialog.addEventListener('click', (e) => {
+  if (e.target === el.helpDialog) el.helpDialog.close();
 });
 
 window.addEventListener('keydown', (e) => {
