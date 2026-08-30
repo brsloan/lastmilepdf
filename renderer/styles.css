@@ -827,8 +827,92 @@ body.busy * {
   min-height: 0;
 }
 
-.table-preview-dialog-body .generated-table {
+/* --- table editor (Expand dialog's interactive variant) -----------------
+   Same generated-table look, plus a leading row/column of arrow buttons
+   for whole row/column selection and (belt-and-suspenders alongside the
+   click handlers' own mousedown preventDefault) `user-select: none` so a
+   drag across cells selects cells, not the text inside them. */
+
+.table-editor-body {
+  user-select: none;
+}
+
+.editor-table {
+  border-collapse: collapse;
   font-size: 14px;
+}
+
+.editor-table th,
+.editor-table td {
+  border: 1px solid var(--border);
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+  user-select: none;
+}
+
+.editor-table td {
+  color: var(--text);
+}
+
+.editor-table th {
+  background: #14151a;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.editor-corner {
+  background: transparent;
+  border: none;
+}
+
+.editor-col-arrow,
+.editor-row-arrow {
+  background: var(--panel-alt);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: center;
+  font-weight: 700;
+}
+
+.editor-col-arrow:hover,
+.editor-row-arrow:hover {
+  background: var(--panel);
+  color: var(--accent-strong);
+}
+
+.editor-cell {
+  cursor: pointer;
+}
+
+.editor-cell.cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  position: relative;
+}
+
+.editor-cell.cell-anchor {
+  outline-color: var(--accent-strong);
+}
+
+.table-editor-fields {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.table-editor-hint {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.table-editor-convert-buttons {
+  display: flex;
+  gap: 6px;
 }
 
 /* --- shortcuts dialog --- */

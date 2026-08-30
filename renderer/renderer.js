@@ -46,8 +46,12 @@ const state = {
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
-  tablePreviewTableEl: null,   // most recently built <table> (see renderTablePreview()), reused by the Expand dialog
   actualTextPlaceholderToken: 0, // invalidates in-flight Actual Text placeholder pulls when selection/doc changes
+  tableEditorToken: 0,          // invalidates in-flight Table Editor dialog builds (see renderTableEditor())
+  tableEditorTableId: null,     // id of the Table tag currently open in the Table Editor dialog
+  tableEditorSelectedIds: new Set(), // selected TH/TD cell ids within the Table Editor
+  tableEditorAnchorId: null,    // last explicitly clicked/arrow-selected cell, for shift-click range selection
+  tableEditorGrid: null,        // { positions, colCount } from the most recent renderTableEditor() build
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
@@ -103,6 +107,15 @@ const el = {
   tablePreviewDialog: document.getElementById('table-preview-dialog'),
   tablePreviewDialogContainer: document.getElementById('table-preview-dialog-container'),
   btnCloseTablePreview: document.getElementById('btn-close-table-preview'),
+  tableEditorForm: document.getElementById('table-editor-fields'),
+  tableEditorHint: document.getElementById('table-editor-hint'),
+  tableEditorFieldRow: document.getElementById('table-editor-field-row'),
+  tableEditorScopeWrap: document.getElementById('table-editor-scope-wrap'),
+  tableEditorScope: document.getElementById('table-editor-scope'),
+  tableEditorColSpan: document.getElementById('table-editor-col-span'),
+  tableEditorRowSpan: document.getElementById('table-editor-row-span'),
+  btnTableEditorToTh: document.getElementById('btn-table-editor-to-th'),
+  btnTableEditorToTd: document.getElementById('btn-table-editor-to-td'),
   fieldLang: document.getElementById('field-lang'),
   thSection: document.getElementById('field-th-section'),
   fieldScopeWrap: document.getElementById('field-scope-wrap'),
@@ -1109,7 +1122,6 @@ function closeDetails() {
   el.fieldActualTextWrap.hidden = false;
   el.tablePreviewWrap.hidden = true;
   state.tablePreviewToken += 1; // invalidate any table-preview build still in flight
-  state.tablePreviewTableEl = null;
   el.btnExpandTablePreview.disabled = true;
   el.tablePreviewContainer.innerHTML = '';
   state.highlightToken += 1; // invalidate any highlight computation still in flight
@@ -1542,12 +1554,64 @@ const SCOPE_ICONS = {
   Both: { glyph: '↓→', cls: 'scope-both' },
 };
 
+// Builds a single TH/TD's preview DOM: colSpan/rowSpan attributes, the
+// scope direction indicator for a header cell, and the cell's own pulled
+// text - shared by the read-only inline preview and the interactive Table
+// Editor dialog (see renderTablePreview() and renderTableEditor()).
+function createTableCellElement(cell, text) {
+  const isHeader = cell.role === 'TH';
+  const cellEl = document.createElement(isHeader ? 'th' : 'td');
+  const colSpan = Number(cell.colSpan) || 1;
+  const rowSpan = Number(cell.rowSpan) || 1;
+  if (colSpan > 1) cellEl.colSpan = colSpan;
+  if (rowSpan > 1) cellEl.rowSpan = rowSpan;
+
+  if (isHeader) {
+    const icon = SCOPE_ICONS[cell.scope];
+    const iconEl = document.createElement('span');
+    iconEl.className = `scope-icon ${icon ? icon.cls : 'scope-none'}`;
+    iconEl.textContent = icon ? icon.glyph : '✕';
+    cellEl.appendChild(iconEl);
+  }
+  cellEl.appendChild(document.createTextNode(text));
+  return cellEl;
+}
+
+// Resolves every TH/TD's position on the table's logical row/column grid,
+// accounting for colSpan/rowSpan - e.g. a rowSpan=2 cell in row 0 occupies
+// the same column in row 1 too, so row 1's own first cell lands one column
+// over from where its position in the row's child list would suggest.
+// Backs the Table Editor's column-select arrows (one per logical column,
+// not per TR's literal cell count) and its shift-click rectangular range
+// selection (see renderTableEditor()/handleTableEditorCellClick()).
+function buildTableGrid(rows) {
+  const occupied = []; // occupied[r] = Set of column indices already claimed by a span from above
+  const positions = new Map(); // cellId -> { row, col, rowSpan, colSpan }
+  let colCount = 0;
+  rows.forEach((tr, r) => {
+    occupied[r] = occupied[r] || new Set();
+    let c = 0;
+    for (const cell of collectRowCells(tr)) {
+      while (occupied[r].has(c)) c += 1;
+      const colSpan = Number(cell.colSpan) || 1;
+      const rowSpan = Number(cell.rowSpan) || 1;
+      positions.set(cell.id, { row: r, col: c, rowSpan, colSpan });
+      for (let dr = 0; dr < rowSpan; dr++) {
+        occupied[r + dr] = occupied[r + dr] || new Set();
+        for (let dc = 0; dc < colSpan; dc++) occupied[r + dr].add(c + dc);
+      }
+      c += colSpan;
+      colCount = Math.max(colCount, c);
+    }
+  });
+  return { positions, colCount };
+}
+
 async function renderTablePreview(tableNode) {
   const token = ++state.tablePreviewToken;
   el.btnExpandTablePreview.disabled = true;
 
   if (!state.pdfDoc) {
-    state.tablePreviewTableEl = null;
     el.tablePreviewContainer.innerHTML = '';
     const p = document.createElement('p');
     p.className = 'table-preview-empty';
@@ -1559,7 +1623,6 @@ async function renderTablePreview(tableNode) {
   const rows = collectTableRows(tableNode);
 
   if (rows.length === 0) {
-    state.tablePreviewTableEl = null;
     el.tablePreviewContainer.innerHTML = '';
     const p = document.createElement('p');
     p.className = 'table-preview-empty';
@@ -1574,35 +1637,249 @@ async function renderTablePreview(tableNode) {
   for (const tr of rows) {
     const trEl = document.createElement('tr');
     for (const cell of collectRowCells(tr)) {
-      const isHeader = cell.role === 'TH';
       const text = await pullCellText(cell);
       if (token !== state.tablePreviewToken) return; // selection changed mid-flight
-
-      const cellEl = document.createElement(isHeader ? 'th' : 'td');
-      const colSpan = Number(cell.colSpan) || 1;
-      const rowSpan = Number(cell.rowSpan) || 1;
-      if (colSpan > 1) cellEl.colSpan = colSpan;
-      if (rowSpan > 1) cellEl.rowSpan = rowSpan;
-
-      if (isHeader) {
-        const icon = SCOPE_ICONS[cell.scope];
-        const iconEl = document.createElement('span');
-        iconEl.className = `scope-icon ${icon ? icon.cls : 'scope-none'}`;
-        iconEl.textContent = icon ? icon.glyph : '✕';
-        cellEl.appendChild(iconEl);
-      }
-      cellEl.appendChild(document.createTextNode(text));
-      trEl.appendChild(cellEl);
+      trEl.appendChild(createTableCellElement(cell, text));
     }
     table.appendChild(trEl);
   }
 
   if (token !== state.tablePreviewToken) return;
-  state.tablePreviewTableEl = table;
   el.tablePreviewContainer.innerHTML = '';
   el.tablePreviewContainer.appendChild(table);
   el.btnExpandTablePreview.disabled = false;
 }
+
+// --- table editor (Expand dialog's interactive variant) ------------------
+//
+// Same generated table as the read-only preview above, but with an extra
+// leading row/column of arrow buttons for whole row/column selection and a
+// fields section (see index.html) below for editing the selected cells'
+// Scope/Column span/Row span or converting them between TH/TD. Every edit
+// goes through the same update APIs the main details panel uses, then
+// rebuilds this table from the resulting fresh tree - there's no separate
+// "editor" copy of the data, just a different view onto the same nodes.
+
+async function renderTableEditor(tableNode) {
+  const token = ++state.tableEditorToken;
+  el.tablePreviewDialogContainer.innerHTML = '';
+  state.tableEditorGrid = null;
+
+  const rows = collectTableRows(tableNode);
+  if (rows.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'table-preview-empty';
+    p.textContent = 'No rows found in this table.';
+    el.tablePreviewDialogContainer.appendChild(p);
+    updateTableEditorFields();
+    return;
+  }
+
+  const { positions, colCount } = buildTableGrid(rows);
+  state.tableEditorGrid = { positions, colCount };
+
+  const table = document.createElement('table');
+  table.className = 'editor-table';
+
+  const headerRow = document.createElement('tr');
+  headerRow.appendChild(document.createElement('th')).className = 'editor-corner';
+  for (let c = 0; c < colCount; c++) {
+    const arrow = document.createElement('th');
+    arrow.className = 'editor-col-arrow';
+    arrow.textContent = '▾';
+    arrow.title = 'Select column';
+    arrow.addEventListener('click', () => selectTableEditorColumn(c));
+    headerRow.appendChild(arrow);
+  }
+  table.appendChild(headerRow);
+
+  for (let r = 0; r < rows.length; r++) {
+    const trEl = document.createElement('tr');
+    const rowArrow = document.createElement('th');
+    rowArrow.className = 'editor-row-arrow';
+    rowArrow.textContent = '▸';
+    rowArrow.title = 'Select row';
+    rowArrow.addEventListener('click', () => selectTableEditorRow(rows[r]));
+    trEl.appendChild(rowArrow);
+
+    for (const cell of collectRowCells(rows[r])) {
+      const text = await pullCellText(cell);
+      if (token !== state.tableEditorToken) return; // dialog closed/reopened mid-flight
+
+      const cellEl = createTableCellElement(cell, text);
+      cellEl.classList.add('editor-cell');
+      cellEl.dataset.cellId = cell.id;
+      if (state.tableEditorSelectedIds.has(cell.id)) cellEl.classList.add('cell-selected');
+      if (cell.id === state.tableEditorAnchorId) cellEl.classList.add('cell-anchor');
+      // Suppresses the native text-drag-selection a mousedown+drag across
+      // cells would otherwise start - CSS `user-select: none` covers a
+      // plain click but not a drag, and the whole point of the click
+      // handler below is to select cells, not their text.
+      cellEl.addEventListener('mousedown', (e) => e.preventDefault());
+      cellEl.addEventListener('click', (e) => handleTableEditorCellClick(e, cell.id));
+      trEl.appendChild(cellEl);
+    }
+    table.appendChild(trEl);
+  }
+
+  if (token !== state.tableEditorToken) return;
+  el.tablePreviewDialogContainer.appendChild(table);
+  updateTableEditorFields();
+}
+
+// A column arrow's click target: every cell whose span covers that logical
+// column, however many TH/TD elements that actually is.
+function selectTableEditorColumn(colIndex) {
+  if (!state.tableEditorGrid) return;
+  const ids = [];
+  for (const [cellId, pos] of state.tableEditorGrid.positions) {
+    if (colIndex >= pos.col && colIndex < pos.col + pos.colSpan) ids.push(cellId);
+  }
+  state.tableEditorSelectedIds = new Set(ids);
+  state.tableEditorAnchorId = ids[ids.length - 1] || null;
+  refreshTableEditorSelectionUI();
+}
+
+function selectTableEditorRow(trNode) {
+  const ids = collectRowCells(trNode).map((cell) => cell.id);
+  state.tableEditorSelectedIds = new Set(ids);
+  state.tableEditorAnchorId = ids[ids.length - 1] || null;
+  refreshTableEditorSelectionUI();
+}
+
+// Plain click selects just this cell; Ctrl/Cmd+click toggles it into/out of
+// the selection (mirrors the tag tree's own selection gestures); Shift+click
+// selects the rectangular block between the anchor cell and this one, by
+// grid position rather than document order, so it behaves the way dragging
+// a selection across a spreadsheet would.
+function handleTableEditorCellClick(e, cellId) {
+  if (e.ctrlKey || e.metaKey) {
+    const next = new Set(state.tableEditorSelectedIds);
+    if (next.has(cellId)) next.delete(cellId);
+    else next.add(cellId);
+    state.tableEditorSelectedIds = next;
+    state.tableEditorAnchorId = cellId;
+  } else if (e.shiftKey && state.tableEditorAnchorId && state.tableEditorGrid) {
+    const { positions } = state.tableEditorGrid;
+    const anchorPos = positions.get(state.tableEditorAnchorId);
+    const clickedPos = positions.get(cellId);
+    if (anchorPos && clickedPos) {
+      const rowMin = Math.min(anchorPos.row, clickedPos.row);
+      const rowMax = Math.max(anchorPos.row + anchorPos.rowSpan - 1, clickedPos.row + clickedPos.rowSpan - 1);
+      const colMin = Math.min(anchorPos.col, clickedPos.col);
+      const colMax = Math.max(anchorPos.col + anchorPos.colSpan - 1, clickedPos.col + clickedPos.colSpan - 1);
+      const ids = [];
+      for (const [id, pos] of positions) {
+        const posRowMax = pos.row + pos.rowSpan - 1;
+        const posColMax = pos.col + pos.colSpan - 1;
+        if (pos.row <= rowMax && posRowMax >= rowMin && pos.col <= colMax && posColMax >= colMin) ids.push(id);
+      }
+      state.tableEditorSelectedIds = new Set(ids);
+    } else {
+      state.tableEditorSelectedIds = new Set([cellId]);
+      state.tableEditorAnchorId = cellId;
+    }
+  } else {
+    state.tableEditorSelectedIds = new Set([cellId]);
+    state.tableEditorAnchorId = cellId;
+  }
+  refreshTableEditorSelectionUI();
+}
+
+// Restyles the already-built cells in place rather than a full rebuild -
+// selection alone never changes the table's shape or content.
+function refreshTableEditorSelectionUI() {
+  el.tablePreviewDialogContainer.querySelectorAll('.editor-cell').forEach((cellEl) => {
+    const id = cellEl.dataset.cellId;
+    cellEl.classList.toggle('cell-selected', state.tableEditorSelectedIds.has(id));
+    cellEl.classList.toggle('cell-anchor', id === state.tableEditorAnchorId);
+  });
+  updateTableEditorFields();
+}
+
+// Mirrors refreshDetailsForSelection()'s TH-attributes gating: Scope only
+// applies (and is shown) when every selected cell is a TH, while Column
+// span/Row span apply to TH and TD alike. The displayed values come from
+// the anchor cell (the most recently/explicitly selected one) when it's
+// part of the selection, else an arbitrary member - same "one representative
+// node" approach the main details panel uses for a multi-select.
+function updateTableEditorFields() {
+  const ids = Array.from(state.tableEditorSelectedIds).filter((id) => state.nodesById.has(id));
+  if (ids.length === 0) {
+    el.tableEditorHint.hidden = false;
+    el.tableEditorFieldRow.hidden = true;
+    return;
+  }
+  el.tableEditorHint.hidden = true;
+  el.tableEditorFieldRow.hidden = false;
+
+  const allTH = ids.every((id) => state.nodesById.get(id)?.node.role === 'TH');
+  el.tableEditorScopeWrap.hidden = !allTH;
+
+  const repId = state.tableEditorAnchorId && ids.includes(state.tableEditorAnchorId)
+    ? state.tableEditorAnchorId
+    : ids[ids.length - 1];
+  const repNode = state.nodesById.get(repId)?.node;
+  el.tableEditorScope.value = allTH ? (repNode?.scope || '') : '';
+  el.tableEditorColSpan.value = repNode?.colSpan != null ? repNode.colSpan : '';
+  el.tableEditorRowSpan.value = repNode?.rowSpan != null ? repNode.rowSpan : '';
+}
+
+// Re-reads the Table tag from the just-refreshed tree and rebuilds the
+// editor table from it, then re-syncs the main details panel too (a no-op
+// unless this same table - or one of its cells - happens to be the active
+// tree selection, e.g. its inline preview needs the same update).
+async function refreshTableEditorAfterEdit() {
+  const tableEntry = state.tableEditorTableId ? state.nodesById.get(state.tableEditorTableId) : null;
+  if (tableEntry) await renderTableEditor(tableEntry.node);
+  refreshDetailsForSelection();
+}
+
+el.tableEditorForm.addEventListener('submit', (e) => e.preventDefault());
+el.tableEditorForm.addEventListener('change', async () => {
+  const ids = Array.from(state.tableEditorSelectedIds).filter((id) => state.nodesById.has(id));
+  if (ids.length === 0) return;
+
+  const changes = {};
+  if (!el.tableEditorScopeWrap.hidden) changes.scope = el.tableEditorScope.value;
+  changes.colSpan = el.tableEditorColSpan.value.trim();
+  changes.rowSpan = el.tableEditorRowSpan.value.trim();
+
+  try {
+    const result = await window.api.updateNodes(state.docId, ids, changes);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    state.tableEditorSelectedIds = new Set(ids.filter((id) => state.nodesById.has(id)));
+    await refreshTableEditorAfterEdit();
+    setStatus(`Updated ${ids.length} table cell${ids.length === 1 ? '' : 's'}.`);
+  } catch (err) {
+    reportError('Could not update table cells', err);
+  }
+});
+
+async function convertTableEditorSelection(role) {
+  const ids = Array.from(state.tableEditorSelectedIds).filter((id) => state.nodesById.has(id));
+  if (ids.length === 0) return;
+
+  try {
+    const result = await window.api.setRoleOrWrap(state.docId, ids, role);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    state.tableEditorSelectedIds = new Set(ids.filter((id) => state.nodesById.has(id)));
+    if (!state.tableEditorSelectedIds.has(state.tableEditorAnchorId)) {
+      state.tableEditorAnchorId = state.tableEditorSelectedIds.size > 0
+        ? Array.from(state.tableEditorSelectedIds).pop()
+        : null;
+    }
+    await refreshTableEditorAfterEdit();
+    setStatus(`Set ${ids.length} cell${ids.length === 1 ? '' : 's'} to ${role}.`);
+  } catch (err) {
+    reportError(`Could not convert to ${role}`, err);
+  }
+}
+
+el.btnTableEditorToTh.addEventListener('click', () => convertTableEditorSelection('TH'));
+el.btnTableEditorToTd.addEventListener('click', () => convertTableEditorSelection('TD'));
 
 // Fills in a content leaf's text preview once pdf.js has parsed its page.
 // Async and fired off from renderTreeNode(), which is otherwise synchronous
@@ -2149,14 +2426,28 @@ window.api.onMenuRedo(() => performRedo());
 // itself only happens on the backdrop, since the visible content is inside
 // a child that would catch the click first).
 el.btnExpandTablePreview.addEventListener('click', () => {
-  if (!state.tablePreviewTableEl) return;
-  el.tablePreviewDialogContainer.innerHTML = '';
-  el.tablePreviewDialogContainer.appendChild(state.tablePreviewTableEl.cloneNode(true));
+  const nodeId = el.fieldNodeId.value;
+  const entry = nodeId ? state.nodesById.get(nodeId) : null;
+  if (!entry) return;
+  state.tableEditorTableId = nodeId;
+  state.tableEditorSelectedIds = new Set();
+  state.tableEditorAnchorId = null;
+  renderTableEditor(entry.node);
   el.tablePreviewDialog.showModal();
 });
 el.btnCloseTablePreview.addEventListener('click', () => el.tablePreviewDialog.close());
 el.tablePreviewDialog.addEventListener('click', (e) => {
   if (e.target === el.tablePreviewDialog) el.tablePreviewDialog.close();
+});
+// Fires on Escape too (native <dialog> behavior), not just the explicit
+// close paths above - a single place to drop the editor's own selection
+// state so it doesn't leak into the next table it's opened on.
+el.tablePreviewDialog.addEventListener('close', () => {
+  state.tableEditorToken += 1; // invalidate any render still in flight
+  state.tableEditorTableId = null;
+  state.tableEditorSelectedIds = new Set();
+  state.tableEditorAnchorId = null;
+  state.tableEditorGrid = null;
 });
 
 window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());

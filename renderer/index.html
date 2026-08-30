@@ -185,7 +185,7 @@
         <div class="field field-grow" id="field-table-preview" hidden>
           <span class="field-label-row">
             <span class="field-label">Table preview</span>
-            <button type="button" id="btn-expand-table-preview" class="field-label-btn" title="Open the generated table in a larger window">Expand</button>
+            <button type="button" id="btn-expand-table-preview" class="field-label-btn" title="Edit the table in a larger window">Table Editor</button>
           </span>
           <div id="table-preview-container" class="table-preview"></div>
         </div>
@@ -206,12 +206,44 @@
 
   <footer class="statusbar" id="status-bar">Ready.</footer>
 
-  <dialog id="table-preview-dialog" class="table-preview-dialog">
+  <dialog id="table-preview-dialog" class="table-preview-dialog table-editor-dialog">
     <div class="shortcuts-header">
-      <h2>Table Preview</h2>
+      <h2>Table Editor</h2>
       <button type="button" id="btn-close-table-preview" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
-    <div id="table-preview-dialog-container" class="table-preview-dialog-body"></div>
+    <div id="table-preview-dialog-container" class="table-preview-dialog-body table-editor-body"></div>
+    <form id="table-editor-fields" class="table-editor-fields">
+      <p id="table-editor-hint" class="table-editor-hint">Select one or more cells in the table above to edit them.</p>
+      <div id="table-editor-field-row" class="field-row" hidden>
+        <label class="field" id="table-editor-scope-wrap">
+          <span class="field-label">Header Scope</span>
+          <select id="table-editor-scope">
+            <option value="">(none)</option>
+            <option value="Row">Row</option>
+            <option value="Column">Column</option>
+            <option value="Both">Both</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Column span</span>
+          <input id="table-editor-col-span" type="number" min="1" step="1" placeholder="1" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Row span</span>
+          <input id="table-editor-row-span" type="number" min="1" step="1" placeholder="1" />
+        </label>
+
+        <div class="field">
+          <span class="field-label">Convert to</span>
+          <div class="table-editor-convert-buttons">
+            <button type="button" id="btn-table-editor-to-th" class="btn btn-ghost">Header (TH)</button>
+            <button type="button" id="btn-table-editor-to-td" class="btn btn-ghost">Data (TD)</button>
+          </div>
+        </div>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="shortcuts-dialog" class="shortcuts-dialog">
