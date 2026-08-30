@@ -458,8 +458,10 @@ def _wrap_leaf(doc, leaf_node_id, role):
 def set_role_or_wrap(doc_id, node_ids, role):
     """For each selected node: relabels its /S to `role` in place if it's
     already a struct element, or wraps it in a brand-new struct element with
-    that role if it's a content/object-ref leaf. Backs the tag tree's H1-H6
-    and 'I' (List Item) shortcuts."""
+    that role if it's a content/object-ref leaf. Backs the tag tree's H1-H6,
+    'D', 'H', and 'C' shortcuts, plus the table editor's role conversions -
+    not the 'I' (List Item) shortcut, which needs convert_to_list_item()'s
+    Lbl/LBody handling instead."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -701,9 +703,12 @@ def _collect_leaf_ids(doc, node_id):
     return leaves
 
 
-def _figure_kid_for_leaf(doc, leaf_id, figure_page):
-    """The object to put in a Figure's /K to reference the leaf at
-    `leaf_id`, given the Figure resolves to `figure_page`.
+def _kid_for_leaf(doc, leaf_id, container_page):
+    """The object to put in a struct element's /K to reference the leaf at
+    `leaf_id`, given the element itself resolves to `container_page`.
+    Shared by convert_to_figure() and _make_leaf_container() (an LI's
+    Lbl/LBody) - both collapse a subtree of arbitrary depth down to its
+    leaves and regroup them under one or more new containers.
 
     Usually that's just the leaf itself. The exception is a bare MCID
     coming from a different page: it's a plain integer with no dict of its
@@ -711,24 +716,24 @@ def _figure_kid_for_leaf(doc, leaf_id, figure_page):
     element does (see the module docstring). Collapsing a subtree that
     spans a page break - which _collect_leaf_ids() happily does, since it
     descends through struct elements of any role and any /Pg - would
-    therefore silently repoint every later-page leaf at the Figure's page.
-    That's not a cosmetic mislabel: those MCIDs then name whatever marked
-    content happens to share their numbers on the Figure's page (already
-    owned by other tags, since MCIDs restart per page), while the content
-    they actually came from is left referenced by nothing at all.
+    therefore silently repoint every later-page leaf at the container's
+    page. That's not a cosmetic mislabel: those MCIDs then name whatever
+    marked content happens to share their numbers on the container's page
+    (already owned by other tags, since MCIDs restart per page), while the
+    content they actually came from is left referenced by nothing at all.
 
     reorder_node() refuses this move outright rather than corrupt the tree
     that way. Here we can do better than refuse, because an /MCR carries
     its own /Pg and so isn't bound to its parent's page: promote just the
     off-page bare MCIDs to /MCR and they keep pointing exactly where they
-    always did. Everything already on the Figure's page - which is every
-    leaf in the ordinary single-page conversion - is returned untouched,
+    always did. Everything already on the container's page - which is
+    every leaf in the ordinary single-page case - is returned untouched,
     so that path is unchanged."""
     obj = doc["elements"][leaf_id]
     if doc["node_kind"].get(leaf_id) != "content-int":
         return obj  # /MCR and /OBJR already carry their own /Pg
     page = doc["node_pages"].get(leaf_id)
-    if page is None or page == figure_page:
+    if page is None or page == container_page:
         return obj  # inherits the right page anyway
     return pikepdf.Dictionary({
         "/Type": pikepdf.Name("/MCR"),
@@ -768,11 +773,11 @@ def convert_to_figure(doc_id, node_ids):
             if leaf_ids:
                 # Resolve the Figure's own page first: it decides which
                 # leaves inherit the right page as-is and which have to
-                # carry their own - see _figure_kid_for_leaf().
+                # carry their own - see _kid_for_leaf().
                 page_index = doc["node_pages"].get(leaf_ids[0])
                 if page_index is not None:
                     elem["/Pg"] = doc["pdf"].pages[page_index].obj
-                leaf_objs = [_figure_kid_for_leaf(doc, lid, page_index) for lid in leaf_ids]
+                leaf_objs = [_kid_for_leaf(doc, lid, page_index) for lid in leaf_ids]
                 elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
             elif "/K" in elem:
                 del elem["/K"]
@@ -782,18 +787,82 @@ def convert_to_figure(doc_id, node_ids):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+def _leaf_ids_for_li_source(doc, node_id):
+    """The ordered leaf ids that become an LI's content when `node_id`
+    itself is converted into (or wrapped in) that LI: every content/
+    object-ref leaf under it, per _collect_leaf_ids, if it's a struct
+    element - or just itself, if it's already a bare leaf."""
+    if doc["node_kind"].get(node_id) == "element":
+        return _collect_leaf_ids(doc, node_id)
+    return [node_id]
+
+
+def _make_leaf_container(doc, role, leaf_ids):
+    """A new, not-yet-attached struct element with role `role` wrapping
+    every leaf in `leaf_ids` (already in document order) under one /K, with
+    /Pg taken from the first leaf - the same shape _make_paragraph() builds
+    for /P - or left with neither /Pg nor /K if `leaf_ids` is empty. Used to
+    build an LI's Lbl and LBody; see _set_li_content()."""
+    elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+    }))
+    if not leaf_ids:
+        return elem
+    page = doc["node_pages"].get(leaf_ids[0])
+    if page is not None:
+        elem["/Pg"] = doc["pdf"].pages[page].obj
+    leaf_objs = [_kid_for_leaf(doc, lid, page) for lid in leaf_ids]
+    elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
+    return elem
+
+
+def _set_li_content(doc, li_elem, leaf_ids, use_label):
+    """Populates `li_elem`'s /K from `leaf_ids` (already in document
+    order): when `use_label` is set, the first leaf becomes a Lbl and every
+    remaining leaf (possibly none) becomes an LBody, so the split always
+    leaves the LI with a predictable Lbl+LBody pair; otherwise every leaf
+    goes into a single LBody. An empty `leaf_ids` means there's nothing to
+    label or hold, so /K is cleared instead.
+
+    `use_label` is decided by the caller - renderer.js's
+    collectTargetMcids()/resolveMcidText(), since this backend has no text
+    extraction of its own - by checking whether the first leaf's own text is
+    just a bullet, a single letter followed by a period, or digits followed
+    by a period. Shared by the 'L' and 'I' shortcuts (make_list(),
+    convert_to_list_item())."""
+    if not leaf_ids:
+        if "/K" in li_elem:
+            del li_elem["/K"]
+        return
+
+    if use_label:
+        lbl = _make_leaf_container(doc, "Lbl", leaf_ids[:1])
+        body = _make_leaf_container(doc, "LBody", leaf_ids[1:])
+        lbl["/P"] = li_elem
+        body["/P"] = li_elem
+        li_elem["/K"] = pikepdf.Array([lbl, body])
+    else:
+        body = _make_leaf_container(doc, "LBody", leaf_ids)
+        body["/P"] = li_elem
+        li_elem["/K"] = body
+
+
 def _group_into_container(doc_id, node_ids, container_role, item_role, preserved_roles, cant_group_msg):
-    """Shared shape behind the 'L'/'T'/'R' shortcuts: groups the selected
-    tags into a newly created container struct element (List/Table/TR).
-    Each selected node becomes a child with role `item_role` - a struct
-    element is relabeled in place (unless its current role is already in
+    """Shared shape behind the 'T'/'R' shortcuts: groups the selected tags
+    into a newly created container struct element (Table/TR). Each selected
+    node becomes a child with role `item_role` - a struct element is
+    relabeled in place (unless its current role is already in
     `preserved_roles`, in which case it's left untouched); a content/
     object-ref leaf is wrapped in a brand-new element with role `item_role`,
-    same as set_role_or_wrap() does for H1-H6/'I' (a leaf has no role of its
+    same as set_role_or_wrap() does for H1-H6 (a leaf has no role of its
     own, so it's never eligible for `preserved_roles`). The container lands
     at the position the earliest-selected item occupied. Every selected node
     must currently share the same parent - there'd be no single
-    well-defined "where the first item was" otherwise."""
+    well-defined "where the first item was" otherwise. The 'L' shortcut
+    (make_list()) used to share this too, but now needs its own version
+    since a list item's content always gets rebuilt into the Lbl/LBody
+    split - see _set_li_content()."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -858,14 +927,115 @@ def _group_into_container(doc_id, node_ids, container_role, item_role, preserved
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
-def make_list(doc_id, node_ids):
+def make_list(doc_id, node_ids, label_flags):
     """Groups the selected tags into a newly created List: each one becomes
-    an LI regardless of its prior role. Backs the tag tree's 'L' shortcut -
-    see _group_into_container for the shared mechanics."""
-    return _group_into_container(
-        doc_id, node_ids, "L", "LI", frozenset(),
-        "Can't group into a list: selected tags don't share a parent.",
-    )
+    an LI whose own content is rebuilt from its collapsed leaves (see
+    _leaf_ids_for_li_source), split into a Lbl+LBody pair or a single LBody
+    per `label_flags` (see _set_li_content) - unlike make_table()/make_tr()
+    (_group_into_container), an item here is never just relabeled in place,
+    since a list item always ends up in the Lbl/LBody shape regardless of
+    whatever structure it had before. The container otherwise lands at the
+    position the earliest-selected item occupied, and every selected node
+    must currently share the same parent, the same as
+    _group_into_container(). Backs the tag tree's 'L' shortcut."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot group the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    parent_ids = {doc["parent_map"].get(nid) for nid in node_ids}
+    if len(parent_ids) != 1 or None in parent_ids:
+        raise ValueError("Can't group into a list: selected tags don't share a parent.")
+    parent_id = next(iter(parent_ids))
+    parent_obj = doc["elements"][parent_id]
+
+    # Document order among the selected nodes, as they currently sit among
+    # their shared parent's kids - see _top_level_selection for why this
+    # parent_map scan preserves kid order.
+    node_id_set = set(node_ids)
+    ordered_ids = [cid for cid, pid in doc["parent_map"].items() if pid == parent_id and cid in node_id_set]
+
+    item_objs = [doc["elements"][nid] for nid in ordered_ids]
+    first_index = min(_kid_index(parent_obj, obj) for obj in item_objs)
+    if first_index == -1:
+        raise ValueError("Could not locate selected tags in their parent")
+
+    # Collected before anything is mutated - an item's leaves have to be
+    # read out of the tree it's still sitting in.
+    leaf_ids_by_node = {nid: _leaf_ids_for_li_source(doc, nid) for nid in ordered_ids}
+
+    _push_undo_snapshot(doc)
+
+    li_elems = []
+    for node_id in ordered_ids:
+        obj = doc["elements"][node_id]
+        _remove_kid(parent_obj, obj)
+        if doc["node_kind"].get(node_id) == "element":
+            li = obj
+            li["/S"] = pikepdf.Name("/LI")
+        else:
+            li = doc["pdf"].make_indirect(pikepdf.Dictionary({
+                "/Type": pikepdf.Name("/StructElem"),
+                "/S": pikepdf.Name("/LI"),
+            }))
+        _set_li_content(doc, li, leaf_ids_by_node[node_id], bool(label_flags.get(node_id)))
+        li_elems.append(li)
+
+    new_list = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/L"),
+        "/P": parent_obj,
+    }))
+    for li in li_elems:
+        li["/P"] = new_list
+    new_list["/K"] = pikepdf.Array(li_elems)
+
+    _insert_kid(parent_obj, new_list, first_index)
+
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+
+
+def convert_to_list_item(doc_id, node_ids, label_flags):
+    """Converts each selected tag to an LI, the same way set_role_or_wrap()
+    handles H1-H6 - a struct element relabeled to /LI in place, a content/
+    object-ref leaf wrapped in a brand-new /LI - except an LI's content is
+    always rebuilt from its own collapsed leaves (see
+    _leaf_ids_for_li_source) into the Lbl/LBody split (see _set_li_content)
+    per `label_flags`, discarding whatever nested structure it had before.
+    Because that collapse can remove struct elements from the tree, a
+    selection covering both an ancestor and its own descendant is narrowed
+    to just the ancestor first (see _top_level_selection), the same as
+    convert_to_figure()/convert_to_paragraph(). Backs the tag tree's 'I'
+    shortcut."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id == "root":
+            raise ValueError("Cannot convert the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    top_level = _top_level_selection(doc, node_ids)
+    leaf_ids_by_node = {nid: _leaf_ids_for_li_source(doc, nid) for nid in top_level}
+
+    _push_undo_snapshot(doc)
+    for node_id in top_level:
+        use_label = bool(label_flags.get(node_id))
+        leaf_ids = leaf_ids_by_node[node_id]
+        if doc["node_kind"].get(node_id) == "element":
+            elem = doc["elements"][node_id]
+            elem["/S"] = pikepdf.Name("/LI")
+            _set_li_content(doc, elem, leaf_ids, use_label)
+        else:
+            li = _wrap_leaf(doc, node_id, "LI")
+            _set_li_content(doc, li, leaf_ids, use_label)
+
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
 def make_table(doc_id, node_ids):
@@ -2533,7 +2703,9 @@ def main():
             elif cmd == "convert_to_figure":
                 result = convert_to_figure(request["docId"], request["nodeIds"])
             elif cmd == "make_list":
-                result = make_list(request["docId"], request["nodeIds"])
+                result = make_list(request["docId"], request["nodeIds"], request.get("labelFlags", {}))
+            elif cmd == "convert_to_list_item":
+                result = convert_to_list_item(request["docId"], request["nodeIds"], request.get("labelFlags", {}))
             elif cmd == "make_table":
                 result = make_table(request["docId"], request["nodeIds"])
             elif cmd == "make_tr":

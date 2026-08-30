@@ -38,8 +38,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:convert-to-paragraph', { docId, nodeIds }),
   convertToFigure: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:convert-to-figure', { docId, nodeIds }),
-  makeList: (docId, nodeIds) =>
-    ipcRenderer.invoke('tags:make-list', { docId, nodeIds }),
+  makeList: (docId, nodeIds, labelFlags) =>
+    ipcRenderer.invoke('tags:make-list', { docId, nodeIds, labelFlags }),
+  convertToListItem: (docId, nodeIds, labelFlags) =>
+    ipcRenderer.invoke('tags:convert-to-list-item', { docId, nodeIds, labelFlags }),
   makeTable: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:make-table', { docId, nodeIds }),
   makeTr: (docId, nodeIds) =>

@@ -1533,6 +1533,48 @@ async function resolveMcidText(page0, mcid) {
   return null;
 }
 
+// Whether a list item's would-be first leaf reads as a label marker (a
+// bullet glyph, a single letter followed by a period, or digits followed by
+// a period) rather than ordinary body text - used by the 'L' and 'I'
+// shortcuts to decide whether a new/relabeled LI splits into Lbl+LBody or
+// just a single LBody. Matches the whole (trimmed) text exactly, not a
+// substring, since the point is to isolate a marker standing on its own.
+const LIST_LABEL_RE = /^(?:[•‣◦▪●○*]|[A-Za-z]\.|\d+\.)$/;
+
+// The first leaf (content or object-ref) under `nodeId` in document order,
+// or `nodeId`'s own node if it's already a leaf - mirrors
+// _collect_leaf_ids() in tag_worker.py but stops at the first hit instead
+// of collecting them all, since only the very first leaf's text matters for
+// the label test below.
+function firstLeafNode(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry) return null;
+  let found = null;
+  (function visit(node) {
+    if (found) return;
+    if (node.type !== 'element') { found = node; return; }
+    for (const child of node.children || []) { visit(child); if (found) return; }
+  })(entry.node);
+  return found;
+}
+
+// True when `nodeId` - about to become a new/relabeled LI's whole content -
+// should split into a Lbl (just the marker) plus an LBody (everything
+// else), because its first leaf is a bare label marker on its own. An
+// object-ref leaf (an image has no text to test) or a node with no leaves
+// at all both simply fail the test. Backs the 'L' and 'I' shortcuts -
+// tag_worker.py has no text extraction of its own, so this decision has to
+// be made here and passed down as a plain boolean per node id.
+async function isListLabelLeaf(nodeId) {
+  const leaf = firstLeafNode(nodeId);
+  if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined
+      || leaf.page === null || leaf.page === undefined) {
+    return false;
+  }
+  const text = await resolveMcidText(leaf.page, leaf.mcid);
+  return LIST_LABEL_RE.test((text || '').trim());
+}
+
 // Collects a tag's own content text (its content-leaf descendants' text,
 // per collectTargetMcids), joined with a single space between blocks - used
 // by the "Pull Content" button to seed Actual Text. See pullCellText() for
@@ -2954,10 +2996,10 @@ async function deleteSelection() {
 
 // 1-6/P/L/I/T/R/D/H/F/C convert the current selection's role, each via a
 // dedicated backend op (set_role_or_wrap/convert_to_paragraph/make_list/
-// make_table/make_tr/convert_to_figure in tag_worker.py) rather than a plain
-// Role edit, since a content/object-ref leaf has no role of its own to set -
-// these wrap it in a brand-new struct element instead. See each handler
-// below for what its shortcut actually does structurally.
+// make_table/make_tr/convert_to_figure/convert_to_list_item in tag_worker.py)
+// rather than a plain Role edit, since a content/object-ref leaf has no role
+// of its own to set - these wrap it in a brand-new struct element instead.
+// See each handler below for what its shortcut actually does structurally.
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (state.selectedNodeIds.size === 0) return;
@@ -2980,7 +3022,7 @@ window.addEventListener('keydown', (e) => {
     groupSelectionIntoList();
   } else if (key === 'i') {
     e.preventDefault();
-    applyRoleShortcut('LI');
+    convertSelectionToListItem();
   } else if (key === 't') {
     e.preventDefault();
     groupSelectionIntoTable();
@@ -3002,12 +3044,14 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// Backs the H1-H6 and 'I' shortcuts: relabels each already-tagged selected
-// node's role in place, and wraps any selected content/object-ref leaf in a
-// brand-new element with that role. A wrapped leaf's id ends up pointing at
-// its new wrapper rather than the leaf itself (it lands in the same
-// depth-first slot the leaf used to occupy - see set_role_or_wrap() in
-// tag_worker.py), which is what we want selected afterward anyway.
+// Backs the H1-H6, 'D', 'H', and 'C' shortcuts: relabels each already-tagged
+// selected node's role in place, and wraps any selected content/object-ref
+// leaf in a brand-new element with that role. A wrapped leaf's id ends up
+// pointing at its new wrapper rather than the leaf itself (it lands in the
+// same depth-first slot the leaf used to occupy - see set_role_or_wrap() in
+// tag_worker.py), which is what we want selected afterward anyway. Not used
+// for the 'I' shortcut - see convertSelectionToListItem(), which needs the
+// Lbl/LBody handling convert_to_list_item() backs it with instead.
 async function applyRoleShortcut(role) {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
@@ -3124,12 +3168,49 @@ async function convertSelectionToFigure() {
   }
 }
 
+// Backs the 'I' shortcut: converts each selected tag to an LI, collapsing
+// its whole subtree down to just its content/object-ref leaves the same way
+// convertSelectionToFigure() does (see convert_to_list_item() in
+// tag_worker.py) - except those leaves are then split into a Lbl (just a
+// bare label marker, per isListLabelLeaf()) plus an LBody, or wrapped in a
+// single LBody otherwise, rather than sitting directly under the LI.
+// Reselects on a single target the same way convertSelectionToFigure()
+// does; a multi-target conversion can restructure arbitrarily much of the
+// tree at once, so it just clears the selection instead.
+async function convertSelectionToListItem() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  const labelFlags = {};
+  for (const id of topLevelIds) labelFlags[id] = await isListLabelLeaf(id);
+
+  try {
+    const result = await window.api.convertToListItem(state.docId, topLevelIds, labelFlags);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
+      selectNode(topLevelIds[0]);
+    } else {
+      closeDetails();
+    }
+    setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to list item.`);
+  } catch (err) {
+    reportError('Could not convert to list item', err);
+  }
+}
+
 // Backs the 'L' shortcut: groups the whole selection into a newly created
 // List (see make_list() in tag_worker.py) - every selected node becomes an
 // LI, and the List lands where the first one (in document order) used to
-// sit. That new List always ends up occupying the depth-first slot the
-// first selected item's old id pointed to, so reselecting via that id shows
-// the new List itself once the tree refreshes.
+// sit. Each item's own content is rebuilt from its first leaf's text: a
+// bare label marker (bullet/letter+period/digits+period - see
+// isListLabelLeaf()) splits it into a Lbl holding just that leaf plus an
+// LBody holding the rest, otherwise everything goes into one LBody. That
+// new List always ends up occupying the depth-first slot the first
+// selected item's old id pointed to, so reselecting via that id shows the
+// new List itself once the tree refreshes.
 async function groupSelectionIntoList() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
@@ -3138,8 +3219,11 @@ async function groupSelectionIntoList() {
   const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
   const firstId = orderedIds[0] ?? ids[0];
 
+  const labelFlags = {};
+  for (const id of ids) labelFlags[id] = await isListLabelLeaf(id);
+
   try {
-    const result = await window.api.makeList(state.docId, ids);
+    const result = await window.api.makeList(state.docId, ids, labelFlags);
     applyFreshTree(result.tree);
     applyUndoState(result);
 

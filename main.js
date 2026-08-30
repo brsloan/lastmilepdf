@@ -435,8 +435,12 @@ ipcMain.handle('tags:convert-to-figure', async (_event, { docId, nodeIds }) => {
   return callWorker('convert_to_figure', { docId, nodeIds });
 });
 
-ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds }) => {
-  return callWorker('make_list', { docId, nodeIds });
+ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds, labelFlags }) => {
+  return callWorker('make_list', { docId, nodeIds, labelFlags });
+});
+
+ipcMain.handle('tags:convert-to-list-item', async (_event, { docId, nodeIds, labelFlags }) => {
+  return callWorker('convert_to_list_item', { docId, nodeIds, labelFlags });
 });
 
 ipcMain.handle('tags:make-table', async (_event, { docId, nodeIds }) => {
