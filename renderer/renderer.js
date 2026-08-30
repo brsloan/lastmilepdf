@@ -1855,8 +1855,20 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     ? Array.from(state.selectedNodeIds)
     : [nodeId];
 
+  // collectTargetBBoxes() exists for tags with NO marked content at all (see
+  // its comment) - a node's own /Layout /BBox page is only trustworthy in
+  // that case. When a node also has real mcid content, its /Pg (if unset)
+  // inherits from wherever the struct tree happens to set it above - which
+  // can land on a page nowhere near where the node's actual content lives
+  // (e.g. a Table whose own dict has a stale /BBox but no /Pg, inheriting an
+  // ancestor's page while every /TR's content sits many pages later). Using
+  // that bbox page as a highlight/jump target there would fight the real,
+  // per-leaf-resolved content pages, so bbox targets only apply as a
+  // fallback when mcid targets came up empty.
   const targetsByNode = new Map(selectedIds.map((id) => [id, collectTargetMcids(id)]));
-  const bboxTargetsByNode = new Map(selectedIds.map((id) => [id, collectTargetBBoxes(id)]));
+  const bboxTargetsByNode = new Map(selectedIds.map((id) => [
+    id, targetsByNode.get(id).length > 0 ? [] : collectTargetBBoxes(id),
+  ]));
   const activeTargets = [...(targetsByNode.get(nodeId) || []), ...(bboxTargetsByNode.get(nodeId) || [])];
   const allTargets = [...Array.from(targetsByNode.values()).flat(), ...Array.from(bboxTargetsByNode.values()).flat()];
   if (allTargets.length === 0) {
