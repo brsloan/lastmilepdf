@@ -46,19 +46,59 @@ let workerProcess = null;
 let requestCounter = 0;
 const pendingRequests = new Map(); // id -> { resolve, reject }
 
-function startWorker() {
-  // Set when the worker reports an error with no id to match against a
-  // pending request (e.g. it fails at startup, before any request was
-  // sent - see tag_worker.py's pikepdf import check). Surfaced as the
-  // rejection reason if the process then exits, instead of the generic
-  // "exited unexpectedly" message.
-  let lastUnmatchedError = null;
+// Set when the worker reports an error with no id to match against a
+// pending request (e.g. it fails at startup, before any request was
+// sent - see tag_worker.py's pikepdf import check), or when the process
+// can't be spawned at all. Surfaced as the rejection reason instead of the
+// generic "exited unexpectedly" message. Module-scoped rather than local to
+// startWorker() so callWorker() can still report it once the process is
+// gone and there's nothing left to attach a handler to.
+let lastWorkerError = null;
 
-  workerProcess = spawn(WORKER_COMMAND.bin, WORKER_COMMAND.args, {
+function failPendingRequests(reason) {
+  const error = new Error(reason);
+  for (const { reject } of pendingRequests.values()) reject(error);
+  pendingRequests.clear();
+}
+
+function startWorker() {
+  lastWorkerError = null;
+
+  const child = spawn(WORKER_COMMAND.bin, WORKER_COMMAND.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  workerProcess = child;
 
-  const stdoutLines = readline.createInterface({ input: workerProcess.stdout });
+  // spawn() reports a failure to *launch* asynchronously via 'error' rather
+  // than by throwing, and Node turns an 'error' event with no listener into
+  // an uncaught exception - which would take the whole main process down.
+  // startWorker() runs from app.whenReady() before createWindow(), so that
+  // means no window and no message at all: exactly the packaged-build case
+  // where tag_worker.exe didn't ship or got quarantined by antivirus.
+  // Handle it and let the renderer surface it through the normal error path
+  // instead. 'exit' may or may not follow an 'error', so settle whatever is
+  // in flight here rather than relying on the exit handler to do it.
+  child.on('error', (err) => {
+    console.error('[tag_worker] failed to start:', err);
+    lastWorkerError = `Could not start the PDF worker process (${err.code || err.message}). ` + (
+      app.isPackaged
+        ? 'The bundled tag_worker executable is missing or was blocked from running.'
+        : 'Check that the .venv exists and has pikepdf installed - see the README setup steps.'
+    );
+    if (workerProcess === child) workerProcess = null;
+    failPendingRequests(lastWorkerError);
+  });
+
+  // Writing to a worker that has already died surfaces as an EPIPE 'error'
+  // on the stream as well as through write()'s callback - and an unlistened
+  // 'error' on a stream is another uncaught exception. The write callback
+  // and the exit handler below already reject whatever was in flight, so
+  // this only needs to keep the process alive.
+  child.stdin.on('error', (err) => {
+    console.error('[tag_worker:stdin]', err);
+  });
+
+  const stdoutLines = readline.createInterface({ input: child.stdout });
   stdoutLines.on('line', (line) => {
     if (!line.trim()) return;
     let message;
@@ -71,7 +111,7 @@ function startWorker() {
     const pending = pendingRequests.get(message.id);
     if (!pending) {
       if (message.error) {
-        lastUnmatchedError = message.error;
+        lastWorkerError = message.error;
         console.error('[tag_worker] error with no matching request:', message.error);
       }
       return; // stray/duplicate response, ignore
@@ -85,18 +125,16 @@ function startWorker() {
   });
 
   // Surface Python tracebacks in the main-process console during development.
-  workerProcess.stderr.on('data', (chunk) => {
+  child.stderr.on('data', (chunk) => {
     console.error('[tag_worker:stderr]', chunk.toString());
   });
 
-  workerProcess.on('exit', (code) => {
+  child.on('exit', (code) => {
     console.error(`[tag_worker] exited with code ${code}`);
-    const reason = lastUnmatchedError || 'PDF worker process exited unexpectedly.';
-    for (const { reject } of pendingRequests.values()) {
-      reject(new Error(reason));
-    }
-    pendingRequests.clear();
-    workerProcess = null;
+    failPendingRequests(lastWorkerError || 'PDF worker process exited unexpectedly.');
+    // Only if this is still the live worker - a restart may already have
+    // put a newer process in place by the time an old one's exit lands.
+    if (workerProcess === child) workerProcess = null;
   });
 }
 
@@ -106,6 +144,13 @@ function startWorker() {
  */
 function callWorker(cmd, params = {}) {
   if (!workerProcess) startWorker();
+  // A failed spawn clears workerProcess again from its own 'error' handler,
+  // but that fires on a later tick - so a just-restarted worker can still be
+  // a doomed process with a dead stdin right now. Reject with whatever
+  // reason we have rather than writing into it.
+  if (!workerProcess || !workerProcess.stdin || !workerProcess.stdin.writable) {
+    return Promise.reject(new Error(lastWorkerError || 'The PDF worker process is not running.'));
+  }
   const id = ++requestCounter;
   return new Promise((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });
@@ -121,6 +166,12 @@ function callWorker(cmd, params = {}) {
 
 // --- Window -----------------------------------------------------------------
 
+// Whether the renderer currently holds tag edits that aren't on disk. The
+// renderer owns this - it's the side that knows whether an edit has landed
+// since the last save - and pushes every change here via 'doc:dirty-changed'
+// so the window-close guard below can read it synchronously.
+let hasUnsavedChanges = false;
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -135,6 +186,35 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
     },
+  });
+
+  // Closing the window is the one exit that can't be intercepted from the
+  // renderer, so the unsaved-changes prompt has to live here. 'close' isn't
+  // an async-friendly event - returning from the handler lets the window go
+  // - so this uses showMessageBoxSync rather than awaiting a promise that
+  // would resolve too late to matter. "Save" can't be answered
+  // synchronously either (the renderer owns the docId and the save path),
+  // so it hands off to the renderer and waits for 'doc:save-complete' to
+  // come back before actually destroying the window.
+  win.on('close', (e) => {
+    if (!hasUnsavedChanges) return;
+    e.preventDefault();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Save', "Don't Save", 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      title: 'Unsaved changes',
+      message: 'This PDF has unsaved tag changes.',
+      detail: 'Save them before closing?',
+    });
+    if (choice === 2) return; // Cancel - stay open, keep the changes
+    if (choice === 1) {
+      hasUnsavedChanges = false; // Don't Save - drop them and go
+      win.destroy();
+      return;
+    }
+    win.webContents.send('menu:save-and-close');
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -254,6 +334,49 @@ ipcMain.handle('dialog:open-pdf', async () => {
     // for very large PDFs you'd want to stream this instead.
     pdfBase64: fileBuffer.toString('base64'),
   };
+});
+
+// --- unsaved-changes tracking ---------------------------------------
+//
+// The renderer reports its dirty state as it changes; the window-close
+// guard in createWindow() reads it. 'dialog:confirm-discard' backs the
+// other exit the renderer *can* intercept - File > Open replacing the
+// current document - so both paths ask the same question with the same
+// three answers.
+
+ipcMain.on('doc:dirty-changed', (_event, dirty) => {
+  hasUnsavedChanges = !!dirty;
+});
+
+ipcMain.handle('dialog:confirm-discard', async (event, { detail }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Unsaved changes',
+    message: 'This PDF has unsaved tag changes.',
+    detail,
+  });
+  return ['save', 'discard', 'cancel'][response];
+});
+
+// Sent by the renderer once the save triggered by the close prompt's
+// "Save" button has finished, so the window can finally go. `saved` is
+// false if that save failed or the user backed out of the Save As dialog -
+// in which case the window stays open rather than closing over an error.
+ipcMain.on('doc:save-complete', (event, saved) => {
+  if (!saved) return;
+  hasUnsavedChanges = false;
+  BrowserWindow.fromWebContents(event.sender)?.destroy();
+});
+
+// Releases a document the renderer is done with - the worker holds a live
+// pikepdf.Pdf plus its undo snapshots until told otherwise (see
+// close_document in tag_worker.py).
+ipcMain.handle('doc:close', async (_event, { docId }) => {
+  return callWorker('close', { docId });
 });
 
 ipcMain.handle('tags:update-node', async (_event, { docId, nodeId, changes }) => {

@@ -992,6 +992,17 @@ def _rebuild_registry(doc_id):
     doc["node_pages"] = {}
     doc["node_kind"] = {}
     doc["counter"] = 0
+    # An untagged PDF has no tree to walk. Every tag-editing command fails
+    # long before it reaches here (there's no node id for the caller to
+    # name in the first place), but undo_edit()/redo_edit() run against any
+    # open document - bookmark and document-info edits are available on an
+    # untagged PDF too, and both push undo snapshots - so this has to
+    # report "no tree" as a None the caller can pass straight through,
+    # rather than a KeyError that aborts the undo *after* it has already
+    # swapped doc["pdf"] for the restored snapshot (leaving the host
+    # showing pre-undo state for a document that has actually moved).
+    if "/StructTreeRoot" not in doc["pdf"].Root:
+        return None
     struct_root = doc["pdf"].Root["/StructTreeRoot"]
     doc["elements"]["root"] = struct_root
     return _walk(doc, struct_root, "root")
@@ -1219,15 +1230,14 @@ def open_document(path):
     outline_tree = _get_outline_tree(doc)
     doc_info = _get_doc_info(doc)
 
-    if "/StructTreeRoot" not in pdf.Root:
-        return {
-            "docId": doc_id, "hasStructTree": False, "tree": None,
-            "outline": outline_tree, "docInfo": doc_info, **_undo_state(doc),
-        }
-
+    # _rebuild_registry() is itself the "is this document tagged?" test (it
+    # returns None when there's no /StructTreeRoot), so derive hasStructTree
+    # from it rather than checking pdf.Root separately here - two copies of
+    # that condition are exactly what let undo/redo drift into raising on
+    # untagged documents.
     tree = _rebuild_registry(doc_id)
     return {
-        "docId": doc_id, "hasStructTree": True, "tree": tree,
+        "docId": doc_id, "hasStructTree": tree is not None, "tree": tree,
         "outline": outline_tree, "docInfo": doc_info, **_undo_state(doc),
     }
 
@@ -2229,6 +2239,33 @@ def save_document(doc_id, path):
     return {"savedPath": path}
 
 
+def close_document(doc_id):
+    """Drops a document and everything hanging off it. Nothing else here
+    ever removes an entry from `documents`, and the worker outlives every
+    document the user opens - so without this, each Open leaks a live
+    pikepdf.Pdf plus its undo/redo snapshots (MAX_UNDO_DEPTH full
+    serializations of the file, which for a scanned PDF is hundreds of
+    megabytes) for the rest of the session. The host calls this from
+    performOpen() once a replacement document has been opened
+    successfully - see renderer.js.
+
+    Deliberately tolerant of an unknown/already-closed id: this is cleanup,
+    and a host that retries or races a close has nothing useful to do with
+    an exception."""
+    doc = documents.pop(doc_id, None)
+    if doc is None:
+        return {"closed": False}
+    doc["undo_stack"].clear()
+    doc["redo_stack"].clear()
+    doc["elements"].clear()
+    doc["parent_map"].clear()
+    try:
+        doc["pdf"].close()
+    except Exception:
+        pass
+    return {"closed": True}
+
+
 # --- main loop -----------------------------------------------------------
 
 def _send(message):
@@ -2303,6 +2340,8 @@ def main():
                 result = update_doc_info(request["docId"], request.get("changes", {}))
             elif cmd == "save":
                 result = save_document(request["docId"], request["path"])
+            elif cmd == "close":
+                result = close_document(request["docId"])
             else:
                 raise ValueError(f"Unknown command: {cmd}")
             _send({"id": req_id, "result": result})
