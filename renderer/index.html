@@ -31,6 +31,7 @@
       <button id="btn-add-p" class="btn btn-ghost" disabled title="Insert a new Paragraph tag after the selected tag (Ctrl+P)">Add P</button>
       <button id="btn-walk" class="btn btn-ghost" disabled title="Walk the tag tree, selecting one tag at a time (+/- to change speed, any other key to stop)">Walk</button>
       <button id="btn-verify" class="btn btn-ghost" disabled title="Check the document against common accessibility rules">Verify</button>
+      <button id="btn-fix-all-actual-text" class="btn btn-ghost" disabled title="Send every tag's Actual Text to AI together (for document-wide consistency) and apply its fixes - step through the flagged rows in the tag tree to review each change (highlighted) or Revert it">Fix All Actual Text (AI)</button>
     </div>
   </header>
 
@@ -175,9 +176,19 @@
         <label class="field field-grow" id="field-actual-text-wrap">
           <span class="field-label-row">
             <span class="field-label">Actual text</span>
-            <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
+            <span class="field-label-btns">
+              <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
+              <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text (requires an Anthropic API key - see Settings)">Fix with AI</button>
+            </span>
           </span>
-          <textarea id="field-actual-text" placeholder="Replacement text read instead of the visible content"></textarea>
+          <div class="actual-text-box">
+            <div id="field-actual-text-highlight" class="actual-text-highlight" aria-hidden="true"></div>
+            <textarea id="field-actual-text" placeholder="Replacement text read instead of the visible content"></textarea>
+          </div>
+          <div id="actual-text-review-bar" class="actual-text-review-bar" hidden>
+            <span class="actual-text-review-label">AI fix applied &ndash; changes highlighted</span>
+            <button type="button" id="btn-revert-ai-fix" class="btn btn-ghost" title="Discard the AI fix and restore this tag's Actual Text from its content">Revert</button>
+          </div>
         </label>
 
         <div class="field field-grow" id="field-table-preview" hidden>
@@ -400,6 +411,13 @@
     </div>
   </dialog>
 
+  <dialog id="ai-batch-progress-dialog" class="ai-batch-progress-dialog">
+    <div class="ai-batch-progress-body">
+      <p class="ai-batch-progress-title">Processing with AI. Please wait.</p>
+      <p class="ai-batch-progress-hint">(This may take a few minutes&hellip;)</p>
+    </div>
+  </dialog>
+
   <dialog id="about-dialog" class="about-dialog">
     <div class="shortcuts-header">
       <h2>About</h2>
@@ -410,6 +428,25 @@
       <div class="about-name">LastMilePDF</div>
       <div class="about-version">Version <span id="about-version">&mdash;</span></div>
     </div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings-dialog">
+    <div class="shortcuts-header">
+      <h2>Settings</h2>
+      <button type="button" id="btn-close-settings" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <form id="settings-form" class="settings-body">
+      <label class="field">
+        <span class="field-label">Anthropic API key</span>
+        <input id="settings-api-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+      </label>
+      <p id="settings-api-key-status" class="settings-hint">No key set.</p>
+      <p class="settings-hint">Used by "Fix with AI" in the Actual Text field to clean up OCR/transcription errors. Get a key at <code>console.anthropic.com</code> - usage bills to your own Anthropic account, not ours. Stored encrypted, on this device only.</p>
+      <div class="settings-actions">
+        <button type="button" id="btn-clear-api-key" class="btn btn-ghost">Remove Key</button>
+        <button type="submit" id="btn-save-api-key" class="btn btn-primary">Save</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="verify-dialog" class="verify-dialog">

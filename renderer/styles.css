@@ -33,6 +33,11 @@
   --warn-border: #6b4a24;
   --warn-text: #e3b578;
 
+  --ai-highlight-bg: #f0d43a;   /* yellow mark used for AI-suggested word changes */
+  --ai-highlight-ink: #241f00;  /* text color drawn on top of --ai-highlight-bg */
+  --ai-highlight-border: #8a7418;
+  --ai-highlight-text: #e6cf6a;
+
   --pass-text: #7fd9a8;
   --fail-text: #e2707a;
   --na-text: var(--text-faint);
@@ -491,6 +496,16 @@ body.busy * {
   padding: 0 4px;
 }
 
+/* Flags a tree row with an unreviewed "Fix All Actual Text (AI)" proposal -
+   see state.aiProposals / appendElementChipAndFlag() in renderer.js. */
+.ai-fix-flag {
+  color: var(--ai-highlight-text);
+  font-size: 11px;
+  border: 1px solid var(--ai-highlight-border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
 /* --- details pane tabs --- */
 
 .pane-tabs {
@@ -598,6 +613,99 @@ body.busy * {
   resize: none;
 }
 
+/* --- Actual Text inline AI-diff highlight ---
+   #field-actual-text-highlight sits ON TOP of the textarea (z-index below,
+   since absolutely-positioned siblings otherwise stack in DOM order - the
+   textarea comes second in the HTML, so without this it painted over the
+   highlight and hid it entirely) and renders the exact same text, with
+   changed words wrapped in <mark>. It has a transparent background and
+   pointer-events: none, so the textarea's own background/border still show
+   through underneath it and clicks/typing still reach the textarea. The
+   textarea's own text is made transparent in turn (only while reviewing a
+   proposal - see .actual-text-reviewing) so what the user sees is entirely
+   the highlighted copy on top, while typing/selection/caret keep working
+   natively since the textarea is still the real, focused, editable element.
+   Both layers fill `.actual-text-box` edge to edge with identical box
+   metrics so the two texts line up exactly. */
+
+.actual-text-box {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.actual-text-box textarea,
+.actual-text-highlight {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.actual-text-box textarea {
+  resize: none;
+  background: var(--panel-alt);
+  color: var(--text);
+  z-index: 1;
+}
+
+.actual-text-box textarea.actual-text-reviewing {
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.actual-text-highlight {
+  pointer-events: none;
+  overflow: hidden;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+  visibility: hidden;
+  z-index: 2;
+}
+
+.actual-text-highlight.visible {
+  visibility: visible;
+}
+
+.actual-text-highlight mark {
+  background: var(--ai-highlight-bg);
+  color: var(--ai-highlight-ink);
+  border-radius: 2px;
+  padding: 0 1px;
+  margin: 0 -1px;
+}
+
+.actual-text-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--ai-highlight-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ai-highlight-bg) 12%, var(--panel-alt));
+}
+
+/* Same [hidden]-vs-flex gotcha as .field-row/.field above. */
+.actual-text-review-bar[hidden] {
+  display: none;
+}
+
+.actual-text-review-label {
+  font-size: 11.5px;
+  color: var(--ai-highlight-text);
+}
+
 .field-row {
   display: flex;
   gap: 12px;
@@ -652,6 +760,11 @@ body.busy * {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.field-label-btns {
+  display: flex;
+  gap: 6px;
 }
 
 .field-label-btn {
@@ -1093,6 +1206,62 @@ kbd {
   border-radius: 4px;
 }
 
+/* --- AI batch progress dialog ---
+   Shown for the duration of "Fix All Actual Text (AI)" (see
+   showAiBatchProgress()/hideAiBatchProgress() in renderer.js) - no close
+   button and Escape is suppressed (see the 'cancel' listener in
+   renderer.js), since it just reflects an in-flight request rather than
+   anything the user can dismiss early. */
+
+.ai-batch-progress-dialog {
+  width: min(340px, 92vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.ai-batch-progress-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-batch-progress-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  cursor: wait;
+}
+
+.ai-batch-progress-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 24px;
+  text-align: center;
+  cursor: wait;
+}
+
+.ai-batch-progress-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ai-batch-progress-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Forces a busy cursor everywhere, including over buttons/inputs that
+   otherwise set their own `cursor` - toggled on <body> for the duration of
+   an in-flight AI batch request (see showAiBatchProgress() in renderer.js). */
+body.busy-cursor,
+body.busy-cursor * {
+  cursor: wait !important;
+}
+
 /* --- about dialog ---
    Reuses .shortcuts-header for the title bar. Body is a small centered
    icon/name/version block rather than the scrolling layouts above. */
@@ -1138,6 +1307,56 @@ kbd {
 .about-version {
   font-size: 12.5px;
   color: var(--text-dim);
+}
+
+/* --- settings dialog ---
+   Reuses .shortcuts-header for the title bar. Holds the BYOK Anthropic API
+   key used by "Fix with AI" (see wireSettingsDialog() in renderer.js) -
+   stored via Electron's safeStorage in main.js so usage bills to the
+   user's own Anthropic account rather than ours. */
+
+.settings-dialog {
+  width: min(420px, 92vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.settings-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 20px;
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.settings-hint code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* --- verify (accessibility check) dialog ---

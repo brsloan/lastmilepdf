@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('tags:update-node', { docId, nodeId, changes }),
   updateNodes: (docId, nodeIds, changes) =>
     ipcRenderer.invoke('tags:update-nodes', { docId, nodeIds, changes }),
+  updateActualTexts: (docId, updates) =>
+    ipcRenderer.invoke('tags:update-actual-texts', { docId, updates }),
   updateDocInfo: (docId, changes) =>
     ipcRenderer.invoke('doc:update-info', { docId, changes }),
   shiftHeadingLevels: (docId, nodeIds, direction) =>
@@ -71,6 +73,16 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('dialog:save-pdf', { docId, suggestedName }),
   saveToPath: (docId, path) =>
     ipcRenderer.invoke('tags:save-to-path', { docId, path }),
+
+  // BYOK Anthropic API key for "Fix with AI" - stored encrypted in main.js
+  // (see the settings:* handlers); the renderer never holds the raw key.
+  hasApiKey: () => ipcRenderer.invoke('settings:has-api-key'),
+  setApiKey: (key) => ipcRenderer.invoke('settings:set-api-key', { key }),
+  clearApiKey: () => ipcRenderer.invoke('settings:clear-api-key'),
+  onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
+
+  fixActualText: (text) => ipcRenderer.invoke('ai:fix-actual-text', { text }),
+  fixActualTextBatch: (items) => ipcRenderer.invoke('ai:fix-actual-text-batch', { items }),
 
   // Releases a document the renderer has finished with, so the worker can
   // drop its pikepdf.Pdf and undo snapshots - see close_document in

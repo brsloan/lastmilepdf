@@ -11,7 +11,9 @@
     "dist:win": "npm run build:worker && electron-builder --win"
   },
   "dependencies": {
-    "pdfjs-dist": "^4.6.82"
+    "@anthropic-ai/sdk": "^0.122.0",
+    "pdfjs-dist": "^4.6.82",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "electron": "^31.0.0",

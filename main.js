@@ -9,11 +9,14 @@
 //   3. Expose a small set of IPC handlers that the preload script forwards
 //      to the renderer as `window.api.*`.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const readline = require('readline');
+const Anthropic = require('@anthropic-ai/sdk');
+const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
+const { z } = require('zod');
 
 // --- Python sidecar -------------------------------------------------------
 
@@ -164,6 +167,61 @@ function callWorker(cmd, params = {}) {
   });
 }
 
+// --- Settings (Anthropic API key) ------------------------------------------
+//
+// BYOK (bring your own key): "Fix with AI" (see the ai:fix-actual-text
+// handler below) calls the Anthropic API directly with a key the user
+// supplies and pays for themselves - this app never holds or proxies a
+// shared key. The key is encrypted at rest via Electron's safeStorage (OS
+// keychain/DPAPI-backed) and stored alongside a small settings.json in the
+// user's data dir; only main.js ever touches the decrypted value, since the
+// renderer has no Node access and shouldn't need to.
+
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
+
+function readSettingsFile() {
+  try {
+    return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeSettingsFile(settings) {
+  fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+  fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+function hasStoredApiKey() {
+  return typeof readSettingsFile().anthropicApiKey === 'string';
+}
+
+function getStoredApiKey() {
+  const encrypted = readSettingsFile().anthropicApiKey;
+  if (!encrypted || !safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+  } catch (err) {
+    console.error('[settings] failed to decrypt stored API key:', err);
+    return null;
+  }
+}
+
+function setStoredApiKey(key) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('This system has no OS-level credential store available to encrypt the key.');
+  }
+  const settings = readSettingsFile();
+  settings.anthropicApiKey = safeStorage.encryptString(key).toString('base64');
+  writeSettingsFile(settings);
+}
+
+function clearStoredApiKey() {
+  const settings = readSettingsFile();
+  delete settings.anthropicApiKey;
+  writeSettingsFile(settings);
+}
+
 // --- Window -----------------------------------------------------------------
 
 // Whether the renderer currently holds tag edits that aren't on disk. The
@@ -273,6 +331,12 @@ function buildAppMenu() {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Settings',
+      submenu: [
+        { label: 'API Key…', click: (_item, win) => win?.webContents.send('menu:settings') },
       ],
     },
     {
@@ -387,6 +451,14 @@ ipcMain.handle('tags:update-nodes', async (_event, { docId, nodeIds, changes }) 
   return callWorker('update_nodes', { docId, nodeIds, changes });
 });
 
+// Bulk-sets /ActualText to a different value per node as one undo step -
+// used by "Fix All Actual Text (AI)" to apply every AI-corrected tag in a
+// single action, so one Undo reverts the whole batch. `updates` is
+// { [nodeId]: text }.
+ipcMain.handle('tags:update-actual-texts', async (_event, { docId, updates }) => {
+  return callWorker('update_actual_texts', { docId, updates });
+});
+
 ipcMain.handle('doc:update-info', async (_event, { docId, changes }) => {
   return callWorker('update_doc_info', { docId, changes });
 });
@@ -488,4 +560,134 @@ ipcMain.handle('dialog:save-pdf', async (_event, { docId, suggestedName }) => {
 ipcMain.handle('tags:save-to-path', async (_event, { docId, path }) => {
   await callWorker('save', { docId, path });
   return path;
+});
+
+// --- Settings (API key) --------------------------------------------------
+
+ipcMain.handle('settings:has-api-key', async () => hasStoredApiKey());
+
+ipcMain.handle('settings:set-api-key', async (_event, { key }) => {
+  setStoredApiKey(key);
+  return true;
+});
+
+ipcMain.handle('settings:clear-api-key', async () => {
+  clearStoredApiKey();
+  return true;
+});
+
+// --- AI (Fix with AI) ------------------------------------------------------
+
+const FIX_ACTUAL_TEXT_SYSTEM_PROMPT = `You clean up text pulled from a PDF's content stream for use as the PDF's /ActualText - the text a screen reader speaks instead of the visible content.
+
+Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation, while preserving the original wording, meaning, and language exactly. Do not summarize, translate, rephrase, or add commentary. Reply with only the corrected text and nothing else - no preamble, no explanation, no quotation marks.`;
+
+ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
+  const apiKey = getStoredApiKey();
+  if (!apiKey) {
+    throw new Error('No Anthropic API key set. Add one via Settings > API Key…');
+  }
+  if (!text || !text.trim()) {
+    throw new Error('There is no text to fix.');
+  }
+
+  const client = new Anthropic({ apiKey });
+  try {
+    const response = await client.messages.create({
+      model: 'claude-opus-5',
+      max_tokens: 4096,
+      output_config: { effort: 'low' },
+      system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: text }],
+    });
+    const textBlock = response.content.find((block) => block.type === 'text');
+    if (!textBlock || !textBlock.text.trim()) {
+      throw new Error('The AI did not return any text.');
+    }
+    return textBlock.text.trim();
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) {
+      throw new Error('That Anthropic API key was rejected. Check it via Settings > API Key…');
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      throw new Error('Rate limited by the Anthropic API - try again in a moment.');
+    }
+    if (err instanceof Anthropic.APIError) {
+      throw new Error(`Anthropic API error: ${err.message}`);
+    }
+    throw err;
+  }
+});
+
+// Fixes every tag's Actual Text in one request instead of one at a time, so
+// the model can cross-reference the whole document - the same proper noun,
+// abbreviation, or technical term gets fixed the same way everywhere it
+// appears, which it can't do looking at one tag's text in isolation. `items`
+// covers both tags that already had Actual Text AND tags whose content-leaf
+// text the renderer pulled just for this request (see the "Fix All Actual
+// Text" handler in renderer.js) - so the model sees the whole document's
+// text, not just the fields someone already filled in. Each entry is keyed
+// by its (renderer-assigned-at-request-time) tag id; the renderer holds the
+// results as pending proposals and only writes a tag's Actual Text once the
+// user reviews and accepts it (see aiProposals / updateActualTextReviewUI()
+// in renderer.js) - this handler never touches the PDF itself.
+const BatchFixResultSchema = z.object({
+  items: z.array(z.object({ id: z.string(), text: z.string() })),
+});
+
+const FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT = `You clean up text for use as each tag's /ActualText in a PDF - the text a screen reader speaks instead of the visible content. Some of it is already-set Actual Text; some is raw text pulled from a tag's own content that has no Actual Text override yet.
+
+You will receive a JSON array of entries, each with an id and the current text for one tag from the same document. Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation in each entry, while preserving the original wording, meaning, and language exactly - use the full set of entries to stay consistent, since the same proper noun, abbreviation, or technical term should be fixed the same way everywhere it appears in the document. Do not summarize, translate, rephrase, reorder, merge, or drop entries. Return exactly one output entry per input id, using the same ids, with only the corrected text - no commentary. An entry that already reads correctly should be returned unchanged.`;
+
+// Rough guard against a request too large for a single response - output is
+// close to input size (corrected text, not expanded) plus per-entry JSON
+// overhead, but without a cap a huge document would silently truncate
+// mid-response instead of failing clearly. Generous since this can now cover
+// a whole document's text, not just tags someone already filled in.
+const BATCH_FIX_CHAR_LIMIT = 150000;
+
+ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
+  const apiKey = getStoredApiKey();
+  if (!apiKey) {
+    throw new Error('No Anthropic API key set. Add one via Settings > API Key…');
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('No tags with Actual Text to fix.');
+  }
+  const payload = JSON.stringify(items);
+  if (payload.length > BATCH_FIX_CHAR_LIMIT) {
+    throw new Error(
+      `This document has too much text to fix in one batch (${payload.length.toLocaleString()} characters, limit ${BATCH_FIX_CHAR_LIMIT.toLocaleString()}). Fix tags individually with "Fix with AI" instead.`,
+    );
+  }
+
+  const client = new Anthropic({ apiKey });
+  try {
+    // Streamed rather than a plain .parse() call - a full-document batch can
+    // need well beyond the ~16K non-streaming ceiling, and large max_tokens
+    // requires streaming to avoid an HTTP timeout.
+    const stream = client.messages.stream({
+      model: 'claude-opus-5',
+      max_tokens: 64000,
+      output_config: { effort: 'medium', format: zodOutputFormat(BatchFixResultSchema) },
+      system: FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: payload }],
+    });
+    const response = await stream.finalMessage();
+    if (!response.parsed_output) {
+      throw new Error('The AI did not return a valid response.');
+    }
+    return response.parsed_output.items;
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) {
+      throw new Error('That Anthropic API key was rejected. Check it via Settings > API Key…');
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      throw new Error('Rate limited by the Anthropic API - try again in a moment.');
+    }
+    if (err instanceof Anthropic.APIError) {
+      throw new Error(`Anthropic API error: ${err.message}`);
+    }
+    throw err;
+  }
 });

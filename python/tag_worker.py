@@ -62,6 +62,18 @@ import re
 import sys
 import uuid
 
+# main.js writes JSON to this process's stdin as UTF-8 (Node's default
+# string encoding) and expects UTF-8 back on stdout. Without this, Python on
+# Windows defaults sys.stdin/sys.stdout to the console's ANSI codepage (e.g.
+# cp1252) rather than UTF-8, so any non-ASCII character (an em dash, a
+# bullet, a curly quote pulled from a PDF's content stream or typed into
+# Actual Text) gets silently mis-decoded on the way in - and that already-
+# mangled text is what ends up written into the PDF, and mis-encoded again
+# on the way back out. Force both streams to UTF-8 as early as possible,
+# before any request is read.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 MAX_UNDO_DEPTH = 50
 
 try:
@@ -1694,6 +1706,32 @@ def update_nodes(doc_id, node_ids, changes):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+def update_actual_texts(doc_id, updates):
+    """Bulk-sets /ActualText to a *different* value per node, as one undo
+    step - unlike update_nodes() above, which applies one shared `changes`
+    to every listed node. Used by "Fix All Actual Text (AI)": every tag the
+    AI corrected is written in a single action, so one Undo reverts the
+    whole batch rather than requiring one Undo per tag."""
+    doc = documents[doc_id]
+    targets = []
+    for node_id, text in updates.items():
+        if node_id == "root":
+            raise ValueError("The document root has no editable attributes")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) != "element":
+            raise ValueError("Content leaves have no editable attributes")
+        targets.append((doc["elements"][node_id], text))
+    if not targets:
+        raise ValueError("No nodes to update")
+
+    _push_undo_snapshot(doc)
+    for elem, text in targets:
+        _set_or_clear_string(elem, "/ActualText", text)
+
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+
+
 def shift_heading_levels(doc_id, node_ids, direction):
     """Bulk heading-level step for the tag tree's Headings-filter multi-select:
     each listed node's H-level moves by `direction` (+1/-1), clamped to
@@ -2674,6 +2712,8 @@ def main():
                 result = update_node(request["docId"], request["nodeId"], request.get("changes", {}))
             elif cmd == "update_nodes":
                 result = update_nodes(request["docId"], request["nodeIds"], request.get("changes", {}))
+            elif cmd == "update_actual_texts":
+                result = update_actual_texts(request["docId"], request["updates"])
             elif cmd == "shift_heading_levels":
                 result = shift_heading_levels(request["docId"], request["nodeIds"], request["direction"])
             elif cmd == "reorder":

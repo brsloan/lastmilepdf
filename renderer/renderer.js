@@ -74,6 +74,7 @@ const state = {
   figureDrawRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
   docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
   hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
+  aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -138,6 +139,19 @@ const el = {
   fieldColSpan: document.getElementById('field-col-span'),
   fieldRowSpan: document.getElementById('field-row-span'),
   btnPullContent: document.getElementById('btn-pull-content'),
+  btnFixActualText: document.getElementById('btn-fix-actual-text'),
+  btnFixAllActualText: document.getElementById('btn-fix-all-actual-text'),
+  aiBatchProgressDialog: document.getElementById('ai-batch-progress-dialog'),
+  actualTextHighlight: document.getElementById('field-actual-text-highlight'),
+  actualTextReviewBar: document.getElementById('actual-text-review-bar'),
+  btnRevertAiFix: document.getElementById('btn-revert-ai-fix'),
+  settingsDialog: document.getElementById('settings-dialog'),
+  settingsForm: document.getElementById('settings-form'),
+  btnCloseSettings: document.getElementById('btn-close-settings'),
+  settingsApiKey: document.getElementById('settings-api-key'),
+  settingsApiKeyStatus: document.getElementById('settings-api-key-status'),
+  btnSaveApiKey: document.getElementById('btn-save-api-key'),
+  btnClearApiKey: document.getElementById('btn-clear-api-key'),
   shortcutsDialog: document.getElementById('shortcuts-dialog'),
   btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
   helpDialog: document.getElementById('help-dialog'),
@@ -387,6 +401,13 @@ function appendElementChipAndFlag(row, node) {
     flag.textContent = 'no alt text';
     row.appendChild(flag);
   }
+
+  if (state.aiProposals.has(node.id)) {
+    const aiFlag = document.createElement('span');
+    aiFlag.className = 'ai-fix-flag';
+    aiFlag.textContent = 'AI fix';
+    row.appendChild(aiFlag);
+  }
 }
 
 function renderTreeNode(node) {
@@ -629,10 +650,30 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
   });
 }
 
+// Node ids are a fresh depth-first counter reassigned on every tree rebuild
+// (see indexTree() above and _rebuild_registry() in tag_worker.py) - a pure
+// attribute edit rebuilds to the same ids (same tree shape), but any OTHER
+// edit (delete, reorder, Kill Divs...) can shift them, which would silently
+// attach a stale highlight to whatever tag now happens to hold that id. A
+// tag's Actual Text no longer matching what the AI wrote also covers Revert
+// and Undo, and a manual edit (see the 'input' listener below, which clears
+// its own entry immediately rather than waiting for a rebuild). Either way,
+// once node.actualText has moved on from `suggested`, the diff no longer
+// describes anything real, so drop it.
+function pruneStaleAiProposals() {
+  for (const [id, proposal] of state.aiProposals) {
+    const node = state.nodesById.get(id)?.node;
+    if (!node || (node.actualText || '') !== proposal.suggested) {
+      state.aiProposals.delete(id);
+    }
+  }
+}
+
 function applyFreshTree(tree) {
   state.tree = tree;
   state.nodesById = indexTree(tree);
   state.mcidIndex = tree ? buildMcidIndex(tree) : new Map();
+  pruneStaleAiProposals();
 
   if (state.selectedNodeIds.size > 0) {
     state.selectedNodeIds = new Set(Array.from(state.selectedNodeIds).filter((id) => state.nodesById.has(id)));
@@ -1062,6 +1103,7 @@ function refreshDetailsForSelection() {
     el.detailsForm.hidden = true;
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+    updateActualTextReviewUI(null);
     const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
     row?.scrollIntoView({ block: 'nearest' });
     highlightNodeOnPage(nodeId, { allowPageJump: true });
@@ -1083,6 +1125,8 @@ function refreshDetailsForSelection() {
   } else {
     updateActualTextPlaceholder(node, nodeId);
   }
+  // No meaningful single tag to show a proposal for during a multi-select.
+  updateActualTextReviewUI(multi ? null : nodeId);
 
   // With multiple tags selected, only Role applies as a block edit (see the
   // submit handler) - disable the other fields rather than let an edit look
@@ -1091,6 +1135,7 @@ function refreshDetailsForSelection() {
   el.fieldActualText.disabled = multi;
   el.fieldLang.disabled = multi;
   el.btnPullContent.disabled = multi;
+  el.btnFixActualText.disabled = multi;
 
   // The /Document tag doesn't carry meaningful accessibility text of its
   // own - swap Alt/Actual Text out for the PDF's document-info Title/Author
@@ -1167,10 +1212,12 @@ function closeDetails() {
   el.detailsForm.reset();
   state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
   el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+  updateActualTextReviewUI(null);
   el.fieldAlt.disabled = false;
   el.fieldActualText.disabled = false;
   el.fieldLang.disabled = false;
   el.btnPullContent.disabled = false;
+  el.btnFixActualText.disabled = false;
   el.thSection.hidden = true;
   el.fieldScopeWrap.hidden = true;
   el.fieldActualTextWrap.hidden = false;
@@ -1643,6 +1690,152 @@ async function updateActualTextPlaceholder(node, nodeId) {
   if (token !== state.actualTextPlaceholderToken) return; // selection changed mid-flight
   el.fieldActualText.placeholder = text || DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
 }
+
+// --- "Fix All Actual Text (AI)" review UI ---------------------------------
+//
+// A batch fix (see el.btnFixAllActualText below) doesn't write anything to
+// the PDF by itself - it only populates state.aiProposals with
+// { original, suggested } per tag id. Selecting a tag with a pending
+// proposal shows the suggested text in the (still fully editable) textarea,
+// with a highlighted copy of it rendered behind the textarea's own
+// (temporarily transparent) text - see the .actual-text-box/.actual-text-
+// -highlight CSS. Accept/Reject below resolve the proposal one tag at a
+// time while stepping through the tree.
+
+// Word-level diff (classic O(n*m) LCS over whitespace-preserving tokens) so
+// only the spans that actually changed get marked, not the whole field.
+// Tag-level text is short enough (a sentence/caption/heading, not a whole
+// document) that the DP table is cheap - see the size guard in
+// renderActualTextDiff() below for the pathological-input fallback.
+function diffWordTokens(oldText, newText) {
+  const tokenize = (text) => text.split(/(\s+)/).filter((token) => token.length > 0);
+  const oldTokens = tokenize(oldText);
+  const newTokens = tokenize(newText);
+  const n = oldTokens.length;
+  const m = newTokens.length;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = oldTokens[i] === newTokens[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  // Only "common" (unchanged) and "added" tokens are emitted, in new-text
+  // order - a token only in the old text is simply skipped, since the field
+  // always displays the suggested text, never a two-sided before/after view.
+  const parts = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (oldTokens[i] === newTokens[j]) {
+      parts.push({ text: newTokens[j], added: false });
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      parts.push({ text: newTokens[j], added: true });
+      j++;
+    }
+  }
+  while (j < m) {
+    parts.push({ text: newTokens[j], added: true });
+    j++;
+  }
+  return parts;
+}
+
+function renderActualTextDiff(originalText, suggestedText) {
+  el.actualTextHighlight.innerHTML = '';
+  // The DP table above is O(n*m) cells - guard against a pathological pair
+  // of texts doing multi-million-cell work on every selection by falling
+  // back to a plain (unhighlighted but still correct) display.
+  const roughTokens = (originalText.length + suggestedText.length) / 4;
+  if (roughTokens * roughTokens > 4_000_000) {
+    el.actualTextHighlight.textContent = suggestedText;
+    return;
+  }
+  for (const part of diffWordTokens(originalText, suggestedText)) {
+    if (part.added) {
+      const mark = document.createElement('mark');
+      mark.textContent = part.text;
+      el.actualTextHighlight.appendChild(mark);
+    } else {
+      el.actualTextHighlight.appendChild(document.createTextNode(part.text));
+    }
+  }
+}
+
+// Shows/hides the review UI for `nodeId`'s applied AI fix, if any. Called
+// from refreshDetailsForSelection()/closeDetails() on every selection
+// change, and directly with `null` to force-hide it. The field's value is
+// already correct by the time this runs - refreshDetailsForSelection() sets
+// it from node.actualText, which already IS the AI's fix - so this only
+// toggles the highlight overlay on top of it, diffing the proposal's
+// recorded `original` against the field's current (== node.actualText)
+// value.
+function updateActualTextReviewUI(nodeId) {
+  const proposal = nodeId ? state.aiProposals.get(nodeId) : null;
+  if (!proposal) {
+    el.fieldActualText.classList.remove('actual-text-reviewing');
+    el.actualTextHighlight.classList.remove('visible');
+    el.actualTextHighlight.innerHTML = '';
+    el.actualTextReviewBar.hidden = true;
+    return;
+  }
+  el.fieldActualText.classList.add('actual-text-reviewing');
+  renderActualTextDiff(proposal.original, el.fieldActualText.value);
+  el.actualTextHighlight.classList.add('visible');
+  el.actualTextReviewBar.hidden = false;
+  el.actualTextHighlight.scrollTop = el.fieldActualText.scrollTop;
+}
+
+// Keeps the (invisible-text) textarea and the highlighted copy behind it
+// scrolling together - only vertical matters in practice since both wrap
+// (white-space: pre-wrap), but syncing both is harmless.
+el.fieldActualText.addEventListener('scroll', () => {
+  el.actualTextHighlight.scrollTop = el.fieldActualText.scrollTop;
+  el.actualTextHighlight.scrollLeft = el.fieldActualText.scrollLeft;
+});
+
+// Typing directly into a proposal takes ownership of the exact wording -
+// drop the proposal and fall back to plain editing rather than keep showing
+// a diff against text the user has now moved past.
+el.fieldActualText.addEventListener('input', () => {
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId || !state.aiProposals.has(nodeId)) return;
+  state.aiProposals.delete(nodeId);
+  el.fieldActualText.classList.remove('actual-text-reviewing');
+  el.actualTextHighlight.classList.remove('visible');
+  el.actualTextHighlight.innerHTML = '';
+  el.actualTextReviewBar.hidden = true;
+  renderTree(); // drop that row's "AI fix" flag
+});
+
+// Discards this tag's AI fix by re-pulling its content leaf's raw text
+// (same source "Pull Content" uses) and saving that in place of it - no
+// "original" value is kept in state to revert to; it's re-derived fresh
+// every time, same as if the user clicked Pull Content themselves right
+// now. If the tag has no content leaf (nothing to pull), this clears
+// Actual Text entirely rather than silently doing nothing.
+el.btnRevertAiFix.addEventListener('click', async () => {
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId || !state.aiProposals.has(nodeId)) return;
+  try {
+    setStatus('Reverting to the tag’s original content…');
+    el.btnRevertAiFix.disabled = true;
+    const original = (await pullContentText(nodeId)) || '';
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+    el.fieldActualText.value = original;
+    state.aiProposals.delete(nodeId);
+    await applyDetailsChange(); // persists via the normal update path, which also re-renders the tree/field
+    setStatus('Reverted to the tag’s original content.');
+  } catch (err) {
+    reportError('Could not revert', err);
+  } finally {
+    if (el.fieldNodeId.value === nodeId) el.btnRevertAiFix.disabled = false;
+  }
+});
 
 // --- table tag -> generated HTML preview ---------------------------------
 //
@@ -2516,6 +2709,143 @@ el.btnPullContent.addEventListener('click', async () => {
   }
 });
 
+// Sends the current Actual Text through the user's own Anthropic API key
+// (see Settings > API Key…) to clean up OCR/transcription errors, replacing
+// the field in place. Opt-in per click rather than run automatically on
+// every pull - an accessibility-critical field is worse off silently
+// "fixed" wrong than left as raw OCR output the user can still review.
+el.btnFixActualText.addEventListener('click', async () => {
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId) return;
+  const text = el.fieldActualText.value.trim();
+  if (!text) {
+    setStatus('Nothing in Actual Text to fix.');
+    return;
+  }
+  try {
+    setStatus('Fixing Actual Text with AI…');
+    el.btnFixActualText.disabled = true;
+    const fixed = await window.api.fixActualText(text);
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+    el.fieldActualText.value = fixed;
+    // Commit explicitly rather than relying on the form's native 'change'
+    // event (el.detailsForm's 'change' listener, see applyDetailsChange()
+    // below) - that only fires on blur if the textarea was focused when its
+    // value changed, which isn't the case here since the click never
+    // focused the field, so it would otherwise sit there unsaved until the
+    // user happened to edit it further.
+    await applyDetailsChange();
+    setStatus('Fixed Actual Text with AI.');
+  } catch (err) {
+    reportError('Could not fix Actual Text with AI', err);
+  } finally {
+    if (el.fieldNodeId.value === nodeId) el.btnFixActualText.disabled = false;
+  }
+});
+
+// Not user-dismissable - it just reflects an in-flight request, so Escape
+// (which would otherwise fire 'cancel' then close the native <dialog>) is
+// suppressed; only hideAiBatchProgress() ever closes it.
+el.aiBatchProgressDialog.addEventListener('cancel', (e) => e.preventDefault());
+
+function showAiBatchProgress() {
+  el.aiBatchProgressDialog.showModal();
+  document.body.classList.add('busy-cursor');
+}
+
+function hideAiBatchProgress() {
+  el.aiBatchProgressDialog.close();
+  document.body.classList.remove('busy-cursor');
+}
+
+// Sends every tag's current Actual Text to AI in one request (see
+// ai:fix-actual-text-batch in main.js), so the model can keep proper nouns,
+// abbreviations, and technical terms consistent across the whole document -
+// something it can't do looking at one tag in isolation. Every changed tag
+// is written immediately, as one undo step (see tags:update-actual-texts /
+// update_actual_texts() in tag_worker.py) - the fix is accepted by default,
+// not held pending. state.aiProposals then only remembers each changed
+// tag's pre-fix text long enough to render the inline diff highlight (see
+// updateActualTextReviewUI()) and flag its tag-tree row - stepping through
+// the tree and clicking Revert (above) is how you back one out.
+el.btnFixAllActualText.addEventListener('click', async () => {
+  if (!state.tree) return;
+
+  el.btnFixAllActualText.disabled = true;
+  showAiBatchProgress();
+  try {
+    // A tag that already has Actual Text is sent as-is. A tag with none,
+    // but a content leaf directly inside it, has that leaf's raw text
+    // pulled first - the same source "Pull Content" uses (see
+    // pullContentText()) - so the model sees the whole document's text,
+    // giving it the full context for cross-tag consistency instead of just
+    // the fields someone already filled in by hand. Table/Document tags are
+    // skipped - their Actual Text field is swapped out for a table preview
+    // / doc-info fields respectively (see refreshDetailsForSelection()), so
+    // a highlight for one could never be shown.
+    const candidates = [];
+    walkTree(state.tree, (node) => {
+      if (node.type !== 'element' || node.role === 'Table' || node.role === 'Document') return;
+      if (node.actualText && node.actualText.trim()) {
+        candidates.push({ id: node.id, text: node.actualText });
+      } else if (state.pdfDoc && hasDirectContentLeaf(node)) {
+        candidates.push({ id: node.id, text: null }); // text pulled below
+      }
+    });
+
+    const toPull = candidates.filter((candidate) => candidate.text === null);
+    if (toPull.length > 0) {
+      setStatus(`Pulling content text from ${toPull.length} tag${toPull.length === 1 ? '' : 's'} with no Actual Text yet…`);
+      for (const candidate of toPull) {
+        candidate.text = (await pullContentText(candidate.id)) || '';
+      }
+    }
+
+    const items = candidates.filter((candidate) => candidate.text && candidate.text.trim());
+    if (items.length === 0) {
+      setStatus('No tags have Actual Text (or pullable content) to fix.');
+      return;
+    }
+
+    setStatus(`Fixing Actual Text across ${items.length} tag${items.length === 1 ? '' : 's'} with AI…`);
+    const results = await window.api.fixActualTextBatch(items.map(({ id, text }) => ({ id, text })));
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const updates = {};
+    const proposals = new Map();
+    for (const result of results) {
+      const candidate = byId.get(result.id);
+      // Ignore any id the model returned that wasn't in the request, and
+      // skip anything it says needs no change - no point writing/flagging a
+      // "fix" that changes nothing (and, for a pulled-content tag, no point
+      // filling in Actual Text with a pull the AI found nothing to correct
+      // in - that's a separate feature from fixing transcription errors).
+      if (!candidate || result.text === candidate.text) continue;
+      updates[result.id] = result.text;
+      proposals.set(result.id, { original: candidate.text, suggested: result.text });
+    }
+
+    if (Object.keys(updates).length === 0) {
+      setStatus('AI found no changes to make.');
+      return;
+    }
+
+    const result = await window.api.updateActualTexts(state.docId, updates);
+    state.aiProposals = proposals; // set before applyFreshTree() so pruneStaleAiProposals() sees the fixes it just wrote
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    refreshDetailsForSelection();
+    const pulledCount = toPull.filter((candidate) => candidate.text && candidate.text.trim()).length;
+    setStatus(
+      `AI fixed ${proposals.size} of ${items.length} tags (${pulledCount} pulled from content with no prior Actual Text) - step through the tag tree to review (flagged rows) or Revert any of them.`,
+    );
+  } catch (err) {
+    reportError('Could not fix Actual Text with AI', err);
+  } finally {
+    el.btnFixAllActualText.disabled = false;
+    hideAiBatchProgress();
+  }
+});
+
 // Focusing an empty Actual Text field auto-pulls the tag's own content into
 // it, same as clicking "Pull Content", when the selected tag has a content
 // leaf directly inside it - saves the extra click for the common case of
@@ -2660,6 +2990,51 @@ window.api.onMenuAbout((_event, data) => {
 el.btnCloseAbout.addEventListener('click', () => el.aboutDialog.close());
 el.aboutDialog.addEventListener('click', (e) => {
   if (e.target === el.aboutDialog) el.aboutDialog.close();
+});
+
+// Settings dialog: holds the BYOK Anthropic API key "Fix with AI" uses (see
+// the btnFixActualText handler above). The raw key never round-trips back
+// from main.js - only whether one is currently saved - so the status line
+// is the only feedback on save/remove.
+async function refreshSettingsApiKeyStatus() {
+  const has = await window.api.hasApiKey();
+  el.settingsApiKeyStatus.textContent = has ? 'A key is saved on this device.' : 'No key set.';
+  return has;
+}
+
+window.api.onMenuSettings(async () => {
+  el.settingsApiKey.value = '';
+  await refreshSettingsApiKeyStatus();
+  el.settingsDialog.showModal();
+});
+el.btnCloseSettings.addEventListener('click', () => el.settingsDialog.close());
+el.settingsDialog.addEventListener('click', (e) => {
+  if (e.target === el.settingsDialog) el.settingsDialog.close();
+});
+
+el.settingsForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = el.settingsApiKey.value.trim();
+  if (!key) return;
+  try {
+    await window.api.setApiKey(key);
+    el.settingsApiKey.value = '';
+    await refreshSettingsApiKeyStatus();
+    setStatus('Anthropic API key saved.');
+  } catch (err) {
+    reportError('Could not save API key', err);
+  }
+});
+
+el.btnClearApiKey.addEventListener('click', async () => {
+  try {
+    await window.api.clearApiKey();
+    el.settingsApiKey.value = '';
+    await refreshSettingsApiKeyStatus();
+    setStatus('Anthropic API key removed.');
+  } catch (err) {
+    reportError('Could not remove API key', err);
+  }
 });
 
 window.addEventListener('keydown', (e) => {
@@ -3932,9 +4307,11 @@ async function performOpen() {
     el.btnAddFigure.disabled = !opened.hasStructTree;
     el.btnAddP.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
+    el.btnFixAllActualText.disabled = !opened.hasStructTree;
     state.hasStructTree = !!opened.hasStructTree;
     el.btnVerify.disabled = false; // Verify's Document-level checks apply even to an untagged PDF
     stopWalking();
+    state.aiProposals = new Map(); // ids from the outgoing document don't carry over
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     state.docInfo = opened.docInfo || { title: null, author: null };
