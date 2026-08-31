@@ -1117,6 +1117,18 @@ function toggleSelectionMember(nodeId) {
   refreshDetailsForSelection();
 }
 
+// Live-apply (see scheduleLiveApply() below) re-renders this panel from the
+// node's own just-saved value right after every debounced keystroke commit,
+// while the field the user typed it into is often still focused. Setting
+// .value on a focused field yanks the caret to the end even when the value
+// is unchanged, which would make mid-string edits unusable - so skip the
+// write for whichever field currently has focus; every other field (e.g.
+// after a selection change) still gets refreshed normally.
+function setFieldValueUnlessFocused(fieldEl, value) {
+  if (document.activeElement === fieldEl) return;
+  fieldEl.value = value;
+}
+
 function refreshDetailsForSelection() {
   const nodeId = state.selectedNodeId;
   const entry = nodeId ? state.nodesById.get(nodeId) : null;
@@ -1145,10 +1157,10 @@ function refreshDetailsForSelection() {
   el.detailsEmpty.hidden = true;
   el.detailsForm.hidden = false;
   el.fieldNodeId.value = node.id;
-  el.fieldRole.value = node.role || '';
-  el.fieldAlt.value = node.alt || '';
-  el.fieldActualText.value = node.actualText || '';
-  el.fieldLang.value = node.lang || '';
+  setFieldValueUnlessFocused(el.fieldRole, node.role || '');
+  setFieldValueUnlessFocused(el.fieldAlt, node.alt || '');
+  setFieldValueUnlessFocused(el.fieldActualText, node.actualText || '');
+  setFieldValueUnlessFocused(el.fieldLang, node.lang || '');
   if (multi) {
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
@@ -1177,14 +1189,14 @@ function refreshDetailsForSelection() {
   el.fieldDocInfoSection.hidden = !isDocument;
   el.fieldAltWrap.hidden = isDocument;
   if (isDocument) {
-    el.fieldDocTitle.value = state.docInfo.title || '';
-    el.fieldDocAuthor.value = state.docInfo.author || '';
+    setFieldValueUnlessFocused(el.fieldDocTitle, state.docInfo.title || '');
+    setFieldValueUnlessFocused(el.fieldDocAuthor, state.docInfo.author || '');
     // The /Document tag's own /Lang attribute is rarely set and, per the
     // PDF spec, isn't what governs the document's overall language - the
     // catalog's /Lang is. Same field, different backing value: source it
     // from docInfo here instead of node.lang (set above), and route the
     // Apply-side write through updateDocInfo() below to match.
-    el.fieldLang.value = state.docInfo.lang || '';
+    setFieldValueUnlessFocused(el.fieldLang, state.docInfo.lang || '');
   }
   el.fieldLangLabel.textContent = isDocument ? 'Document language' : 'Language';
 
@@ -1209,8 +1221,8 @@ function refreshDetailsForSelection() {
   el.thSection.hidden = !allCell;
   el.fieldScopeWrap.hidden = !allTH;
   el.fieldScope.value = allTH ? (node.scope || '') : '';
-  el.fieldColSpan.value = allCell && node.colSpan != null ? node.colSpan : '';
-  el.fieldRowSpan.value = allCell && node.rowSpan != null ? node.rowSpan : '';
+  setFieldValueUnlessFocused(el.fieldColSpan, allCell && node.colSpan != null ? node.colSpan : '');
+  setFieldValueUnlessFocused(el.fieldRowSpan, allCell && node.rowSpan != null ? node.rowSpan : '');
 
   // A Table tag's Actual Text is swapped out for a generated read-only HTML
   // preview of its own row/cell structure - more useful here than a free-
@@ -2605,9 +2617,30 @@ window.addEventListener('resize', () => {
   if (state.pdfDoc) syncHighlightLayerBounds();
 });
 
-// Auto-applies on the form's native 'change' event (fires when a text/
-// textarea field is committed via blur, and immediately for select
-// elements) rather than requiring an explicit Apply button.
+// Auto-applies as the user types, not just when a text/textarea field is
+// committed via blur - 'input' fires on every keystroke, so this is
+// debounced (see scheduleLiveApply()) rather than calling straight through,
+// which would push an undo snapshot (a full PDF serialization, see
+// nodeChangesAreNoOp() below) per keystroke. Select elements fire their own
+// 'change' immediately on pick and don't need debouncing, so they're
+// excluded here and left to the 'change' listener below.
+let liveApplyTimer = null;
+const LIVE_APPLY_DEBOUNCE_MS = 500;
+
+function scheduleLiveApply() {
+  if (liveApplyTimer) clearTimeout(liveApplyTimer);
+  liveApplyTimer = setTimeout(applyDetailsChange, LIVE_APPLY_DEBOUNCE_MS);
+}
+
+el.detailsForm.addEventListener('input', (e) => {
+  if (e.target.tagName === 'SELECT') return;
+  scheduleLiveApply();
+});
+
+// Still needed for select elements (immediate on pick) and as the
+// immediate-commit path when a field is blurred before the live-apply timer
+// above fires - applyDetailsChange() clears that pending timer itself, so
+// this never double-applies.
 el.detailsForm.addEventListener('change', applyDetailsChange);
 
 // True if `changes` would leave the tag exactly as it already is. Every
@@ -2629,6 +2662,11 @@ function nodeChangesAreNoOp(node, changes) {
 }
 
 async function applyDetailsChange() {
+  if (liveApplyTimer) {
+    clearTimeout(liveApplyTimer);
+    liveApplyTimer = null;
+  }
+
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
 
