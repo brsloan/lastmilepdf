@@ -925,10 +925,12 @@ window.addEventListener('keydown', (e) => {
 // Walks the tag tree for every H1-H6 node, in document order, collecting
 // what generate_bookmarks() (tag_worker.py) needs to rebuild a nested
 // outline matching the heading hierarchy: level (for nesting), page (from
-// the tag tree's own resolved /Pg, already 0-based), title text - pulled
-// via pullContentText(), the same content-extraction path the "Pull
-// Content" button uses, since pikepdf has no equivalent way to recover a
-// heading's visible text from its marked content - and top (the heading's
+// the tag tree's own resolved /Pg, already 0-based), title text - the
+// heading's own Actual Text when it has one (that's the author's intended
+// reading, so it wins over the raw content), otherwise pulled via
+// pullContentText(), the same content-extraction path the "Pull Content"
+// button uses, since pikepdf has no equivalent way to recover a heading's
+// visible text from its marked content - and top (the heading's
 // vertical position on the page, so the generated bookmark scrolls straight
 // to it instead of just the page's top edge; see computeHeadingTop()).
 // Headings with no numbered level (a bare "H" or "Title" role) are skipped -
@@ -947,7 +949,8 @@ async function collectHeadingsForBookmarks() {
   for (const { id, level } of headingNodes) {
     const node = state.nodesById.get(id)?.node;
     if (!node || node.page === null || node.page === undefined) continue;
-    const title = (await pullContentText(id)).trim() || `Untitled ${node.role}`;
+    const actualText = (node.actualText || '').trim();
+    const title = actualText || (await pullContentText(id)).trim() || `Untitled ${node.role}`;
     const top = await computeHeadingTop(id, node.page);
     headings.push({ title, level, page: node.page, top });
   }
