@@ -1532,6 +1532,56 @@ def _locate_outline_item(outline, bookmark_id):
     return walk(outline.root)
 
 
+def _find_bookmark_insert_slot(doc, items, page):
+    """Where a new bookmark targeting `page` belongs within `items` (an
+    Outline's .root, or an OutlineItem's .children), keeping the outline in
+    page order: the slot right after the last item at this level whose own
+    page is <= `page` (items with no resolvable page are skipped, neither
+    advancing nor blocking that search), or the start of `items` if none
+    qualify. When that anchor item has children, the target may belong
+    among them instead - e.g. a new page-12 bookmark should land inside an
+    existing "Chapter 2, pages 10-20" bookmark's children, not after all of
+    them - so the search recurses into its children and only bottoms out
+    (returning a slot in `items` itself) once an anchor has none. Returns
+    (containing_list, index)."""
+    last_le = None
+    for i, item in enumerate(items):
+        item_page = _outline_item_page(doc, item)
+        if item_page is None:
+            continue
+        if item_page <= page:
+            last_le = i
+        else:
+            break
+    if last_le is None:
+        return items, 0
+    candidate = items[last_le]
+    if candidate.children:
+        return _find_bookmark_insert_slot(doc, candidate.children, page)
+    return items, last_le + 1
+
+
+def add_bookmark(doc_id, page, title):
+    """Adds a new bookmark titled `title` pointing at `page` (0-based),
+    inserted wherever it belongs by page order (see
+    _find_bookmark_insert_slot()) rather than relative to any selection.
+    Backs the Bookmarks panel's + button, which points the new bookmark at
+    whatever page is currently open in the preview."""
+    doc = documents[doc_id]
+    item = pikepdf.OutlineItem(title or "Untitled", page)
+
+    _push_undo_snapshot(doc)
+    with doc["pdf"].open_outline() as outline:
+        containing_list, insert_at = _find_bookmark_insert_slot(doc, outline.root, page)
+        containing_list.insert(insert_at, item)
+
+        id_map = {}
+        _walk_outline(doc, outline.root, [0], id_map)
+        new_id = next(nid for nid, obj in id_map.items() if obj is item)
+
+    return {"outline": _get_outline_tree(doc), "newBookmarkId": new_id, **_undo_state(doc)}
+
+
 def rename_bookmark(doc_id, bookmark_id, title):
     doc = documents[doc_id]
     outline = doc["pdf"].open_outline()
@@ -2887,6 +2937,8 @@ def main():
                 result = undo_edit(request["docId"])
             elif cmd == "redo":
                 result = redo_edit(request["docId"])
+            elif cmd == "add_bookmark":
+                result = add_bookmark(request["docId"], request["page"], request["title"])
             elif cmd == "rename_bookmark":
                 result = rename_bookmark(request["docId"], request["bookmarkId"], request["title"])
             elif cmd == "delete_bookmark":

@@ -166,6 +166,7 @@ const el = {
   tabBookmarks: document.getElementById('tab-bookmarks'),
   panelProperties: document.getElementById('panel-properties'),
   panelBookmarks: document.getElementById('panel-bookmarks'),
+  btnAddBookmark: document.getElementById('btn-add-bookmark'),
   btnGenerateBookmarks: document.getElementById('btn-generate-bookmarks'),
   bookmarksEmpty: document.getElementById('bookmarks-empty'),
   bookmarkTree: document.getElementById('bookmark-tree'),
@@ -874,6 +875,28 @@ function startRenamingBookmark(bookmarkId) {
   });
 }
 
+// Backs the Bookmarks panel's + button: adds a new bookmark pointing at
+// whatever page is currently open in the preview, inserted wherever it
+// belongs by page order (see _find_bookmark_insert_slot() in
+// tag_worker.py) rather than relative to the current selection. Immediately
+// starts renaming it, since a fresh bookmark's default title is a
+// placeholder the user will almost always want to replace.
+async function addBookmark() {
+  if (!state.docId || !state.pdfDoc) return;
+  try {
+    const result = await window.api.addBookmark(state.docId, state.currentPage - 1, 'New Bookmark');
+    applyFreshOutline(result.outline);
+    applyUndoState(result);
+    if (result.newBookmarkId && state.bookmarksById.has(result.newBookmarkId)) {
+      selectBookmark(result.newBookmarkId);
+      startRenamingBookmark(result.newBookmarkId);
+    }
+    setStatus('Added bookmark.');
+  } catch (err) {
+    reportError('Could not add bookmark', err);
+  }
+}
+
 async function deleteSelectedBookmark() {
   const bookmarkId = state.selectedBookmarkId;
   if (!bookmarkId) return;
@@ -974,6 +997,10 @@ async function scrollToHeadingTop(top) {
   marker.scrollIntoView({ block: 'start', inline: 'nearest' });
   marker.remove();
 }
+
+el.btnAddBookmark.addEventListener('click', () => {
+  addBookmark();
+});
 
 el.btnGenerateBookmarks.addEventListener('click', async () => {
   if (!state.docId) return;
@@ -4400,6 +4427,7 @@ async function performOpen() {
     applyFreshTree(opened.tree || null);
     state.selectedBookmarkId = null;
     applyFreshOutline(opened.outline || []);
+    el.btnAddBookmark.disabled = false;
     el.btnGenerateBookmarks.disabled = !opened.hasStructTree;
     applyUndoState(opened);
     markDirty(false); // freshly opened: applyUndoState above assumes a mutation

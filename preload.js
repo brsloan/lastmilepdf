@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('api', {
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
 
+  addBookmark: (docId, page, title) =>
+    ipcRenderer.invoke('outline:add-bookmark', { docId, page, title }),
   renameBookmark: (docId, bookmarkId, title) =>
     ipcRenderer.invoke('outline:rename-bookmark', { docId, bookmarkId, title }),
   deleteBookmark: (docId, bookmarkId) =>

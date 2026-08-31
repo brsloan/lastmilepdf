@@ -535,6 +535,10 @@ ipcMain.handle('tags:redo', async (_event, { docId }) => {
   return callWorker('redo', { docId });
 });
 
+ipcMain.handle('outline:add-bookmark', async (_event, { docId, page, title }) => {
+  return callWorker('add_bookmark', { docId, page, title });
+});
+
 ipcMain.handle('outline:rename-bookmark', async (_event, { docId, bookmarkId, title }) => {
   return callWorker('rename_bookmark', { docId, bookmarkId, title });
 });

@@ -562,6 +562,8 @@ body.busy * {
 .bookmarks-toolbar {
   padding: 10px 14px 0;
   flex: none;
+  display: flex;
+  gap: 8px;
 }
 
 .bookmark-tree {

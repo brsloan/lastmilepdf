@@ -205,6 +205,7 @@
       <div id="panel-bookmarks" class="details-panel" hidden>
         <div class="bookmarks-toolbar">
           <button type="button" id="btn-generate-bookmarks" class="btn btn-primary" disabled title="Clear existing bookmarks and generate new ones from headings">Generate</button>
+          <button type="button" id="btn-add-bookmark" class="btn btn-ghost" disabled title="Add a bookmark for the current page">+</button>
         </div>
         <p id="bookmarks-empty" class="details-empty">No bookmarks. Click Generate to create them from headings, or open a PDF that already has some.</p>
         <div id="bookmark-tree" class="tag-tree bookmark-tree" hidden></div>
@@ -333,6 +334,7 @@
           <div class="shortcut-row"><dt><kbd>Click</kbd></dt><dd>Select a bookmark, jump to its page</dd></div>
           <div class="shortcut-row"><dt><kbd>Double-click</kbd></dt><dd>Rename a bookmark</dd></div>
           <div class="shortcut-row"><dt><kbd>Delete</kbd></dt><dd>Delete selected bookmark</dd></div>
+          <div class="shortcut-row"><dt><kbd>+</kbd> button</dt><dd>Add a bookmark for the current preview page</dd></div>
         </dl>
       </section>
 
@@ -402,7 +404,7 @@
 
       <section class="help-section">
         <h3>Bookmarks</h3>
-        <p>The Bookmarks tab shows the PDF's outline. Click a bookmark to jump to its page, double-click to rename it, or press Delete to remove the selected one. <strong>Generate</strong> clears the existing outline and builds a fresh one from the document's headings.</p>
+        <p>The Bookmarks tab shows the PDF's outline. Click a bookmark to jump to its page, double-click to rename it, or press Delete to remove the selected one. <strong>+</strong> adds a new bookmark pointing at whatever page is currently open in the preview, inserted into the tree wherever that page falls in the existing order. <strong>Generate</strong> clears the existing outline and builds a fresh one from the document's headings.</p>
       </section>
 
       <section class="help-section">
