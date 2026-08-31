@@ -487,6 +487,10 @@ ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
   return callWorker('delete_nodes', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:join-tags', async (_event, { docId, nodeIds }) => {
+  return callWorker('join_tags', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:figure-from-rect', async (_event, { docId, pageIndex, rect }) => {
   return callWorker('figure_from_rect', { docId, pageIndex, rect });
 });

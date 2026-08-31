@@ -3496,6 +3496,9 @@ window.addEventListener('keydown', (e) => {
   } else if (key === 'c') {
     e.preventDefault();
     applyRoleShortcut('Caption');
+  } else if (key === 'j') {
+    e.preventDefault();
+    joinSelection();
   }
 });
 
@@ -3722,6 +3725,46 @@ function groupSelectionIntoTable() {
 
 function groupSelectionIntoTr() {
   return groupSelectionIntoContainer(window.api.makeTr, 'table row');
+}
+
+// Backs the 'J' shortcut: merges tag(s) together via join_tags() in
+// tag_worker.py. With one tag selected, it's merged into its own previous
+// sibling; with several, all but the earliest-selected (in document order)
+// are merged into that one. Either way the target keeps its id across the
+// rebuild (see join_tags()'s docstring for why), so it's computed here
+// up front purely to know what to reselect on success - the backend is the
+// one source of truth for whether the join is actually valid (shared
+// parent, previous-sibling existence, same-page marked content), and a
+// rejected join just surfaces via reportError like any other op here.
+async function joinSelection() {
+  const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
+  const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
+  if (topLevelIds.length === 0) return;
+
+  let targetId;
+  if (topLevelIds.length === 1) {
+    const entry = state.nodesById.get(topLevelIds[0]);
+    const parentEntry = entry ? state.nodesById.get(entry.parentId) : null;
+    const siblings = parentEntry?.node.children || [];
+    const idx = siblings.findIndex((child) => child.id === topLevelIds[0]);
+    if (idx > 0) targetId = siblings[idx - 1].id;
+  } else {
+    const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+    const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => topLevelIds.includes(id));
+    targetId = orderedIds[0] ?? topLevelIds[0];
+  }
+
+  try {
+    const result = await window.api.joinTags(state.docId, topLevelIds);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (targetId && state.nodesById.has(targetId)) selectNode(targetId);
+    else closeDetails();
+    setStatus(`Joined ${topLevelIds.length + 1} tags into one.`);
+  } catch (err) {
+    reportError('Could not join tags', err);
+  }
 }
 
 // Changes the selected node's heading level by `direction` (+1/-1) if it's

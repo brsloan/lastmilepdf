@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
   scopeTables: (docId) => ipcRenderer.invoke('tags:scope-tables', { docId }),
   deleteNodes: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:delete-nodes', { docId, nodeIds }),
+  joinTags: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:join-tags', { docId, nodeIds }),
   figureFromRect: (docId, pageIndex, rect) =>
     ipcRenderer.invoke('tags:figure-from-rect', { docId, pageIndex, rect }),
   insertParagraphAfter: (docId, nodeId) =>

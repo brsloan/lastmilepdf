@@ -2077,6 +2077,100 @@ def delete_nodes(doc_id, node_ids):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+def join_tags(doc_id, node_ids):
+    """Backs the tag tree's 'J' shortcut: merges tag(s) into an earlier tag,
+    moving every child onto the end of the target's own /K in document
+    order, then removing the now-empty source tag(s) entirely.
+
+    With a single tag selected, there's no second selected tag to serve as
+    the target, so the target is that tag's own previous sibling. With
+    several selected, they must all share a parent - same restriction
+    make_list()/_group_into_container() apply, for the same reason: there'd
+    be no single well-defined "first" otherwise - and the earliest of them
+    in document order is the target, with every other selected tag's
+    children merged into it in that same order.
+
+    Only struct elements ("tags") can be a source or target here - a
+    content/object-ref leaf has no /K of its own to merge into or out of.
+    The target keeps its own node id afterward: nothing before it in
+    document order changes, and ids are assigned by depth-first position
+    (see _rebuild_after_mutation), so its slot in that ordering is
+    untouched by removing tags that only ever sat after it."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No tags selected")
+
+    top_level = _top_level_selection(doc, list(node_ids))
+    for node_id in top_level:
+        if node_id == "root":
+            raise ValueError("Cannot join the document root")
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) != "element":
+            raise ValueError("Can only join tags, not content")
+
+    if len(top_level) == 1:
+        node_id = top_level[0]
+        parent_id = doc["parent_map"].get(node_id)
+        if parent_id is None:
+            raise ValueError("Tag has no parent to join into")
+        siblings = _direct_child_ids(doc, parent_id)
+        idx = siblings.index(node_id)
+        if idx == 0:
+            raise ValueError("No previous tag to join into")
+        target_id = siblings[idx - 1]
+        source_ids = [node_id]
+    else:
+        parent_ids = {doc["parent_map"].get(nid) for nid in top_level}
+        if len(parent_ids) != 1 or None in parent_ids:
+            raise ValueError("Can't join: selected tags don't share a parent.")
+        parent_id = next(iter(parent_ids))
+        # Document order among the selected nodes, as they currently sit
+        # among their shared parent's kids - see _top_level_selection for
+        # why this parent_map scan preserves kid order.
+        node_id_set = set(top_level)
+        ordered_ids = [cid for cid, pid in doc["parent_map"].items() if pid == parent_id and cid in node_id_set]
+        target_id = ordered_ids[0]
+        source_ids = ordered_ids[1:]
+
+    if doc["node_kind"].get(target_id) != "element":
+        raise ValueError("Can only join into a tag, not content")
+
+    # Bail before mutating anything if moving a bare MCID leaf (whose page
+    # is inherited from its containing element - see the module docstring)
+    # out of a source tag into a target on a different page would silently
+    # mislabel which page it points at - same restriction reorder_node()/
+    # reorder_many() apply to a plain move.
+    target_page = doc["node_pages"].get(target_id)
+    for src_id in source_ids:
+        for child_id in _direct_child_ids(doc, src_id):
+            if doc["node_kind"].get(child_id) == "content-int" and doc["node_pages"].get(child_id) != target_page:
+                raise ValueError("Can't join: marked content would move to a tag on a different page")
+
+    _push_undo_snapshot(doc)
+    target_obj = doc["elements"][target_id]
+
+    for src_id in source_ids:
+        src_obj = doc["elements"][src_id]
+        moved = _iter_kids(src_obj)
+        if "/K" in src_obj:
+            del src_obj["/K"]
+
+        insertion_index = len(_iter_kids(target_obj))
+        for child_obj in moved:
+            _insert_kid(target_obj, child_obj, insertion_index)
+            if isinstance(child_obj, pikepdf.Dictionary):
+                child_obj["/P"] = target_obj
+            insertion_index += 1
+
+        src_parent_id = doc["parent_map"].get(src_id)
+        src_parent_obj = doc["elements"].get(src_parent_id) if src_parent_id is not None else None
+        if src_parent_obj is not None:
+            _remove_kid(src_parent_obj, src_obj)
+
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+
+
 # --- figure-from-rectangle tagging ----------------------------------------
 #
 # Backs the "Add Figure" draw tool: the renderer lets the user drag a
@@ -2732,6 +2826,8 @@ def main():
                 result = scope_tables(request["docId"])
             elif cmd == "delete_nodes":
                 result = delete_nodes(request["docId"], request["nodeIds"])
+            elif cmd == "join_tags":
+                result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "figure_from_rect":
                 result = figure_from_rect(request["docId"], request["pageIndex"], request["rect"])
             elif cmd == "insert_paragraph_after":
