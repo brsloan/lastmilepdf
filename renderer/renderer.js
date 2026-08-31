@@ -4491,6 +4491,73 @@ async function performSaveAs() {
 window.api.onMenuSave(() => performSave());
 window.api.onMenuSaveAs(() => performSaveAs());
 
+// Releases the current document and returns the UI to its pre-open state,
+// without exiting the app - the mirror image of performOpen() adopting one.
+async function performClose() {
+  if (!state.docId) return;
+  if (!(await confirmDiscardChanges('Save them before closing?'))) {
+    setStatus('Ready.');
+    return;
+  }
+
+  stopWalking();
+  const previousDocId = state.docId;
+  window.api.closeDoc(previousDocId).catch((err) => {
+    console.error('Could not release the document', err);
+  });
+
+  if (state.renderTask) {
+    state.renderTask.cancel();
+    state.renderTask = null;
+  }
+  state.renderToken++;
+  if (state.pdfDoc) {
+    const previous = state.pdfDoc;
+    state.pdfDoc = null;
+    previous.destroy().catch(() => {});
+  }
+
+  state.docId = null;
+  state.savedFilePath = null;
+  state.hasStructTree = false;
+  state.docInfo = { title: null, author: null };
+  state.aiProposals = new Map();
+  state.selectedBookmarkId = null;
+  state.pageCount = 0;
+  state.currentPage = 1;
+  state.textContentCache.clear();
+  state.mcidTextCache.clear();
+  state.mcidGraphicsCache.clear();
+
+  closeDetails();
+  applyFreshTree(null);
+  applyFreshOutline([]);
+  setFileName(null);
+  markDirty(false);
+
+  el.btnFlatten.disabled = true;
+  el.btnScopeTables.disabled = true;
+  el.btnSmartifact.disabled = true;
+  el.btnAddFigure.disabled = true;
+  el.btnAddP.disabled = true;
+  el.btnWalk.disabled = true;
+  el.btnFixAllActualText.disabled = true;
+  el.btnVerify.disabled = true;
+  el.btnAddBookmark.disabled = true;
+  el.btnGenerateBookmarks.disabled = true;
+  el.btnUndo.disabled = true;
+  el.btnRedo.disabled = true;
+  el.noStructBanner.hidden = true;
+
+  el.canvas.getContext('2d').clearRect(0, 0, el.canvas.width, el.canvas.height);
+  el.viewerPlaceholder.hidden = false;
+  updatePageNavUI();
+
+  setStatus('Ready.');
+}
+
+window.api.onMenuClose(() => performClose());
+
 // The window-close prompt's "Save" button (see createWindow in main.js).
 // Main can't run the save itself - the docId and the target path live here -
 // so it defers the close until we report back. A failed save (or a
