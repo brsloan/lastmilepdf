@@ -3394,11 +3394,50 @@ async function deleteSelection() {
     else contentCount += 1;
   }
 
+  // Figure out which sibling tag to land the selection on afterward: the
+  // surviving sibling right after the deleted run, the one right before it
+  // if the run reached the end of its parent's children, or the parent
+  // itself if nothing survives under it. Always a same-level sibling, never
+  // a descendant - selectNode()'s expandAncestors only opens *ancestors* of
+  // the new selection, so picking a sibling (as opposed to e.g. a content
+  // leaf found by walking rendered rows, which could sit inside a
+  // still-collapsed neighbor) never force-expands anything. Node ids are
+  // reassigned by depth-first position on every rebuild (see
+  // moveSelectedSibling above), so the target is re-located structurally
+  // through (parent id, sibling index) rather than a captured id.
+  //
+  // If the selection spans more than one parent, the reference parent is
+  // whichever one holds the (visually) last deleted top-level tag.
+  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const orderedTopLevelIds = rows.map((row) => row.dataset.nodeId).filter((id) => topLevelIds.includes(id));
+  const lastDeletedId = orderedTopLevelIds[orderedTopLevelIds.length - 1] ?? topLevelIds[0];
+  const refParentId = state.nodesById.get(lastDeletedId)?.parentId ?? null;
+
+  let refIndex = -1;
+  if (refParentId !== null) {
+    const parentSiblings = state.nodesById.get(refParentId)?.node.children || [];
+    const deletedInParent = topLevelIds.filter((id) => state.nodesById.get(id)?.parentId === refParentId);
+    const indices = deletedInParent
+      .map((id) => parentSiblings.findIndex((child) => child.id === id))
+      .filter((i) => i !== -1);
+    if (indices.length > 0) refIndex = Math.min(...indices);
+  }
+
   try {
     const result = await window.api.deleteNodes(state.docId, topLevelIds);
     applyFreshTree(result.tree);
     applyUndoState(result);
-    closeDetails();
+
+    const newParentEntry = refParentId !== null ? state.nodesById.get(refParentId) : null;
+    const newSiblings = newParentEntry?.node.children || [];
+    const nextTarget = refIndex !== -1 ? (newSiblings[refIndex] || newSiblings[refIndex - 1]) : null;
+    if (nextTarget) {
+      selectNode(nextTarget.id);
+    } else if (newParentEntry && newParentEntry.node.type !== 'root') {
+      selectNode(refParentId);
+    } else {
+      closeDetails();
+    }
 
     const parts = [];
     if (tagCount > 0) parts.push(`deleted ${tagCount} tag${tagCount === 1 ? '' : 's'}`);
