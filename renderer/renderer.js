@@ -87,7 +87,7 @@ const el = {
   btnOpen: document.getElementById('btn-open'),
   btnUndo: document.getElementById('btn-undo'),
   btnRedo: document.getElementById('btn-redo'),
-  btnKillDivs: document.getElementById('btn-kill-divs'),
+  btnFlatten: document.getElementById('btn-flatten'),
   btnScopeTables: document.getElementById('btn-scope-tables'),
   btnSmartifact: document.getElementById('btn-smartifact'),
   btnAddFigure: document.getElementById('btn-add-figure'),
@@ -4383,7 +4383,7 @@ async function performOpen() {
     state.docId = opened.docId;
     setFileName(opened.filePath.split(/[\\/]/).pop());
     state.savedFilePath = opened.filePath; // Save overwrites the file it was opened from until Save As picks a new one
-    el.btnKillDivs.disabled = !opened.hasStructTree;
+    el.btnFlatten.disabled = !opened.hasStructTree;
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnAddFigure.disabled = !opened.hasStructTree;
@@ -4474,16 +4474,26 @@ window.api.onMenuSaveAndClose(async () => {
   }
 });
 
-el.btnKillDivs.addEventListener('click', async () => {
+// Flattens organizational tags (Div/Sect/Part/Span and Span-like custom
+// types - see flatten_tags() in tag_worker.py) found within each selected
+// tag's subtree, keeping their contents in place. Falls back to the whole
+// document (root) when nothing is selected, so the button still does
+// something useful with a single click, the same way the old whole-document
+// Kill Divs did.
+el.btnFlatten.addEventListener('click', async () => {
   if (!state.docId) return;
+  const ids = Array.from(state.selectedNodeIds);
+  const targetIds = ids.length > 0
+    ? ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)))
+    : ['root'];
   try {
-    setStatus('Removing Div tags…');
-    const result = await window.api.killDivs(state.docId);
+    setStatus('Flattening tags…');
+    const result = await window.api.flattenTags(state.docId, targetIds);
     applyFreshTree(result.tree);
     applyUndoState(result);
-    setStatus(result.removed > 0 ? `Removed ${result.removed} Div tag${result.removed === 1 ? '' : 's'}.` : 'No Div tags found.');
+    setStatus(result.removed > 0 ? `Flattened ${result.removed} tag${result.removed === 1 ? '' : 's'}.` : 'No organizational tags found.');
   } catch (err) {
-    reportError('Could not remove Div tags', err);
+    reportError('Could not flatten tags', err);
   }
 });
 

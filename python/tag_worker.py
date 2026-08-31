@@ -1881,28 +1881,45 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
-def _count_divs(struct_obj):
+def _is_organizational_role(role):
+    """True for the PDF standard grouping/organizational struct types (Div,
+    Sect, Part, Span) - tags that exist purely to wrap other content rather
+    than to describe it - plus any custom type whose name contains "span"
+    (to catch vendor-specific inline-span variants some generators emit
+    under their own namespaced names). Matched case-insensitively since
+    casing on custom types isn't guaranteed."""
+    if not role:
+        return False
+    lowered = role.lower()
+    if lowered in ("div", "sect", "part", "span"):
+        return True
+    return "span" in lowered
+
+
+def _count_organizational_tags(struct_obj):
     count = 0
     for kid in _iter_kids(struct_obj):
         if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
-            if str(kid["/S"]).lstrip("/") == "Div":
+            if _is_organizational_role(str(kid["/S"]).lstrip("/")):
                 count += 1
-            count += _count_divs(kid)
+            count += _count_organizational_tags(kid)
     return count
 
 
-def _flatten_divs(struct_obj):
-    """Recursively removes /Div struct elements from struct_obj's subtree,
-    splicing each one's own kids into its parent's /K in its place (so the
-    Div's contents are kept, just un-nested by one level). Mutates /K on
-    every ancestor whose kids changed, and reparents (/P) any surviving
-    struct-element grandkids to their new direct parent."""
+def _flatten_organizational_tags(struct_obj):
+    """Recursively removes organizational struct elements (see
+    _is_organizational_role) from struct_obj's subtree, splicing each one's
+    own kids into its parent's /K in its place (so their contents are kept,
+    just un-nested by one level). Mutates /K on every ancestor whose kids
+    changed, and reparents (/P) any surviving struct-element grandkids to
+    their new direct parent. struct_obj itself is never removed, even if it
+    is itself organizational - only what's nested inside it is flattened."""
     changed = False
     new_kids = []
     for kid in _iter_kids(struct_obj):
         if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
-            _flatten_divs(kid)  # post-order: flatten nested Divs first
-            if str(kid["/S"]).lstrip("/") == "Div":
+            _flatten_organizational_tags(kid)  # post-order: flatten nested ones first
+            if _is_organizational_role(str(kid["/S"]).lstrip("/")):
                 changed = True
                 for grandkid in _iter_kids(kid):
                     if isinstance(grandkid, pikepdf.Dictionary) and "/S" in grandkid:
@@ -1917,15 +1934,35 @@ def _flatten_divs(struct_obj):
             del struct_obj["/K"]
 
 
-def kill_divs(doc_id):
+def flatten_tags(doc_id, node_ids):
+    """For each selected tag, recursively removes organizational tags (Div,
+    Sect, Part, Span, and Span-like custom types - see
+    _is_organizational_role) found within its subtree, keeping every
+    content leaf and non-organizational struct element in place, just
+    un-nested by however many wrapping levels get removed. A selected tag
+    is never itself removed, even if it's organizational - only what's
+    nested inside it is flattened. Backs the tag tree's Flatten action
+    (replaces the old whole-document Kill Divs)."""
     doc = documents[doc_id]
-    struct_root = doc["elements"]["root"]
-    removed = _count_divs(struct_root)
+    if not node_ids:
+        raise ValueError("No tags selected")
+    for node_id in node_ids:
+        if node_id != "root" and node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+
+    top_level = _top_level_selection(doc, node_ids)
+    targets = [
+        nid for nid in top_level
+        if nid == "root" or doc["node_kind"].get(nid) == "element"
+    ]
+
+    removed = sum(_count_organizational_tags(doc["elements"][nid]) for nid in targets)
     if removed == 0:
         return {"tree": _rebuild_registry(doc_id), "removed": 0, **_undo_state(doc)}
 
     _push_undo_snapshot(doc)
-    _flatten_divs(struct_root)
+    for nid in targets:
+        _flatten_organizational_tags(doc["elements"][nid])
     return {"tree": _rebuild_after_mutation(doc_id), "removed": removed, **_undo_state(doc)}
 
 
@@ -2820,8 +2857,8 @@ def main():
                     request["docId"], request["nodeIds"],
                     request["newParentId"], request["newIndex"],
                 )
-            elif cmd == "kill_divs":
-                result = kill_divs(request["docId"])
+            elif cmd == "flatten_tags":
+                result = flatten_tags(request["docId"], request["nodeIds"])
             elif cmd == "scope_tables":
                 result = scope_tables(request["docId"])
             elif cmd == "delete_nodes":

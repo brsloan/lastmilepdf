@@ -475,8 +475,8 @@ ipcMain.handle('tags:reorder-many', async (_event, { docId, nodeIds, newParentId
   return callWorker('reorder_many', { docId, nodeIds, newParentId, newIndex });
 });
 
-ipcMain.handle('tags:kill-divs', async (_event, { docId }) => {
-  return callWorker('kill_divs', { docId });
+ipcMain.handle('tags:flatten-tags', async (_event, { docId, nodeIds }) => {
+  return callWorker('flatten_tags', { docId, nodeIds });
 });
 
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {

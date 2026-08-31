@@ -13,7 +13,7 @@ renderer/ (Chromium, no Node access)
   styles.css
 
 preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,updateNodes,
-                  shiftHeadingLevels,reorderNode,reorderMany,killDivs,undo,redo,
+                  shiftHeadingLevels,reorderNode,reorderMany,flattenTags,undo,redo,
                   savePdf,saveToPath,onMenu*}
 main.js         - BrowserWindow, native dialogs, owns the Python sidecar process
 

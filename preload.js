@@ -26,7 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   reorderMany: (docId, nodeIds, newParentId, newIndex) =>
     ipcRenderer.invoke('tags:reorder-many', { docId, nodeIds, newParentId, newIndex }),
 
-  killDivs: (docId) => ipcRenderer.invoke('tags:kill-divs', { docId }),
+  flattenTags: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:flatten-tags', { docId, nodeIds }),
   scopeTables: (docId) => ipcRenderer.invoke('tags:scope-tables', { docId }),
   deleteNodes: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:delete-nodes', { docId, nodeIds }),
