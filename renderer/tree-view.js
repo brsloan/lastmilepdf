@@ -27,8 +27,31 @@ import { state } from './state.js';
 import { buildMcidIndex, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
 import { categoryForRole } from './util.js';
 
+// Node ids that have no AT change of their own but have a descendant (at any
+// depth) flagged in state.atChangeFlags - recomputed once per render pass
+// (not per node) and consulted by appendElementChipAndFlag() so an ancestor
+// can show a "changes below" badge instead of silently hiding them behind a
+// collapsed subtree.
+let descendantAtChangeIds = new Set();
+
+function computeDescendantAtChangeIds() {
+  const ids = new Set();
+  if (!state.showAtChanges || !state.tree) return ids;
+  function walk(node) {
+    let below = false;
+    for (const child of node.children || []) {
+      if (walk(child)) below = true;
+    }
+    if (below) ids.add(node.id);
+    return below || state.atChangeFlags.has(node.id);
+  }
+  walk(state.tree);
+  return ids;
+}
+
 export function renderTree() {
   el.tagTree.innerHTML = '';
+  descendantAtChangeIds = computeDescendantAtChangeIds();
   if (!state.tree) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
@@ -155,6 +178,11 @@ function appendElementChipAndFlag(row, node) {
     const atFlag = document.createElement('span');
     atFlag.className = 'ai-fix-flag';
     atFlag.textContent = 'AT changed';
+    row.appendChild(atFlag);
+  } else if (state.showAtChanges && descendantAtChangeIds.has(node.id)) {
+    const atFlag = document.createElement('span');
+    atFlag.className = 'ai-fix-flag';
+    atFlag.textContent = '↓ AT changed';
     row.appendChild(atFlag);
   }
 }
