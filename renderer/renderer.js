@@ -265,6 +265,40 @@ function isDescendant(candidateAncestorId, nodeId) {
   return isDescendant(candidateAncestorId, entry.parentId);
 }
 
+// A node's id can't be trusted across a rebuild once the move that triggers
+// it changes the tree's shape (see the "Node ids are a fresh depth-first
+// counter..." comment above pruneStaleAiProposals) - but its *structural*
+// path from the root (the sequence of child-indices to follow at each
+// level) is unaffected by a move happening elsewhere in the tree, since
+// that only changes the children array of the moved node's old and new
+// parents, never the position of any other array along the way. Capture
+// the path with nodePathFromRoot() against the pre-move tree, then use
+// resolveNodeByPath() after applyFreshTree() to find the same node again
+// under whatever id it was just reassigned.
+function nodePathFromRoot(nodeId) {
+  const path = [];
+  let cur = nodeId;
+  while (cur !== 'root') {
+    const entry = state.nodesById.get(cur);
+    if (!entry || entry.parentId === null) return null;
+    const siblings = state.nodesById.get(entry.parentId)?.node.children || [];
+    const idx = siblings.findIndex((c) => c.id === cur);
+    if (idx === -1) return null;
+    path.unshift(idx);
+    cur = entry.parentId;
+  }
+  return path;
+}
+
+function resolveNodeByPath(path) {
+  let node = state.tree;
+  for (const idx of path) {
+    node = node?.children?.[idx];
+    if (!node) return null;
+  }
+  return node;
+}
+
 // --- tag tree: rendering --------------------------------------------------
 
 function renderTree() {
@@ -621,10 +655,21 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
         return;
       }
       const newIndex = computeDropIndex(newParentId, siblingId, zone, new Set([draggedId]));
+      const newParentPath = nodePathFromRoot(newParentId);
       try {
         const result = await window.api.reorderNode(state.docId, draggedId, newParentId, newIndex);
         applyFreshTree(result.tree);
         applyUndoState(result);
+        // Re-select the moved node at its new (post-rebuild) id - besides
+        // being a nice "here's where it landed" cue, selectNode()'s
+        // expandAncestors() call is what keeps the destination tag open.
+        // Without it the destination's collapse override (if any) stays
+        // attached to whatever id it had before the drop, which the
+        // depth-first renumbering may have handed to a different node -
+        // see nodePathFromRoot() above.
+        const freshParent = newParentPath ? resolveNodeByPath(newParentPath) : null;
+        const movedNode = freshParent?.children?.[newIndex];
+        if (movedNode) selectNode(movedNode.id);
         setStatus('Moved tag.');
       } catch (err) {
         reportError('Could not move tag', err);
@@ -647,10 +692,23 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
     if (siblingId && topLevelIds.includes(siblingId)) return;
 
     const newIndex = computeDropIndex(newParentId, siblingId, zone, new Set(topLevelIds));
+    const newParentPath = nodePathFromRoot(newParentId);
     try {
       const result = await window.api.reorderMany(state.docId, topLevelIds, newParentId, newIndex);
       applyFreshTree(result.tree);
       applyUndoState(result);
+      // Same re-selection/re-expansion as the single-node drop above, just
+      // over the whole moved block (mirrors moveSelectedBlock()).
+      const freshParent = newParentPath ? resolveNodeByPath(newParentPath) : null;
+      const movedIds = (freshParent?.children || []).slice(newIndex, newIndex + topLevelIds.length).map((c) => c.id);
+      if (movedIds.length > 0) {
+        state.selectedNodeIds = new Set(movedIds);
+        state.selectedNodeId = movedIds[movedIds.length - 1];
+        state.selectionAnchorId = movedIds[0];
+        expandAncestors(state.selectedNodeId);
+        renderTree();
+        refreshDetailsForSelection();
+      }
       setStatus(`Moved ${topLevelIds.length} tags.`);
     } catch (err) {
       reportError('Could not move tags', err);
