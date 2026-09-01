@@ -354,7 +354,7 @@ el.btnPullContent.addEventListener('click', async () => {
   }
 });
 
-// Sends the current Actual Text through the user's own Anthropic API key
+// Sends the current Actual Text through the user's own AI provider key
 // (see File > Settings > API Key…) to clean up OCR/transcription errors, replacing
 // the field in place. Opt-in per click rather than run automatically on
 // every pull - an accessibility-critical field is worse off silently
@@ -610,19 +610,46 @@ el.aboutDialog.addEventListener('click', (e) => {
   if (e.target === el.aboutDialog) el.aboutDialog.close();
 });
 
-// Settings dialog: holds the BYOK Anthropic API key "Fix with AI" uses (see
-// the btnFixActualText handler above). The raw key never round-trips back
-// from main.js - only whether one is currently saved - so the status line
-// is the only feedback on save/remove.
+// Settings dialog: holds the BYOK key(s) "Fix with AI" uses (see the
+// btnFixActualText handler above) - the built-in Anthropic slot, and one
+// slot for a custom OpenAI chat-completions-compatible endpoint (e.g. a
+// university-hosted service). Only one is active at a time (el.settingsProvider),
+// but both keep their saved values when you switch away, so flipping the
+// selector back doesn't lose anything. A raw key never round-trips back from
+// main.js - only whether one is currently saved - so the status lines are
+// the only feedback on save/remove.
 async function refreshSettingsApiKeyStatus() {
   const has = await window.api.hasApiKey();
   el.settingsApiKeyStatus.textContent = has ? 'A key is saved on this device.' : 'No key set.';
   return has;
 }
 
+async function refreshSettingsCustomApiKeyStatus() {
+  const has = await window.api.hasCustomApiKey();
+  el.settingsCustomApiKeyStatus.textContent = has ? 'A key is saved on this device.' : 'No key set.';
+  return has;
+}
+
+function updateSettingsProviderVisibility() {
+  const isCustom = el.settingsProvider.value === 'custom';
+  el.settingsAnthropicFields.hidden = isCustom;
+  el.settingsCustomFields.hidden = !isCustom;
+}
+
+el.settingsProvider.addEventListener('change', updateSettingsProviderVisibility);
+
 window.api.onMenuSettings(async () => {
   el.settingsApiKey.value = '';
-  await refreshSettingsApiKeyStatus();
+  el.settingsCustomApiKey.value = '';
+  const [provider, customConfig] = await Promise.all([
+    window.api.getAiProvider(),
+    window.api.getCustomProviderConfig(),
+  ]);
+  el.settingsProvider.value = provider;
+  el.settingsCustomBaseUrl.value = customConfig.baseUrl;
+  el.settingsCustomModel.value = customConfig.model;
+  updateSettingsProviderVisibility();
+  await Promise.all([refreshSettingsApiKeyStatus(), refreshSettingsCustomApiKeyStatus()]);
   el.settingsDialog.showModal();
 });
 
@@ -634,24 +661,47 @@ el.settingsDialog.addEventListener('click', (e) => {
 
 el.settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const key = el.settingsApiKey.value.trim();
-  if (!key) return;
+  const provider = el.settingsProvider.value === 'custom' ? 'custom' : 'anthropic';
   try {
-    await window.api.setApiKey(key);
-    el.settingsApiKey.value = '';
-    await refreshSettingsApiKeyStatus();
-    setStatus('Anthropic API key saved.');
+    await window.api.setAiProvider(provider);
+    if (provider === 'custom') {
+      await window.api.setCustomProviderConfig(
+        el.settingsCustomBaseUrl.value.trim(),
+        el.settingsCustomModel.value.trim(),
+      );
+      const key = el.settingsCustomApiKey.value.trim();
+      if (key) {
+        await window.api.setCustomApiKey(key);
+        el.settingsCustomApiKey.value = '';
+      }
+      await refreshSettingsCustomApiKeyStatus();
+    } else {
+      const key = el.settingsApiKey.value.trim();
+      if (key) {
+        await window.api.setApiKey(key);
+        el.settingsApiKey.value = '';
+      }
+      await refreshSettingsApiKeyStatus();
+    }
+    setStatus('AI provider settings saved.');
   } catch (err) {
-    reportError('Could not save API key', err);
+    reportError('Could not save AI provider settings', err);
   }
 });
 
 el.btnClearApiKey.addEventListener('click', async () => {
+  const provider = el.settingsProvider.value === 'custom' ? 'custom' : 'anthropic';
   try {
-    await window.api.clearApiKey();
-    el.settingsApiKey.value = '';
-    await refreshSettingsApiKeyStatus();
-    setStatus('Anthropic API key removed.');
+    if (provider === 'custom') {
+      await window.api.clearCustomApiKey();
+      el.settingsCustomApiKey.value = '';
+      await refreshSettingsCustomApiKeyStatus();
+    } else {
+      await window.api.clearApiKey();
+      el.settingsApiKey.value = '';
+      await refreshSettingsApiKeyStatus();
+    }
+    setStatus('API key removed.');
   } catch (err) {
     reportError('Could not remove API key', err);
   }

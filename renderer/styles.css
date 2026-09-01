@@ -1379,10 +1379,11 @@ body.busy-cursor * {
 }
 
 /* --- settings dialog ---
-   Reuses .shortcuts-header for the title bar. Holds the BYOK Anthropic API
-   key used by "Fix with AI" (see wireSettingsDialog() in renderer.js) -
-   stored via Electron's safeStorage in main.js so usage bills to the
-   user's own Anthropic account rather than ours. */
+   Reuses .shortcuts-header for the title bar. Holds the BYOK API key(s) used
+   by "Fix with AI" - Anthropic, or a custom OpenAI-compatible endpoint (see
+   the settings dialog handlers in renderer.js) - stored via Electron's
+   safeStorage in main.js so usage bills to the user's own account rather
+   than ours. */
 
 .settings-dialog {
   width: min(420px, 92vw);

@@ -293,6 +293,40 @@ const api = {
   setApiKey: (key) => ipcRenderer.invoke('settings:set-api-key', { key }),
   /** @returns {Promise<void>} */
   clearApiKey: () => ipcRenderer.invoke('settings:clear-api-key'),
+
+  // Which provider "Fix with AI" currently calls - 'anthropic' (default) or
+  // 'custom' (any OpenAI chat-completions-compatible endpoint). See the
+  // settings:*-provider* handlers and getAiProvider() in main.js.
+  /** @returns {Promise<'anthropic' | 'custom'>} */
+  getAiProvider: () => ipcRenderer.invoke('settings:get-ai-provider'),
+  /**
+   * @param {'anthropic' | 'custom'} provider
+   * @returns {Promise<void>}
+   */
+  setAiProvider: (provider) => ipcRenderer.invoke('settings:set-ai-provider', { provider }),
+
+  // BYOK key + endpoint config for the custom provider - same encrypted-key
+  // handling as the Anthropic key above; baseUrl/model are stored in plain
+  // text since they aren't secret.
+  /** @returns {Promise<boolean>} */
+  hasCustomApiKey: () => ipcRenderer.invoke('settings:has-custom-api-key'),
+  /**
+   * @param {string} key
+   * @returns {Promise<void>}
+   */
+  setCustomApiKey: (key) => ipcRenderer.invoke('settings:set-custom-api-key', { key }),
+  /** @returns {Promise<void>} */
+  clearCustomApiKey: () => ipcRenderer.invoke('settings:clear-custom-api-key'),
+  /** @returns {Promise<{ baseUrl: string, model: string }>} */
+  getCustomProviderConfig: () => ipcRenderer.invoke('settings:get-custom-provider-config'),
+  /**
+   * @param {string} baseUrl
+   * @param {string} model
+   * @returns {Promise<void>}
+   */
+  setCustomProviderConfig: (baseUrl, model) =>
+    ipcRenderer.invoke('settings:set-custom-provider-config', { baseUrl, model }),
+
   /** @param {() => void} callback */
   onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
 

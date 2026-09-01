@@ -167,15 +167,21 @@ function callWorker(cmd, params = {}) {
   });
 }
 
-// --- Settings (Anthropic API key) ------------------------------------------
+// --- Settings (AI provider + API keys) --------------------------------------
 //
 // BYOK (bring your own key): "Fix with AI" (see the ai:fix-actual-text
-// handler below) calls the Anthropic API directly with a key the user
-// supplies and pays for themselves - this app never holds or proxies a
-// shared key. The key is encrypted at rest via Electron's safeStorage (OS
-// keychain/DPAPI-backed) and stored alongside a small settings.json in the
-// user's data dir; only main.js ever touches the decrypted value, since the
-// renderer has no Node access and shouldn't need to.
+// handler below) calls an AI provider directly with a key the user supplies
+// and pays for themselves - this app never holds or proxies a shared key.
+// Two provider slots exist side by side: the built-in Anthropic one, and a
+// single "custom" slot for any OpenAI chat-completions-compatible endpoint
+// (e.g. a university-hosted service) - a base URL, an API key, and a model
+// name the user supplies. `aiProvider` in settings.json picks which slot the
+// AI handlers below read from at request time; switching the selector
+// doesn't discard the other slot's saved values. Every key is encrypted at
+// rest via Electron's safeStorage (OS keychain/DPAPI-backed) and stored
+// alongside a small settings.json in the user's data dir; only main.js ever
+// touches a decrypted value, since the renderer has no Node access and
+// shouldn't need to.
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
@@ -219,6 +225,63 @@ function setStoredApiKey(key) {
 function clearStoredApiKey() {
   const settings = readSettingsFile();
   delete settings.anthropicApiKey;
+  writeSettingsFile(settings);
+}
+
+function getAiProvider() {
+  return readSettingsFile().aiProvider === 'custom' ? 'custom' : 'anthropic';
+}
+
+function setAiProvider(provider) {
+  const settings = readSettingsFile();
+  settings.aiProvider = provider === 'custom' ? 'custom' : 'anthropic';
+  writeSettingsFile(settings);
+}
+
+function hasStoredCustomApiKey() {
+  return typeof readSettingsFile().customApiKey === 'string';
+}
+
+function getStoredCustomApiKey() {
+  const encrypted = readSettingsFile().customApiKey;
+  if (!encrypted || !safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+  } catch (err) {
+    console.error('[settings] failed to decrypt stored custom API key:', err);
+    return null;
+  }
+}
+
+function setStoredCustomApiKey(key) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('This system has no OS-level credential store available to encrypt the key.');
+  }
+  const settings = readSettingsFile();
+  settings.customApiKey = safeStorage.encryptString(key).toString('base64');
+  writeSettingsFile(settings);
+}
+
+function clearStoredCustomApiKey() {
+  const settings = readSettingsFile();
+  delete settings.customApiKey;
+  writeSettingsFile(settings);
+}
+
+// Base URL + model for the custom provider - not secret, so stored in plain
+// text in settings.json alongside (but separate from) its encrypted API key.
+function getCustomProviderConfig() {
+  const settings = readSettingsFile();
+  return {
+    baseUrl: typeof settings.customBaseUrl === 'string' ? settings.customBaseUrl : '',
+    model: typeof settings.customModel === 'string' ? settings.customModel : '',
+  };
+}
+
+function setCustomProviderConfig(baseUrl, model) {
+  const settings = readSettingsFile();
+  settings.customBaseUrl = baseUrl;
+  settings.customModel = model;
   writeSettingsFile(settings);
 }
 
@@ -267,9 +330,15 @@ function setNotifyChime(value) {
 // in renderer.js) show an upfront time estimate instead of just a generic
 // "this may take a few minutes". Kept in its own file rather than
 // settings.json since it's an operational log, not a user preference. Each
-// entry is just {chars, ms} for one completed batch request - no filenames,
-// document content, or other identifying info - so the log can't leak
-// anything about what a user has been editing.
+// entry is just {chars, ms, provider} for one completed batch request - no
+// filenames, document content, or other identifying info - so the log can't
+// leak anything about what a user has been editing. `provider` keys entries
+// by which AI provider produced them (see getAiProvider() above) so a custom
+// endpoint's speed - which can be wildly different from Anthropic's, e.g. a
+// smaller self-hosted model - doesn't skew estimates for the other provider.
+// Entries logged before the provider field existed have no `provider`, and
+// are treated as 'anthropic' (see estimateAiBatchRange() below), since that
+// was the only provider at the time.
 
 const AI_BATCH_LOG_PATH = path.join(app.getPath('userData'), 'ai-batch-log.json');
 const AI_BATCH_LOG_MAX_ENTRIES = 50; // recent-history average, not a lifetime total
@@ -283,10 +352,10 @@ function readAiBatchLog() {
   }
 }
 
-function recordAiBatchTiming(chars, ms) {
+function recordAiBatchTiming(chars, ms, provider) {
   try {
     const log = readAiBatchLog();
-    log.push({ chars, ms });
+    log.push({ chars, ms, provider });
     while (log.length > AI_BATCH_LOG_MAX_ENTRIES) log.shift();
     fs.mkdirSync(path.dirname(AI_BATCH_LOG_PATH), { recursive: true });
     fs.writeFileSync(AI_BATCH_LOG_PATH, JSON.stringify(log));
@@ -313,8 +382,8 @@ function quantile(sortedValues, q) {
 // since even same-sized requests vary run to run (how much correction the
 // text actually needed, API load, etc). With too few runs to measure that
 // spread directly, a flat +/-30% around the median stands in for it.
-function estimateAiBatchRange(chars) {
-  const log = readAiBatchLog();
+function estimateAiBatchRange(chars, provider) {
+  const log = readAiBatchLog().filter((entry) => (entry.provider || 'anthropic') === provider);
   if (log.length === 0) return null;
   const ratios = log.map((entry) => entry.ms / entry.chars).sort((a, b) => a - b);
   const median = quantile(ratios, 0.5);
@@ -778,26 +847,154 @@ ipcMain.handle('settings:clear-api-key', async () => {
   return true;
 });
 
+ipcMain.handle('settings:get-ai-provider', async () => getAiProvider());
+
+ipcMain.handle('settings:set-ai-provider', async (_event, { provider }) => {
+  setAiProvider(provider);
+  return true;
+});
+
+ipcMain.handle('settings:has-custom-api-key', async () => hasStoredCustomApiKey());
+
+ipcMain.handle('settings:set-custom-api-key', async (_event, { key }) => {
+  setStoredCustomApiKey(key);
+  return true;
+});
+
+ipcMain.handle('settings:clear-custom-api-key', async () => {
+  clearStoredCustomApiKey();
+  return true;
+});
+
+ipcMain.handle('settings:get-custom-provider-config', async () => getCustomProviderConfig());
+
+ipcMain.handle('settings:set-custom-provider-config', async (_event, { baseUrl, model }) => {
+  setCustomProviderConfig(baseUrl, model);
+  return true;
+});
+
 ipcMain.handle('settings:get-show-tag-type-label', async () => getShowTagTypeLabel());
 
 ipcMain.handle('settings:get-notify-desktop', async () => getNotifyDesktop());
 ipcMain.handle('settings:get-notify-chime', async () => getNotifyChime());
 
 // --- AI (Fix with AI) ------------------------------------------------------
+//
+// Both handlers below run against whichever provider is currently selected
+// (see getAiProvider() above): the built-in Anthropic client, or a plain
+// fetch() against a custom OpenAI chat-completions-compatible endpoint. The
+// custom path can't rely on Anthropic's structured-output support (an
+// arbitrary endpoint may not offer an equivalent), so it instead instructs
+// the model to reply with bare JSON and parses that leniently - stripping a
+// markdown code fence if the model wrapped its reply in one, which smaller
+// or less-instruction-tuned models tend to do even when told not to.
+
+function requireAnthropicKey() {
+  const apiKey = getStoredApiKey();
+  if (!apiKey) {
+    throw new Error('No Anthropic API key set. Add one via File > Settings > API Key…');
+  }
+  return apiKey;
+}
+
+function requireCustomProviderConfig() {
+  const apiKey = getStoredCustomApiKey();
+  const { baseUrl, model } = getCustomProviderConfig();
+  if (!apiKey || !baseUrl || !model) {
+    throw new Error('The custom AI provider is not fully configured. Set the base URL, model, and API key via File > Settings > API Key…');
+  }
+  return { apiKey, baseUrl, model };
+}
+
+/**
+ * POSTs one OpenAI chat-completions-style request to a custom endpoint and
+ * returns the reply text. `jsonMode` sets response_format: json_object as a
+ * best-effort hint - endpoints that ignore unknown fields still work, since
+ * the system prompt itself also spells out the required JSON shape.
+ */
+async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, jsonMode }) {
+  let response;
+  try {
+    response = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        temperature: 0,
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+  } catch (err) {
+    throw new Error(`Could not reach the custom AI endpoint (${baseUrl}): ${err.message}`);
+  }
+
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('That custom AI API key was rejected. Check it via File > Settings > API Key…');
+    }
+    if (response.status === 429) {
+      throw new Error('Rate limited by the custom AI endpoint - try again in a moment.');
+    }
+    const bodyText = await response.text().catch(() => '');
+    throw new Error(`Custom AI endpoint error (${response.status}): ${bodyText.slice(0, 500) || response.statusText}`);
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('The custom AI endpoint did not return valid JSON.');
+  }
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('The custom AI endpoint did not return any text.');
+  }
+  return content.trim();
+}
+
+// Strips a ```/```json fence around a model's reply, if present, before
+// parsing - see the comment above customChatCompletion() for why.
+function parseJsonReply(text) {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced ? fenced[1] : text).trim();
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    throw new Error("The custom AI endpoint's reply could not be parsed as JSON.");
+  }
+}
 
 const FIX_ACTUAL_TEXT_SYSTEM_PROMPT = `You clean up text pulled from a PDF's content stream for use as the PDF's /ActualText - the text a screen reader speaks instead of the visible content.
 
 Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation, while preserving the original wording, meaning, and language exactly. Do not summarize, translate, rephrase, or add commentary. Reply with only the corrected text and nothing else - no preamble, no explanation, no quotation marks.`;
 
 ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
-  const apiKey = getStoredApiKey();
-  if (!apiKey) {
-    throw new Error('No Anthropic API key set. Add one via File > Settings > API Key…');
-  }
   if (!text || !text.trim()) {
     throw new Error('There is no text to fix.');
   }
 
+  if (getAiProvider() === 'custom') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig();
+    const content = await customChatCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
+      prompt: text,
+      jsonMode: false,
+    });
+    return content;
+  }
+
+  const apiKey = requireAnthropicKey();
   const client = new Anthropic({ apiKey });
   try {
     const response = await client.messages.create({
@@ -846,6 +1043,12 @@ const FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT = `You clean up text for use as each t
 
 You will receive a JSON array of entries, each with an id and the current text for one tag from the same document. Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation in each entry, while preserving the original wording, meaning, and language exactly - use the full set of entries to stay consistent, since the same proper noun, abbreviation, or technical term should be fixed the same way everywhere it appears in the document. Do not summarize, translate, rephrase, reorder, merge, or drop entries. Return exactly one output entry per input id, using the same ids, with only the corrected text - no commentary. An entry that already reads correctly should be returned unchanged.`;
 
+// Appended only for the custom-provider path, which can't rely on
+// Anthropic-style structured-output enforcement (see the comment above
+// customChatCompletion() above) and so needs the required shape spelled out
+// in-prompt instead.
+const FIX_ACTUAL_TEXT_BATCH_JSON_INSTRUCTION = `Respond with only a single JSON object of the exact form {"items":[{"id":"...","text":"..."}]} - no markdown code fences, no explanation, no other text before or after the JSON.`;
+
 // Rough guard against a request too large for a single response - output is
 // close to input size (corrected text, not expanded) plus per-entry JSON
 // overhead, but without a cap a huge document would silently truncate
@@ -857,13 +1060,10 @@ const BATCH_FIX_CHAR_LIMIT = 150000;
 // an upfront estimate before kicking off the actual request - the renderer
 // passes the same char count it's about to send so the estimate matches what
 // estimateAiBatchRange()/recordAiBatchTiming() below key their averages on.
-ipcMain.handle('ai:estimate-batch-time', async (_event, { chars }) => estimateAiBatchRange(chars));
+// Scoped to the currently selected provider (see estimateAiBatchRange()).
+ipcMain.handle('ai:estimate-batch-time', async (_event, { chars }) => estimateAiBatchRange(chars, getAiProvider()));
 
 ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
-  const apiKey = getStoredApiKey();
-  if (!apiKey) {
-    throw new Error('No Anthropic API key set. Add one via File > Settings > API Key…');
-  }
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('No tags with Actual Text to fix.');
   }
@@ -874,38 +1074,62 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
     );
   }
 
-  const client = new Anthropic({ apiKey });
+  const provider = getAiProvider();
   const startedAt = Date.now();
-  try {
-    // Streamed rather than a plain .parse() call - a full-document batch can
-    // need well beyond the ~16K non-streaming ceiling, and large max_tokens
-    // requires streaming to avoid an HTTP timeout.
-    const stream = client.messages.stream({
-      model: 'claude-opus-5',
-      max_tokens: 64000,
-      output_config: { effort: 'medium', format: zodOutputFormat(BatchFixResultSchema) },
-      system: FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: payload }],
+  let resultItems;
+
+  if (provider === 'custom') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig();
+    const content = await customChatCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      system: `${FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT}\n\n${FIX_ACTUAL_TEXT_BATCH_JSON_INSTRUCTION}`,
+      prompt: payload,
+      jsonMode: true,
     });
-    const response = await stream.finalMessage();
-    if (!response.parsed_output) {
-      throw new Error('The AI did not return a valid response.');
+    const parsed = parseJsonReply(content);
+    const validation = BatchFixResultSchema.safeParse(parsed);
+    if (!validation.success) {
+      throw new Error("The custom AI endpoint's reply did not match the expected {items: [{id, text}]} shape.");
     }
-    // Only successful runs go into the log - a run that errored out (e.g.
-    // rate limited partway through) doesn't reflect how long a normal
-    // request of this size actually takes, and would skew future estimates.
-    recordAiBatchTiming(payload.length, Date.now() - startedAt);
-    return response.parsed_output.items;
-  } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
+    resultItems = validation.data.items;
+  } else {
+    const apiKey = requireAnthropicKey();
+    const client = new Anthropic({ apiKey });
+    try {
+      // Streamed rather than a plain .parse() call - a full-document batch
+      // can need well beyond the ~16K non-streaming ceiling, and large
+      // max_tokens requires streaming to avoid an HTTP timeout.
+      const stream = client.messages.stream({
+        model: 'claude-opus-5',
+        max_tokens: 64000,
+        output_config: { effort: 'medium', format: zodOutputFormat(BatchFixResultSchema) },
+        system: FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: payload }],
+      });
+      const response = await stream.finalMessage();
+      if (!response.parsed_output) {
+        throw new Error('The AI did not return a valid response.');
+      }
+      resultItems = response.parsed_output.items;
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) {
+        throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
+      }
+      if (err instanceof Anthropic.RateLimitError) {
+        throw new Error('Rate limited by the Anthropic API - try again in a moment.');
+      }
+      if (err instanceof Anthropic.APIError) {
+        throw new Error(`Anthropic API error: ${err.message}`);
+      }
+      throw err;
     }
-    if (err instanceof Anthropic.RateLimitError) {
-      throw new Error('Rate limited by the Anthropic API - try again in a moment.');
-    }
-    if (err instanceof Anthropic.APIError) {
-      throw new Error(`Anthropic API error: ${err.message}`);
-    }
-    throw err;
   }
+
+  // Only successful runs go into the log - a run that errored out (e.g. rate
+  // limited partway through) doesn't reflect how long a normal request of
+  // this size actually takes, and would skew future estimates.
+  recordAiBatchTiming(payload.length, Date.now() - startedAt, provider);
+  return resultItems;
 });

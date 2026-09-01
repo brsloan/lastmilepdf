@@ -179,7 +179,7 @@
             <span class="field-label">Actual text</span>
             <span class="field-label-btns">
               <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
-              <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text (requires an Anthropic API key - see Settings)">Fix with AI</button>
+              <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text (requires an AI provider API key - see Settings)">Fix with AI</button>
             </span>
           </span>
           <div class="actual-text-box">
@@ -443,11 +443,39 @@
     </div>
     <form id="settings-form" class="settings-body">
       <label class="field">
-        <span class="field-label">Anthropic API key</span>
-        <input id="settings-api-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+        <span class="field-label">AI provider</span>
+        <select id="settings-provider">
+          <option value="anthropic">Anthropic</option>
+          <option value="custom">Custom (OpenAI-compatible)</option>
+        </select>
       </label>
-      <p id="settings-api-key-status" class="settings-hint">No key set.</p>
-      <p class="settings-hint">Used by "Fix with AI" in the Actual Text field to clean up OCR/transcription errors. Get a key at <code>console.anthropic.com</code> - usage bills to your own Anthropic account, not ours. Stored encrypted, on this device only.</p>
+
+      <div id="settings-anthropic-fields">
+        <label class="field">
+          <span class="field-label">Anthropic API key</span>
+          <input id="settings-api-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+        </label>
+        <p id="settings-api-key-status" class="settings-hint">No key set.</p>
+        <p class="settings-hint">Used by "Fix with AI" in the Actual Text field to clean up OCR/transcription errors. Get a key at <code>console.anthropic.com</code> - usage bills to your own Anthropic account, not ours. Stored encrypted, on this device only.</p>
+      </div>
+
+      <div id="settings-custom-fields" hidden>
+        <label class="field">
+          <span class="field-label">Base URL</span>
+          <input id="settings-custom-base-url" type="text" placeholder="https://example.edu/api/chat/completions" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span class="field-label">Model</span>
+          <input id="settings-custom-model" type="text" placeholder="llama3.1:latest" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span class="field-label">API key</span>
+          <input id="settings-custom-api-key" type="password" autocomplete="off" spellcheck="false" />
+        </label>
+        <p id="settings-custom-api-key-status" class="settings-hint">No key set.</p>
+        <p class="settings-hint">Used by "Fix with AI" to call any OpenAI chat-completions-compatible endpoint - e.g. a university-hosted service. Base URL is the full completions endpoint (not just the host). Usage bills to whatever account owns that key, not ours. Key stored encrypted, on this device only.</p>
+      </div>
+
       <div class="settings-actions">
         <button type="button" id="btn-clear-api-key" class="btn btn-ghost">Remove Key</button>
         <button type="submit" id="btn-save-api-key" class="btn btn-primary">Save</button>
