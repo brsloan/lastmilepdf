@@ -311,6 +311,13 @@ function buildAppMenu() {
         { type: 'separator' },
         { label: 'Close', accelerator: 'CmdOrCtrl+W', click: (_item, win) => win?.webContents.send('menu:close') },
         { type: 'separator' },
+        {
+          label: 'Settings',
+          submenu: [
+            { label: 'API Key…', click: (_item, win) => win?.webContents.send('menu:settings') },
+          ],
+        },
+        { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
@@ -334,12 +341,6 @@ function buildAppMenu() {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-      ],
-    },
-    {
-      label: 'Settings',
-      submenu: [
-        { label: 'API Key…', click: (_item, win) => win?.webContents.send('menu:settings') },
       ],
     },
     {
@@ -596,7 +597,7 @@ Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hy
 ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
   const apiKey = getStoredApiKey();
   if (!apiKey) {
-    throw new Error('No Anthropic API key set. Add one via Settings > API Key…');
+    throw new Error('No Anthropic API key set. Add one via File > Settings > API Key…');
   }
   if (!text || !text.trim()) {
     throw new Error('There is no text to fix.');
@@ -618,7 +619,7 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
     return textBlock.text.trim();
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
-      throw new Error('That Anthropic API key was rejected. Check it via Settings > API Key…');
+      throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
     }
     if (err instanceof Anthropic.RateLimitError) {
       throw new Error('Rate limited by the Anthropic API - try again in a moment.');
@@ -660,7 +661,7 @@ const BATCH_FIX_CHAR_LIMIT = 150000;
 ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
   const apiKey = getStoredApiKey();
   if (!apiKey) {
-    throw new Error('No Anthropic API key set. Add one via Settings > API Key…');
+    throw new Error('No Anthropic API key set. Add one via File > Settings > API Key…');
   }
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('No tags with Actual Text to fix.');
@@ -691,7 +692,7 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
     return response.parsed_output.items;
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
-      throw new Error('That Anthropic API key was rejected. Check it via Settings > API Key…');
+      throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
     }
     if (err instanceof Anthropic.RateLimitError) {
       throw new Error('Rate limited by the Anthropic API - try again in a moment.');

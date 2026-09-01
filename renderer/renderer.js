@@ -2900,7 +2900,7 @@ el.btnPullContent.addEventListener('click', async () => {
 });
 
 // Sends the current Actual Text through the user's own Anthropic API key
-// (see Settings > API Key…) to clean up OCR/transcription errors, replacing
+// (see File > Settings > API Key…) to clean up OCR/transcription errors, replacing
 // the field in place. Opt-in per click rather than run automatically on
 // every pull - an accessibility-critical field is worse off silently
 // "fixed" wrong than left as raw OCR output the user can still review.
