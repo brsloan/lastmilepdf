@@ -80,6 +80,8 @@ const state = {
   findReplaceLastMatchId: null, // id most recently found/replaced by the Find/Replace dialog - see doFindNext()
   showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
   showTagTypeLabel: true, // File > Settings > Appearance > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
+  notifyDesktop: true, // File > Settings > Notifications > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
+  notifyChime: true, // File > Settings > Notifications > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below
   atChangeFlags: new Map(), // nodeId -> { original, suggested } - tags whose Actual Text no longer matches their pulled content text, found by the Show AT Changes sweep (computeAtChangeFlags()). Same shape as aiProposals so it shares renderActualTextDiff()/pruneStaleAiProposals(), but recomputed from the file itself rather than from in-session state, so it still works after a save/reopen.
   atChangeSweepToken: 0, // invalidates an in-flight computeAtChangeFlags() sweep superseded by a newer one (toggle off/on again, or a fresh document)
 };
@@ -2085,6 +2087,13 @@ window.api.onMenuShowTagTypeLabel((_event, checked) => {
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
 });
 
+// File > Settings > Notifications - same persisted-in-main.js pattern as
+// Show Tag Type Label above.
+window.api.getNotifyDesktop().then((value) => { state.notifyDesktop = value; });
+window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
+window.api.onMenuNotifyDesktop((_event, checked) => { state.notifyDesktop = checked; });
+window.api.onMenuNotifyChime((_event, checked) => { state.notifyChime = checked; });
+
 window.api.onMenuShowAtChanges(async (_event, checked) => {
   state.showAtChanges = checked;
   if (!checked) {
@@ -3121,6 +3130,54 @@ function hideAiBatchProgress() {
   document.body.classList.remove('busy-cursor');
 }
 
+// A short two-note chime, synthesized with the Web Audio API rather than
+// shipped as an asset file - one less thing to package/license. Reuses a
+// single AudioContext across calls since browsers cap how many can be live
+// at once.
+let chimeAudioCtx = null;
+function playChime() {
+  try {
+    chimeAudioCtx = chimeAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = chimeAudioCtx;
+    const now = ctx.currentTime;
+    [880, 1318.51].forEach((freq, i) => { // A5 then E6 - a simple pleasant "ding-dong"
+      const start = now + i * 0.12;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.2, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.6);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.6);
+    });
+  } catch (err) {
+    console.error('Could not play chime', err);
+  }
+}
+
+// File > Settings > Notifications - called once an AI batch operation (e.g.
+// "Fix All Actual Text") finishes, success or failure alike, so the user
+// can tell it's done without having to watch the window.
+function notifyAiBatchComplete(message) {
+  if (state.notifyChime) playChime();
+  if (state.notifyDesktop && typeof Notification !== 'undefined') {
+    try {
+      if (Notification.permission === 'granted') {
+        new Notification('LastMilePDF', { body: message });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then((permission) => {
+          if (permission === 'granted') new Notification('LastMilePDF', { body: message });
+        });
+      }
+    } catch (err) {
+      console.error('Could not show desktop notification', err);
+    }
+  }
+}
+
 // Sends every tag's current Actual Text to AI in one request (see
 // ai:fix-actual-text-batch in main.js), so the model can keep proper nouns,
 // abbreviations, and technical terms consistent across the whole document -
@@ -3206,6 +3263,7 @@ el.btnFixAllActualText.addEventListener('click', async () => {
   } finally {
     el.btnFixAllActualText.disabled = false;
     hideAiBatchProgress();
+    notifyAiBatchComplete(el.statusBar.textContent);
   }
 });
 

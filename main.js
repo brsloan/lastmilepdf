@@ -236,6 +236,31 @@ function setShowTagTypeLabel(value) {
   writeSettingsFile(settings);
 }
 
+// Whether finishing an AI batch operation (e.g. "Fix All Actual Text") pops
+// a desktop notification / plays a chime (File > Settings > Notifications).
+// Persisted the same way as showTagTypeLabel above, for the same reason -
+// the menu checkboxes need their initial `checked` state before the
+// renderer has loaded.
+function getNotifyDesktop() {
+  return readSettingsFile().notifyDesktop !== false; // default on
+}
+
+function setNotifyDesktop(value) {
+  const settings = readSettingsFile();
+  settings.notifyDesktop = value;
+  writeSettingsFile(settings);
+}
+
+function getNotifyChime() {
+  return readSettingsFile().notifyChime !== false; // default on
+}
+
+function setNotifyChime(value) {
+  const settings = readSettingsFile();
+  settings.notifyChime = value;
+  writeSettingsFile(settings);
+}
+
 // --- Window -----------------------------------------------------------------
 
 // Whether the renderer currently holds tag edits that aren't on disk. The
@@ -343,6 +368,29 @@ function buildAppMenu() {
                   click: (item, win) => {
                     setShowTagTypeLabel(item.checked);
                     win?.webContents.send('menu:show-tag-type-label', item.checked);
+                  },
+                },
+              ],
+            },
+            {
+              label: 'Notifications',
+              submenu: [
+                {
+                  label: 'Desktop Notification When AI Batch Finishes',
+                  type: 'checkbox',
+                  checked: getNotifyDesktop(),
+                  click: (item, win) => {
+                    setNotifyDesktop(item.checked);
+                    win?.webContents.send('menu:notify-desktop', item.checked);
+                  },
+                },
+                {
+                  label: 'Play Chime When AI Batch Finishes',
+                  type: 'checkbox',
+                  checked: getNotifyChime(),
+                  click: (item, win) => {
+                    setNotifyChime(item.checked);
+                    win?.webContents.send('menu:notify-chime', item.checked);
                   },
                 },
               ],
@@ -645,6 +693,9 @@ ipcMain.handle('settings:clear-api-key', async () => {
 });
 
 ipcMain.handle('settings:get-show-tag-type-label', async () => getShowTagTypeLabel());
+
+ipcMain.handle('settings:get-notify-desktop', async () => getNotifyDesktop());
+ipcMain.handle('settings:get-notify-chime', async () => getNotifyChime());
 
 // --- AI (Fix with AI) ------------------------------------------------------
 

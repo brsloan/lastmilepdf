@@ -97,6 +97,14 @@ contextBridge.exposeInMainWorld('api', {
   getShowTagTypeLabel: () => ipcRenderer.invoke('settings:get-show-tag-type-label'),
   onMenuShowTagTypeLabel: (callback) => ipcRenderer.on('menu:show-tag-type-label', callback),
 
+  // File > Settings > Notifications - desktop notification / chime when an
+  // AI batch operation (e.g. "Fix All Actual Text") finishes. Persisted in
+  // settings.json the same way as Show Tag Type Label above.
+  getNotifyDesktop: () => ipcRenderer.invoke('settings:get-notify-desktop'),
+  getNotifyChime: () => ipcRenderer.invoke('settings:get-notify-chime'),
+  onMenuNotifyDesktop: (callback) => ipcRenderer.on('menu:notify-desktop', callback),
+  onMenuNotifyChime: (callback) => ipcRenderer.on('menu:notify-chime', callback),
+
   fixActualText: (text) => ipcRenderer.invoke('ai:fix-actual-text', { text }),
   fixActualTextBatch: (items) => ipcRenderer.invoke('ai:fix-actual-text-batch', { items }),
 
