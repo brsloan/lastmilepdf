@@ -2015,6 +2015,14 @@ el.btnRevertAiFix.addEventListener('click', async () => {
 // pulling and comparing regardless of whether its content leaf sits
 // directly inside it or deeper in the subtree (pullContentText() walks the
 // whole subtree either way).
+//
+// Candidates are pulled in parallel (Promise.all), not one at a time - each
+// pull is an independent read, and a real document can easily have its
+// existing Actual Text spread across a dozen+ pages, each needing its own
+// first-time (uncached) pdf.js getTextContent() call; doing that
+// sequentially made a freshly opened document's sweep visibly slow (tens of
+// seconds), which read as "Show AT Changes doesn't work for a new file"
+// when it was really still running.
 async function computeAtChangeFlags() {
   const token = ++state.atChangeSweepToken;
   const flags = new Map();
@@ -2025,13 +2033,14 @@ async function computeAtChangeFlags() {
       if (!node.actualText || !node.actualText.trim()) return;
       candidates.push(node);
     });
-    for (const node of candidates) {
-      const pulled = (await pullContentText(node.id)) || '';
-      if (token !== state.atChangeSweepToken) return; // superseded by a newer sweep
+    const pulledTexts = await Promise.all(candidates.map((node) => pullContentText(node.id)));
+    if (token !== state.atChangeSweepToken) return; // superseded by a newer sweep
+    candidates.forEach((node, i) => {
+      const pulled = pulledTexts[i] || '';
       if (pulled !== node.actualText) {
         flags.set(node.id, { original: pulled, suggested: node.actualText });
       }
-    }
+    });
   }
   if (token !== state.atChangeSweepToken) return;
   state.atChangeFlags = flags;
@@ -4904,10 +4913,20 @@ async function performOpen() {
     // Show AT Changes is a session-wide toggle (see the menu handler above),
     // so a document opened while it's already on gets swept immediately
     // rather than waiting for the user to re-toggle it - needs state.pdfDoc,
-    // hence only now that loadPdfPreview() above has set it.
+    // hence only now that loadPdfPreview() above has set it. The tree and
+    // PDF preview are already fully rendered by this point (applyFreshTree()/
+    // loadPdfPreview() above), so without the status line below this sweep
+    // - which can take a few seconds on a document with existing Actual Text
+    // spread across many pages - runs silently behind an apparently-finished
+    // UI, reading as broken rather than still working.
+    let atChangesSummary = '';
     if (state.showAtChanges) {
+      setStatus('Loaded. Scanning tags for Actual Text changed from content…');
       await computeAtChangeFlags();
       renderTree();
+      atChangesSummary = state.atChangeFlags.size > 0
+        ? ` Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content.`
+        : ' No tags have Actual Text that differs from their pulled content.';
     }
 
     // Land on the /Document tag by default, once the preview (and so
@@ -4915,7 +4934,7 @@ async function performOpen() {
     const documentNode = findDocumentNode(state.tree);
     if (documentNode) selectNode(documentNode.id);
 
-    setStatus(opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).');
+    setStatus((opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).') + atChangesSummary);
   } catch (err) {
     reportError('Could not open PDF', err);
   }
