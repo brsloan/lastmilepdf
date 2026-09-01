@@ -164,6 +164,7 @@ const el = {
   verifyDialog: document.getElementById('verify-dialog'),
   btnCloseVerify: document.getElementById('btn-close-verify'),
   verifyBody: document.getElementById('verify-body'),
+  detailsPane: document.getElementById('details-pane'),
   findReplaceDialog: document.getElementById('find-replace-dialog'),
   btnCloseFindReplace: document.getElementById('btn-close-find-replace'),
   findReplaceFind: document.getElementById('find-replace-find'),
@@ -3354,15 +3355,40 @@ el.btnFindReplaceAll.addEventListener('click', async () => {
   }
 });
 
+// Docks the dialog directly over the details-pane column (rather than the
+// centered/dimmed spot a plain showModal() would use) so the Viewer and Tag
+// Tree panes beside it stay visible and clickable while it's open - see the
+// .find-replace-dialog comment in styles.css. Re-measured on every open and
+// on resize since the details-pane's rect shifts with the no-struct banner
+// and window size, and there's no CSS-only way to pin an absolutely/fixed
+// positioned dialog to a grid column's live box.
+function positionFindReplaceDialog() {
+  const rect = el.detailsPane.getBoundingClientRect();
+  el.findReplaceDialog.style.top = `${rect.top}px`;
+  el.findReplaceDialog.style.left = `${rect.left}px`;
+  el.findReplaceDialog.style.width = `${rect.width}px`;
+}
+
 window.api.onMenuFindReplace(() => {
   state.findReplaceLastMatchId = null;
-  el.findReplaceStatus.textContent = ' ';
-  el.findReplaceDialog.showModal();
+  el.findReplaceStatus.textContent = '';
+  positionFindReplaceDialog();
+  el.findReplaceDialog.show();
   el.findReplaceFind.focus();
 });
 el.btnCloseFindReplace.addEventListener('click', () => el.findReplaceDialog.close());
-el.findReplaceDialog.addEventListener('click', (e) => {
-  if (e.target === el.findReplaceDialog) el.findReplaceDialog.close();
+
+window.addEventListener('resize', () => {
+  if (el.findReplaceDialog.open) positionFindReplaceDialog();
+});
+
+// Non-modal (see above), so unlike the app's other dialogs it doesn't get
+// Escape-to-close for free from showModal() - wire it up to match.
+el.findReplaceDialog.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    el.findReplaceDialog.close();
+  }
 });
 
 // Enter in either field acts like clicking the button below it, so the
