@@ -197,12 +197,24 @@ def update_doc_info(doc_id, changes):
     Properties panel repurposes the same Language field used for a struct
     element's own /Lang attribute when the /Document tag is selected, since
     that's the one place in the tree that maps onto this document-wide
-    setting."""
+    setting.
+
+    Setting a title also sets /ViewerPreferences /DisplayDocTitle true on
+    the catalog - without it, Acrobat's "Document Title" accessibility check
+    fails even though /Title is present, because DisplayDocTitle is what
+    tells a viewer to show the title instead of the filename."""
     doc = documents[doc_id]
     _push_undo_snapshot(doc)
     info = doc["pdf"].docinfo
     if "title" in changes:
         _set_or_clear_string(info, "/Title", changes["title"])
+        if changes["title"]:
+            root = doc["pdf"].Root
+            vp = root.get("/ViewerPreferences")
+            if not isinstance(vp, pikepdf.Dictionary):
+                vp = pikepdf.Dictionary({})
+                root["/ViewerPreferences"] = vp
+            vp["/DisplayDocTitle"] = True
     if "author" in changes:
         _set_or_clear_string(info, "/Author", changes["author"])
     with doc["pdf"].open_metadata() as meta:
