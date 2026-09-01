@@ -2046,6 +2046,28 @@ async function computeAtChangeFlags() {
   state.atChangeFlags = flags;
 }
 
+// Keeps a single tag's Show AT Changes flag in sync with a just-applied
+// edit, without re-sweeping the whole tree - called from
+// applyDetailsChange() whenever showAtChanges is on, so a tag edited (typed
+// into directly, Pull Content + commit, Fix with AI, Revert...) while the
+// mode is already active gets flagged/unflagged live, instead of only
+// reappearing after the user toggles the menu item off and back on. Mirrors
+// computeAtChangeFlags()'s own per-candidate logic for one node.
+async function updateAtChangeFlagForNode(nodeId) {
+  const node = state.nodesById.get(nodeId)?.node;
+  if (!node || node.type !== 'element' || node.role === 'Table' || node.role === 'Document'
+      || !node.actualText || !node.actualText.trim()) {
+    state.atChangeFlags.delete(nodeId);
+    return;
+  }
+  const pulled = (await pullContentText(nodeId)) || '';
+  if (pulled !== node.actualText) {
+    state.atChangeFlags.set(nodeId, { original: pulled, suggested: node.actualText });
+  } else {
+    state.atChangeFlags.delete(nodeId);
+  }
+}
+
 window.api.onMenuShowAtChanges(async (_event, checked) => {
   state.showAtChanges = checked;
   if (!checked) {
@@ -2971,6 +2993,12 @@ async function applyDetailsChange() {
           applyUndoState(infoResult);
           changedAnything = true;
         }
+      }
+
+      // Refresh this tag's own Show AT Changes flag before selectNode()
+      // below re-renders the tree/details - see updateAtChangeFlagForNode().
+      if (state.showAtChanges && changedAnything) {
+        await updateAtChangeFlagForNode(nodeId);
       }
 
       setStatus(changedAnything ? 'Updated tag.' : 'No changes to apply.');
