@@ -399,12 +399,16 @@ export async function pullContentText(nodeId) {
 }
 
 // Like pullContentText(), but for a table preview cell (see
-// renderTablePreview()): a nested Figure tag contributes a single "[Figure]"
-// marker in its place rather than being descended into for its own content
-// leaves' text/image labels. That keeps a cell mixing a Figure with ordinary
-// text (e.g. a caption alongside an image) readable - the real text is
-// pulled as usual and only the figure's portion collapses to "[Figure]",
-// instead of one Figure anywhere in the cell blanking out all of it.
+// renderTablePreview()): any tag in the cell's subtree - the cell itself or
+// a nested element, checked top-down - contributes its own Actual Text
+// as-is, the way a screen reader would announce it, instead of being
+// descended into for raw content. Only a tag with no Actual Text falls back
+// to that: a nested Figure contributes a single "[Figure]" marker, and
+// anything else recurses into its children's content leaves. That keeps a
+// cell mixing a Figure with ordinary text (e.g. a caption alongside an
+// image) readable - the real text is pulled as usual and only the figure's
+// portion collapses to "[Figure]", instead of one Figure anywhere in the
+// cell blanking out all of it.
 export async function pullCellText(cellNode) {
   const parts = [];
   async function visit(node) {
@@ -415,13 +419,18 @@ export async function pullCellText(cellNode) {
       }
       return;
     }
+    const actualText = (node.actualText || '').trim();
+    if (actualText) {
+      parts.push(actualText);
+      return;
+    }
     if (node.role === 'Figure') {
       parts.push('[Figure]');
       return;
     }
     for (const child of node.children || []) await visit(child);
   }
-  for (const child of cellNode.children || []) await visit(child);
+  await visit(cellNode);
   return parts.join(' ');
 }
 
