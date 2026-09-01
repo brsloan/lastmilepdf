@@ -957,7 +957,8 @@ async function collectHeadingsForBookmarks() {
     const node = state.nodesById.get(id)?.node;
     if (!node || node.page === null || node.page === undefined) continue;
     const actualText = (node.actualText || '').trim();
-    const title = actualText || (await pullContentText(id)).trim() || `Untitled ${node.role}`;
+    const rawTitle = actualText || (await pullContentText(id)).trim() || `Untitled ${node.role}`;
+    const title = rawTitle.replace(/\s*[\r\n]+\s*/g, ' ').trim();
     const top = await computeHeadingTop(id, node.page);
     headings.push({ title, level, page: node.page, top });
   }
