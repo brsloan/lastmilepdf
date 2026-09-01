@@ -181,6 +181,10 @@ export interface AppState {
   atChangeFlags: Map<string, TextProposal>;
   /** Tools > Show AT Changes toggle. */
   showAtChanges: boolean;
+  /** View > Proofread toggle - see proofread.js. */
+  proofreadMode: boolean;
+  /** nodeId whose Actual Text field shows an unconfirmed Proofread Mode content-pull, not yet applied - see updateActualTextPlaceholder() in details.js. */
+  pendingPulledActualTextNodeId: string | null;
   /** Invalidates a superseded computeAtChangeFlags() sweep. */
   atChangeSweepToken: number;
 

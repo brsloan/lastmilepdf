@@ -37,10 +37,16 @@ export function setActivePanel(panel) {
 // while the field the user typed it into is often still focused. Setting
 // .value on a focused field yanks the caret to the end even when the value
 // is unchanged, which would make mid-string edits unusable - so skip the
-// write for whichever field currently has focus; every other field (e.g.
-// after a selection change) still gets refreshed normally.
-function setFieldValueUnlessFocused(fieldEl, value) {
-  if (document.activeElement === fieldEl) return;
+// write for whichever field currently has focus, but ONLY when it's still
+// showing the SAME tag as before (a live-apply re-render always is, since it
+// re-selects the tag it just committed). A real selection change to a
+// DIFFERENT tag must always win even if the field never lost focus - e.g.
+// Proofread Mode's tag-to-tag stepping and the Alt Text field's Enter-to-
+// next-tag jump (see proofread.js / renderer.js) both deliberately keep a
+// field focused across a selection change, and without this they'd leave
+// the previous tag's stale value sitting in the field.
+function setFieldValueUnlessFocused(fieldEl, value, sameNode) {
+  if (sameNode && document.activeElement === fieldEl) return;
   fieldEl.value = value;
 }
 
@@ -71,16 +77,22 @@ export function refreshDetailsForSelection() {
   }
   const node = entry.node;
   const multi = state.selectedNodeIds.size > 1;
+  const sameNode = el.fieldNodeId.value === node.id;
+  // A pending Proofread Mode content-pull (see updateActualTextPlaceholder()
+  // below) only protects the tag it was pulled for - landing on a genuinely
+  // different tag drops it, whether or not this new one gets a pull of its
+  // own.
+  if (!sameNode) state.pendingPulledActualTextNodeId = null;
 
   el.detailsEmpty.hidden = true;
   el.splitContentPanel.hidden = true;
   resetSplitContentPanel();
   el.detailsForm.hidden = false;
   el.fieldNodeId.value = node.id;
-  setFieldValueUnlessFocused(el.fieldRole, node.role || '');
-  setFieldValueUnlessFocused(el.fieldAlt, node.alt || '');
-  setFieldValueUnlessFocused(el.fieldActualText, node.actualText || '');
-  setFieldValueUnlessFocused(el.fieldLang, node.lang || '');
+  setFieldValueUnlessFocused(el.fieldRole, node.role || '', sameNode);
+  setFieldValueUnlessFocused(el.fieldAlt, node.alt || '', sameNode);
+  setFieldValueUnlessFocused(el.fieldActualText, node.actualText || '', sameNode);
+  setFieldValueUnlessFocused(el.fieldLang, node.lang || '', sameNode);
   if (multi) {
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
@@ -106,17 +118,17 @@ export function refreshDetailsForSelection() {
   // the Table preview swap below: Apply still round-trips whatever value
   // they held.
   const isDocument = !multi && node.role === 'Document';
-  el.fieldDocInfoSection.hidden = !isDocument;
-  el.fieldAltWrap.hidden = isDocument;
+  el.fieldDocInfoSection.hidden = !isDocument || state.proofreadMode;
+  el.fieldAltWrap.hidden = isDocument || state.proofreadMode;
   if (isDocument) {
-    setFieldValueUnlessFocused(el.fieldDocTitle, state.docInfo.title || '');
-    setFieldValueUnlessFocused(el.fieldDocAuthor, state.docInfo.author || '');
+    setFieldValueUnlessFocused(el.fieldDocTitle, state.docInfo.title || '', sameNode);
+    setFieldValueUnlessFocused(el.fieldDocAuthor, state.docInfo.author || '', sameNode);
     // The /Document tag's own /Lang attribute is rarely set and, per the
     // PDF spec, isn't what governs the document's overall language - the
     // catalog's /Lang is. Same field, different backing value: source it
     // from docInfo here instead of node.lang (set above), and route the
     // Apply-side write through updateDocInfo() below to match.
-    setFieldValueUnlessFocused(el.fieldLang, state.docInfo.lang || '');
+    setFieldValueUnlessFocused(el.fieldLang, state.docInfo.lang || '', sameNode);
   }
   el.fieldLangLabel.textContent = isDocument ? 'Document language' : 'Language';
 
@@ -138,11 +150,11 @@ export function refreshDetailsForSelection() {
       const role = state.nodesById.get(id)?.node.role;
       return role === 'TH' || role === 'TD';
     });
-  el.thSection.hidden = !allCell;
+  el.thSection.hidden = !allCell || state.proofreadMode;
   el.fieldScopeWrap.hidden = !allTH;
   el.fieldScope.value = allTH ? (node.scope || '') : '';
-  setFieldValueUnlessFocused(el.fieldColSpan, allCell && node.colSpan != null ? node.colSpan : '');
-  setFieldValueUnlessFocused(el.fieldRowSpan, allCell && node.rowSpan != null ? node.rowSpan : '');
+  setFieldValueUnlessFocused(el.fieldColSpan, allCell && node.colSpan != null ? node.colSpan : '', sameNode);
+  setFieldValueUnlessFocused(el.fieldRowSpan, allCell && node.rowSpan != null ? node.rowSpan : '', sameNode);
 
   // A Table tag's Actual Text is swapped out for a generated read-only HTML
   // preview of its own row/cell structure - more useful here than a free-
@@ -150,8 +162,9 @@ export function refreshDetailsForSelection() {
   // renderTablePreview()). The underlying field/value is left untouched
   // (just hidden) so Apply still round-trips whatever actualText it had.
   const isTable = !multi && node.role === 'Table';
-  el.fieldActualTextWrap.hidden = isTable || isDocument;
-  el.tablePreviewWrap.hidden = !isTable;
+  el.fieldActualTextWrap.hidden = (isTable || isDocument) && !state.proofreadMode;
+  el.tablePreviewWrap.hidden = !isTable || state.proofreadMode;
+  el.fieldRoleLangRow.hidden = state.proofreadMode;
   if (isTable) {
     renderTablePreview(node);
   } else {
@@ -208,6 +221,23 @@ async function updateActualTextPlaceholder(node, nodeId) {
   const text = await pullContentText(nodeId);
   if (token !== state.actualTextPlaceholderToken) return; // selection changed mid-flight
   el.fieldActualText.placeholder = text || DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+
+  // Proofread Mode (View > Proofread): show the pulled text as the field's
+  // real value - the same as clicking Pull Content - rather than leaving it
+  // as just a greyed-out placeholder, since proofreading is meant to read
+  // like the tag's actual text, not a hint. It is NOT applied to the tag
+  // unless the user goes on to edit it (the 'input' listener on
+  // el.fieldActualText in renderer.js clears pendingPulledActualTextNodeId
+  // the moment they do, and applyDetailsChange() below treats a still-
+  // pending field as unchanged) - otherwise stepping past every tag with no
+  // Actual Text of its own would silently give each one a real Actual Text
+  // nobody asked for. Guarded on the field still being empty and still
+  // showing this same tag, in case the user typed something or moved on
+  // while the pull was in flight.
+  if (state.proofreadMode && text && !el.fieldActualText.value && el.fieldNodeId.value === nodeId) {
+    el.fieldActualText.value = text;
+    state.pendingPulledActualTextNodeId = nodeId;
+  }
 }
 
 // Auto-applies as the user types, not just when a text/textarea field is
@@ -288,10 +318,18 @@ export async function applyDetailsChange() {
       // instead of into the node-level change, so it doesn't clobber
       // whatever /Lang the /Document struct element itself happens to hold.
       const isDocument = !el.fieldDocInfoSection.hidden;
+      // A Proofread Mode content-pull the user never actually edited (see
+      // updateActualTextPlaceholder() above) reads as unchanged here rather
+      // than as a real edit - falls back to the node's own current Actual
+      // Text (whatever that already is, normally '') instead of the pulled
+      // text sitting unconfirmed in the field.
+      const isPendingPull = state.pendingPulledActualTextNodeId === nodeId;
       const changes = {
         role: el.fieldRole.value.trim(),
         alt: el.fieldAlt.value.trim(),
-        actualText: el.fieldActualText.value.trim(),
+        actualText: isPendingPull
+          ? (state.nodesById.get(nodeId)?.node.actualText || '')
+          : el.fieldActualText.value.trim(),
       };
       if (!isDocument) {
         changes.lang = el.fieldLang.value.trim();

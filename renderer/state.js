@@ -73,6 +73,8 @@ export const state = {
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.
   findReplaceLastMatchId: null, // id most recently found/replaced by the Find/Replace dialog - see doFindNext()
   showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
+  proofreadMode: false, // View > Proofread toggle - see proofread.js
+  pendingPulledActualTextNodeId: null, // nodeId whose Actual Text field currently shows an unconfirmed Proofread Mode content-pull (real value, but not yet applied) - see updateActualTextPlaceholder() in details.js
   showTagTypeLabel: true, // File > Settings > Appearance > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
   notifyDesktop: true, // File > Settings > Notifications > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
   notifyChime: true, // File > Settings > Notifications > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below

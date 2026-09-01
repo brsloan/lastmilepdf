@@ -52,7 +52,7 @@
           <button id="btn-next-page" class="btn btn-ghost" disabled>&rarr;</button>
         </div>
       </div>
-      <div class="canvas-wrap">
+      <div id="canvas-wrap" class="canvas-wrap">
         <canvas id="pdf-canvas"></canvas>
         <div id="highlight-layer" class="highlight-layer" aria-hidden="true"></div>
         <div id="draw-overlay" class="highlight-layer" aria-hidden="true"></div>
@@ -101,7 +101,7 @@
       <form id="details-form" class="details-form" hidden>
         <input type="hidden" id="field-node-id" />
 
-        <div class="field-row">
+        <div id="field-role-lang-row" class="field-row">
           <label class="field">
             <span class="field-label">Role</span>
             <input id="field-role" list="role-options" autocomplete="off" spellcheck="false" />

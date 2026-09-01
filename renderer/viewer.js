@@ -189,8 +189,30 @@ function renderHighlightRects(boxes, viewport) {
   }
   // Tall/wide pages can overflow the canvas-wrap pane (it scrolls), so the
   // newly-selected tag's box may be off-screen even though it's on the
-  // current page - bring it into view, but don't scroll if already visible.
-  activeBox?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // current page - bring it into view. Proofread Mode (View > Proofread)
+  // instead lines the box's top edge up with the Actual Text field's own
+  // top edge (see alignActiveBoxWithActualText() below), so the highlighted
+  // region and the field you're reading/editing it against always sit level
+  // with each other rather than wherever a plain "nearest" scroll leaves it.
+  if (activeBox && state.proofreadMode) {
+    alignActiveBoxWithActualText(activeBox);
+  } else {
+    activeBox?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+// Scrolls .canvas-wrap purely vertically so `activeBox`'s top edge lands at
+// the same viewport y-coordinate as the Actual Text field's top edge. Both
+// elements' getBoundingClientRect() are already in the same (viewport)
+// coordinate space regardless of either one's own scroll position, so the
+// difference between their tops is exactly how far .canvas-wrap needs to
+// scroll - no page-space/viewport-scale math needed, unlike
+// scrollToHeadingTop() in bookmarks.js, which has to place a marker because
+// it has no existing element already sitting at its target position.
+function alignActiveBoxWithActualText(activeBox) {
+  const boxTop = activeBox.getBoundingClientRect().top;
+  const fieldTop = el.fieldActualText.getBoundingClientRect().top;
+  el.canvasWrap.scrollTop += boxTop - fieldTop;
 }
 
 // Figures can be tiny relative to the page, so a plain box is easy to miss.

@@ -612,6 +612,13 @@ function buildAppMenu() {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
+        { type: 'separator' },
+        {
+          label: 'Proofread',
+          type: 'checkbox',
+          checked: false,
+          click: (item, win) => sendToWindow(win, 'menu:proofread', item.checked),
+        },
       ],
     },
     {

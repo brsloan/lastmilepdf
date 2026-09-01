@@ -8,6 +8,7 @@ import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure,
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
 import { doFindNext, findReplaceMatches, positionFindReplaceDialog } from './find-replace.js';
 import { findFullPageImageLeafIds, getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
+import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { convertTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
@@ -180,6 +181,17 @@ el.fieldActualText.addEventListener('input', () => {
   renderTree(); // drop that row's "AI fix"/"AT changed" flag
 });
 
+// Typing into a Proofread Mode content-pull that was still sitting
+// unconfirmed (see updateActualTextPlaceholder() in details.js) turns it
+// into a real edit from here on - applyDetailsChange() only skips saving
+// Actual Text while this flag is set, so it has to come off the moment the
+// user actually changes anything.
+el.fieldActualText.addEventListener('input', () => {
+  if (state.pendingPulledActualTextNodeId === el.fieldNodeId.value) {
+    state.pendingPulledActualTextNodeId = null;
+  }
+});
+
 // Discards this tag's AI fix (or, in Show AT Changes mode, its flagged
 // difference) by re-pulling its content leaf's raw text (same source "Pull
 // Content" uses) and saving that in place of it - no "original" value is
@@ -248,6 +260,15 @@ window.api.onMenuShowAtChanges(async (_event, checked) => {
   setStatus(state.atChangeFlags.size > 0
     ? `Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content - flagged in the tag tree.`
     : 'No tags have Actual Text that differs from their pulled content.');
+});
+
+// View > Proofread - see proofread.js for the layout/field-hiding toggle
+// itself and the tag-to-tag stepping the keydown handlers below drive.
+window.api.onMenuProofread((_event, checked) => {
+  setProofreadMode(checked);
+  setStatus(checked
+    ? 'Proofread Mode on - Page Down/Up (or Up/Down at the edges of Actual Text) steps through tags.'
+    : 'Proofread Mode off.');
 });
 
 // --- table tag -> generated HTML preview ---------------------------------
@@ -553,7 +574,15 @@ el.btnFixAllActualText.addEventListener('click', async () => {
 // leaf directly inside it - saves the extra click for the common case of
 // replacing a tag's own text/image/graphic content. A tag without one (or a
 // field that already has a value) is left alone.
+//
+// In Proofread Mode this same pull instead runs from updateActualTextPlaceholder()
+// in details.js, on every tag landed on rather than only on this field's
+// first focus of the session - and marks it pending rather than writing a
+// real, immediately-savable value, since silently reading through a run of
+// untouched empty tags shouldn't leave every one of them with a real Actual
+// Text nobody asked for.
 el.fieldActualText.addEventListener('focus', async () => {
+  if (state.proofreadMode) return;
   if (el.fieldActualText.value) return;
   const nodeId = el.fieldNodeId.value;
   if (!nodeId || !state.pdfDoc) return;
@@ -597,6 +626,30 @@ el.fieldAlt.addEventListener('keydown', async (e) => {
   selectNode(nextRow.dataset.nodeId);
   el.fieldAlt.focus();
   el.fieldAlt.select();
+});
+
+// Proofread Mode (View > Proofread): with the caret collapsed (no range
+// selected) on the field's very first line, Up jumps to the previous tag's
+// Actual Text field with the caret at its end; on the very last line, Down
+// jumps to the next tag's with the caret at its start - reading and fixing
+// straight through a document without leaving the keyboard. Off the
+// top/bottom line (a multi-line field the caret isn't at either edge of),
+// or with any modifier held, this steps out of the way and lets the
+// textarea move the caret up/down a line as usual.
+el.fieldActualText.addEventListener('keydown', (e) => {
+  if (!state.proofreadMode) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (el.fieldActualText.selectionStart !== el.fieldActualText.selectionEnd) return;
+
+  const { isFirstLine, isLastLine } = caretLineExtremes(el.fieldActualText);
+  if (e.key === 'ArrowUp' && isFirstLine) {
+    e.preventDefault();
+    stepProofreadTag(-1, 'end');
+  } else if (e.key === 'ArrowDown' && isLastLine) {
+    e.preventDefault();
+    stepProofreadTag(1, 'start');
+  }
 });
 
 // --- undo / redo -----------------------------------------------------------
@@ -943,6 +996,26 @@ window.addEventListener('keydown', (e) => {
 
   e.preventDefault();
   insertParagraphAfterSelection();
+});
+
+// Proofread Mode (View > Proofread): Page Down/Up step to the next/previous
+// tag the same way the Actual Text field's own edge-of-line Up/Down does
+// (see stepProofreadTag() in proofread.js) - but from anywhere, including
+// while the Actual Text field itself is focused, since that's exactly where
+// this is meant to be used from. A textarea has no native use for Page Up/
+// Down (unlike Up/Down, which moves the caret a line), so this doesn't need
+// to check what's focused the way the plain arrow-key tree nav below does -
+// except for bailing out while a modal dialog (Settings, Table Editor,
+// Find/Replace...) has focus, so it doesn't hijack Page Up/Down from an
+// unrelated field there.
+window.addEventListener('keydown', (e) => {
+  if (!state.proofreadMode) return;
+  if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
+  if (!state.selectedNodeId) return;
+  if (document.activeElement?.closest('dialog[open]')) return;
+
+  e.preventDefault();
+  stepProofreadTag(e.key === 'PageUp' ? -1 : 1, e.key === 'PageUp' ? 'end' : 'start');
 });
 
 // Up/Down arrows step the current selection through the tree in visible

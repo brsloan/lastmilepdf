@@ -214,6 +214,33 @@ body.busy * {
   border-right: none;
 }
 
+/* --- View > Proofread (see proofread.js) ---------------------------------
+   Reassigns which pane sits in which grid column via `order` rather than
+   moving anything in the DOM: the Tag Tree pane shrinks to a slim strip and
+   swaps places with the (now much wider) Tag Properties pane, which sits
+   next to the Page Preview so its Actual Text field is the thing your eyes
+   and the page preview both land on. `order` is enough on its own here
+   because .workbench uses grid auto-placement (no explicit grid-column on
+   any pane), so it reorders the columns the same way it would reorder flex
+   items. */
+body.proofread-mode .workbench {
+  grid-template-columns: minmax(360px, 1.6fr) minmax(320px, 1fr) 150px;
+}
+
+body.proofread-mode .viewer-pane {
+  order: 1;
+}
+
+body.proofread-mode .details-pane {
+  order: 2;
+  border-right: 1px solid var(--border);
+}
+
+body.proofread-mode .tree-pane {
+  order: 3;
+  border-right: none;
+}
+
 .pane-header {
   display: flex;
   align-items: center;
