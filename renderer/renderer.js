@@ -735,6 +735,25 @@ function pruneStaleAiProposals() {
   }
 }
 
+// Finds the /Document struct element - conventionally the sole direct child
+// of the struct tree root (id "root", itself unselectable - see
+// renderTreeNode) - so a freshly opened PDF can land on it by default. DFS
+// rather than trusting it's always the very first top-level child, since
+// that's a convention, not something the spec enforces.
+function findDocumentNode(tree) {
+  if (!tree) return null;
+  let found = null;
+  (function visit(node) {
+    if (found) return;
+    if (node.type === 'element' && node.role === 'Document') {
+      found = node;
+      return;
+    }
+    for (const child of node.children || []) visit(child);
+  })(tree);
+  return found;
+}
+
 function applyFreshTree(tree) {
   state.tree = tree;
   state.nodesById = indexTree(tree);
@@ -4620,6 +4639,12 @@ async function performOpen() {
     closeDetails();
 
     await loadPdfPreview(opened.pdfBase64);
+
+    // Land on the /Document tag by default, once the preview (and so
+    // state.pdfDoc) is in place for the resulting highlight to target.
+    const documentNode = findDocumentNode(state.tree);
+    if (documentNode) selectNode(documentNode.id);
+
     setStatus(opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).');
   } catch (err) {
     reportError('Could not open PDF', err);
