@@ -150,6 +150,8 @@ const el = {
   btnFixActualText: document.getElementById('btn-fix-actual-text'),
   btnFixAllActualText: document.getElementById('btn-fix-all-actual-text'),
   aiBatchProgressDialog: document.getElementById('ai-batch-progress-dialog'),
+  aiBatchProgressEstimate: document.getElementById('ai-batch-progress-estimate'),
+  aiBatchProgressTimer: document.getElementById('ai-batch-progress-timer'),
   actualTextHighlight: document.getElementById('field-actual-text-highlight'),
   actualTextReviewBar: document.getElementById('actual-text-review-bar'),
   actualTextReviewLabel: document.getElementById('actual-text-review-label'),
@@ -3120,14 +3122,54 @@ el.btnFixActualText.addEventListener('click', async () => {
 // suppressed; only hideAiBatchProgress() ever closes it.
 el.aiBatchProgressDialog.addEventListener('cancel', (e) => e.preventDefault());
 
+// mm:ss - both the upfront estimate and the live elapsed timer use this, so
+// the two read as directly comparable at a glance.
+function formatDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+let aiBatchProgressTimerHandle = null;
+
 function showAiBatchProgress() {
+  el.aiBatchProgressEstimate.textContent = '(This may take a few minutes…)';
+  const startedAt = Date.now();
+  el.aiBatchProgressTimer.textContent = formatDuration(0);
+  aiBatchProgressTimerHandle = setInterval(() => {
+    el.aiBatchProgressTimer.textContent = formatDuration(Date.now() - startedAt);
+  }, 1000);
   el.aiBatchProgressDialog.showModal();
   document.body.classList.add('busy-cursor');
 }
 
 function hideAiBatchProgress() {
+  clearInterval(aiBatchProgressTimerHandle);
+  aiBatchProgressTimerHandle = null;
   el.aiBatchProgressDialog.close();
   document.body.classList.remove('busy-cursor');
+}
+
+// The dialog opens before the request payload is known (content still needs
+// pulling for tags with no Actual Text yet - see the click handler below),
+// so the estimate is filled in separately once it is, rather than blocking
+// the dialog's appearance on that. `range` is {lowMs, highMs} from
+// window.api.estimateAiBatchTime() (see estimateAiBatchRange() in main.js) -
+// shown as a span rather than a single number since it's built from how much
+// past runs of a similar size actually varied, not a guaranteed duration.
+// null until enough history has built up, in which case the dialog keeps its
+// generic hint.
+function updateAiBatchProgressEstimate(range) {
+  if (range == null) {
+    el.aiBatchProgressEstimate.textContent = '(This may take a few minutes…)';
+    return;
+  }
+  const low = formatDuration(range.lowMs);
+  const high = formatDuration(range.highMs);
+  el.aiBatchProgressEstimate.textContent = low === high
+    ? `Estimated time: ~${low}`
+    : `Estimated time: ~${low}–${high}`;
 }
 
 // A short two-note chime, synthesized with the Web Audio API rather than
@@ -3228,7 +3270,13 @@ el.btnFixAllActualText.addEventListener('click', async () => {
     }
 
     setStatus(`Fixing Actual Text across ${items.length} tag${items.length === 1 ? '' : 's'} with AI…`);
-    const results = await window.api.fixActualTextBatch(items.map(({ id, text }) => ({ id, text })));
+    const requestItems = items.map(({ id, text }) => ({ id, text }));
+    // Same size main.js's estimateAiBatchMs() keys its average on (it charges
+    // the char count of the JSON it actually sends - see JSON.stringify(items)
+    // in the ai:fix-actual-text-batch handler) - so the estimate lines up with
+    // what recordAiBatchTiming() will log for this run.
+    updateAiBatchProgressEstimate(await window.api.estimateAiBatchTime(JSON.stringify(requestItems).length));
+    const results = await window.api.fixActualTextBatch(requestItems);
     const byId = new Map(items.map((item) => [item.id, item]));
     const updates = {};
     const proposals = new Map();

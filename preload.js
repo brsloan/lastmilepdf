@@ -107,6 +107,7 @@ contextBridge.exposeInMainWorld('api', {
 
   fixActualText: (text) => ipcRenderer.invoke('ai:fix-actual-text', { text }),
   fixActualTextBatch: (items) => ipcRenderer.invoke('ai:fix-actual-text-batch', { items }),
+  estimateAiBatchTime: (chars) => ipcRenderer.invoke('ai:estimate-batch-time', { chars }),
 
   // Releases a document the renderer has finished with, so the worker can
   // drop its pikepdf.Pdf and undo snapshots - see close_document in

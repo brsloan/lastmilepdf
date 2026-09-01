@@ -1316,6 +1316,13 @@ kbd {
   color: var(--text-dim);
 }
 
+.ai-batch-progress-timer {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 /* Forces a busy cursor everywhere, including over buttons/inputs that
    otherwise set their own `cursor` - toggled on <body> for the duration of
    an in-flight AI batch request (see showAiBatchProgress() in renderer.js). */

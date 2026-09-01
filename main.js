@@ -261,6 +261,72 @@ function setNotifyChime(value) {
   writeSettingsFile(settings);
 }
 
+// --- AI batch timing log ----------------------------------------------------
+//
+// Lets the "Fix All Actual Text" progress dialog (see showAiBatchProgress()
+// in renderer.js) show an upfront time estimate instead of just a generic
+// "this may take a few minutes". Kept in its own file rather than
+// settings.json since it's an operational log, not a user preference. Each
+// entry is just {chars, ms} for one completed batch request - no filenames,
+// document content, or other identifying info - so the log can't leak
+// anything about what a user has been editing.
+
+const AI_BATCH_LOG_PATH = path.join(app.getPath('userData'), 'ai-batch-log.json');
+const AI_BATCH_LOG_MAX_ENTRIES = 50; // recent-history average, not a lifetime total
+
+function readAiBatchLog() {
+  try {
+    const log = JSON.parse(fs.readFileSync(AI_BATCH_LOG_PATH, 'utf8'));
+    return Array.isArray(log) ? log : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordAiBatchTiming(chars, ms) {
+  try {
+    const log = readAiBatchLog();
+    log.push({ chars, ms });
+    while (log.length > AI_BATCH_LOG_MAX_ENTRIES) log.shift();
+    fs.mkdirSync(path.dirname(AI_BATCH_LOG_PATH), { recursive: true });
+    fs.writeFileSync(AI_BATCH_LOG_PATH, JSON.stringify(log));
+  } catch (err) {
+    console.error('[ai-batch-log] failed to record timing:', err);
+  }
+}
+
+// Interpolated quantile (q in [0, 1]) over an already-sorted array.
+function quantile(sortedValues, q) {
+  const pos = (sortedValues.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  return sortedValues[base + 1] === undefined
+    ? sortedValues[base]
+    : sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base]);
+}
+
+// A {lowMs, highMs} range scaled to the requested size, or null with no
+// history yet, so the caller can fall back to a generic hint instead of
+// showing a made-up number. Uses the median ms/char rather than the mean -
+// one unusually slow or fast run (API load, a network hiccup) shouldn't skew
+// every estimate after it - and returns a spread rather than a single number
+// since even same-sized requests vary run to run (how much correction the
+// text actually needed, API load, etc). With too few runs to measure that
+// spread directly, a flat +/-30% around the median stands in for it.
+function estimateAiBatchRange(chars) {
+  const log = readAiBatchLog();
+  if (log.length === 0) return null;
+  const ratios = log.map((entry) => entry.ms / entry.chars).sort((a, b) => a - b);
+  const median = quantile(ratios, 0.5);
+  if (log.length < 4) {
+    return { lowMs: Math.round(median * chars * 0.7), highMs: Math.round(median * chars * 1.3) };
+  }
+  return {
+    lowMs: Math.round(quantile(ratios, 0.25) * chars),
+    highMs: Math.round(quantile(ratios, 0.75) * chars),
+  };
+}
+
 // --- Window -----------------------------------------------------------------
 
 // Whether the renderer currently holds tag edits that aren't on disk. The
@@ -767,6 +833,12 @@ You will receive a JSON array of entries, each with an id and the current text f
 // a whole document's text, not just tags someone already filled in.
 const BATCH_FIX_CHAR_LIMIT = 150000;
 
+// Lets the progress dialog (see el.aiBatchProgressDialog in renderer.js) show
+// an upfront estimate before kicking off the actual request - the renderer
+// passes the same char count it's about to send so the estimate matches what
+// estimateAiBatchRange()/recordAiBatchTiming() below key their averages on.
+ipcMain.handle('ai:estimate-batch-time', async (_event, { chars }) => estimateAiBatchRange(chars));
+
 ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
   const apiKey = getStoredApiKey();
   if (!apiKey) {
@@ -783,6 +855,7 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
   }
 
   const client = new Anthropic({ apiKey });
+  const startedAt = Date.now();
   try {
     // Streamed rather than a plain .parse() call - a full-document batch can
     // need well beyond the ~16K non-streaming ceiling, and large max_tokens
@@ -798,6 +871,10 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
     if (!response.parsed_output) {
       throw new Error('The AI did not return a valid response.');
     }
+    // Only successful runs go into the log - a run that errored out (e.g.
+    // rate limited partway through) doesn't reflect how long a normal
+    // request of this size actually takes, and would skew future estimates.
+    recordAiBatchTiming(payload.length, Date.now() - startedAt);
     return response.parsed_output.items;
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
