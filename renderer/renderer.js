@@ -14,7 +14,7 @@ import { convertTableEditorSelection, refreshTableEditorAfterEdit, renderTableEd
 import { isDescendant, walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, toggleNodeCollapsed } from './tree-view.js';
 import { renderVerifyResults } from './verify.js';
-import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, renderCurrentPage, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // renderer.js
@@ -336,6 +336,66 @@ el.detailsForm.addEventListener('input', (e) => {
 // above fires - applyDetailsChange() clears that pending timer itself, so
 // this never double-applies.
 el.detailsForm.addEventListener('change', applyDetailsChange);
+
+// Splits the leaf the Split Content panel is currently showing at the
+// field's own cursor position - backs both the Split button and pressing
+// Enter in the field below. Reselects the first of the two new leaves
+// afterward (which re-populates this same panel with its now-shorter text
+// via refreshDetailsForSelection()), so the row the user was just looking
+// at stays selected/scrolled-to rather than the selection silently
+// dropping.
+async function performSplitContent() {
+  const nodeId = state.splitContentNodeId;
+  if (!nodeId || !state.docId || el.btnSplitContent.disabled) return;
+  const splitIndex = el.splitContentField.selectionStart;
+
+  try {
+    el.btnSplitContent.disabled = true;
+    const result = await window.api.splitLeaf(state.docId, nodeId, splitIndex);
+    // split_leaf() is the one command that rewrites a page's content
+    // stream - re-feed pdf.js the resulting bytes, and clear the stale
+    // per-page text/graphics caches that come with it, *before* applying
+    // the fresh tree below. applyFreshTree() re-renders every tree row
+    // synchronously, and a content leaf's row text is filled in from
+    // whatever's already cached for its page (see formatCachedLeafText() in
+    // tree-view.js) - doing this the other way around would render the two
+    // new leaves once against the pre-split cache (wrong/missing text) with
+    // nothing left to trigger a second render once the real bytes arrived.
+    if (state.pdfDoc) await refreshPdfPreviewBytes(result.pdfBase64);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    const [firstId] = result.newNodeIds;
+    if (firstId && state.nodesById.has(firstId)) {
+      selectNode(firstId);
+    }
+    setStatus('Split content into two.');
+  } catch (err) {
+    reportError('Could not split this content', err);
+    el.btnSplitContent.disabled = false;
+  }
+}
+
+el.btnSplitContent.addEventListener('click', performSplitContent);
+
+// The field isn't actually editable - split_leaf() only ever reads its
+// cursor position, never any typed change - but it also isn't marked
+// `readonly` in index.html, because Chromium doesn't render a visible/
+// blinking caret (or respond to arrow-key navigation) in a readonly
+// textarea. A plain editable textarea gets normal click-to-position,
+// arrow-key, Home/End, and shift-select caret behavior for free; this
+// listener just vetoes the one thing that shouldn't happen - the text
+// actually changing - by blocking every edit-producing 'beforeinput' (typed
+// characters, paste, delete/backspace, ...). Caret movement and selection
+// don't fire 'beforeinput' at all, so they're untouched.
+el.splitContentField.addEventListener('beforeinput', (e) => e.preventDefault());
+
+// Enter splits at the cursor same as clicking the button, instead of the
+// newline a plain textarea would otherwise insert there.
+el.splitContentField.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  performSplitContent();
+});
 
 el.btnPullContent.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;

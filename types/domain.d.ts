@@ -243,3 +243,31 @@ export interface AddBookmarkResult extends OutlineResult {
 
 /** The three answers to the unsaved-changes prompt. */
 export type DiscardChoice = 'save' | 'discard' | 'cancel';
+
+/**
+ * `get_leaf_text()`'s result: the content leaf's text, decoded straight
+ * from the content stream the same way `split_leaf()` itself reads it (not
+ * pdf.js's own extraction, which the tag tree's preview elsewhere uses).
+ * `text` is null with a human-readable `reason` when this leaf can't be
+ * safely decoded (no /ToUnicode, nested marked content, an object
+ * reference, ...) - the Tag Properties panel's "Split Content" section
+ * shows that reason in place of the split field.
+ */
+export interface LeafTextResult {
+  text: string | null;
+  reason?: string;
+}
+
+/**
+ * `split_leaf()`'s result: the rebuilt tree plus the two new leaves' ids
+ * (`[before, after]`), so the caller can select/highlight them. Also - unlike
+ * every other `MutationResult` - a fresh `pdfBase64` snapshot of the whole
+ * (still unsaved) document: split_leaf() is the one command that rewrites a
+ * page's content stream, so the renderer has to re-feed pdf.js those bytes
+ * to keep the PDF preview's page text/highlighting in sync (see the
+ * docstring on split_leaf() in tag_worker.py).
+ */
+export interface SplitLeafResult extends MutationResult {
+  newNodeIds: [string | null, string | null];
+  pdfBase64: string;
+}

@@ -87,6 +87,17 @@
 
       <p id="details-empty" class="details-empty">Select a tag in the tree to edit it.</p>
 
+      <div id="split-content-panel" class="split-content-panel" hidden>
+        <h3 class="split-content-title">Split Content</h3>
+        <p class="split-content-hint">Click in the text below to place the cursor where it should split, then press Split (or Enter).</p>
+        <label class="field field-grow">
+          <textarea id="split-content-field" spellcheck="false"></textarea>
+        </label>
+        <p id="split-content-unavailable" class="split-content-unavailable" hidden></p>
+        <button type="button" id="btn-split-content" class="btn btn-primary" disabled>Split</button>
+        <p class="split-content-danger">This rewrites the page's underlying content stream directly. Back up your file before using this feature.</p>
+      </div>
+
       <form id="details-form" class="details-form" hidden>
         <input type="hidden" id="field-node-id" />
 

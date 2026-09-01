@@ -314,7 +314,16 @@ export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
   }
 }
 
-export async function loadPdfPreview(base64Data) {
+// Shared by loadPdfPreview() (a brand new document - jumps to page 1) and
+// refreshPdfPreviewBytes() (the same document, just-edited - stays on
+// whatever page the user was looking at): swaps in a fresh pdf.js
+// PDFDocumentProxy parsed from `base64Data` and drops every per-page cache
+// derived from the old one (see page-content.js) - it's not just a stale
+// value at that point, it's a cache keyed by page *number*, not by which
+// document it came from, so pdf.js's own new Page objects would otherwise
+// go unused in favor of an old page's already-cached (and now wrong)
+// text/graphics.
+async function swapPdfDocument(base64Data) {
   // Drop the outgoing document before adopting the new one: a render still
   // in flight would otherwise paint the old file's page onto the canvas
   // after the swap, and each PDFDocumentProxy left undestroyed keeps its
@@ -335,11 +344,29 @@ export async function loadPdfPreview(base64Data) {
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   state.pdfDoc = await loadingTask.promise;
   state.pageCount = state.pdfDoc.numPages;
-  state.currentPage = 1;
   state.textContentCache.clear();
   state.mcidTextCache.clear();
   state.mcidGraphicsCache.clear();
+}
+
+export async function loadPdfPreview(base64Data) {
+  await swapPdfDocument(base64Data);
+  state.currentPage = 1;
   el.viewerPlaceholder.hidden = true;
+  await renderCurrentPage();
+  updatePageNavUI();
+}
+
+// Re-syncs the preview with the *same* document's latest bytes after an
+// edit that rewrote a page's content stream (currently only split_leaf() -
+// see its docstring in tag_worker.py) - unlike loadPdfPreview(), stays on
+// the page the user was already looking at instead of jumping to page 1,
+// since this is a mid-edit refresh, not opening a new file. Callers still
+// need to re-run highlightNodeOnPage() themselves afterward for whatever's
+// currently selected, same as they would after any other tree mutation.
+export async function refreshPdfPreviewBytes(base64Data) {
+  await swapPdfDocument(base64Data);
+  state.currentPage = Math.min(state.currentPage, state.pageCount) || 1;
   await renderCurrentPage();
   updatePageNavUI();
 }

@@ -11,6 +11,7 @@ import { updateActualTextReviewUI, updateAtChangeFlagForNode } from './actual-te
 import { el } from './dom.js';
 import { hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
+import { refreshSplitContentPanel, resetSplitContentPanel } from './split-content.js';
 import { state } from './state.js';
 import { renderTablePreview } from './table-preview.js';
 import { applyFreshTree, selectNode } from './tree-view.js';
@@ -52,14 +53,17 @@ export function refreshDetailsForSelection() {
   }
   if (entry.node.type !== 'element') {
     // A content/object-ref leaf - a valid selection (movable, like a tag),
-    // just not an editable one. Hide the details form without wiping the
-    // tree selection the way closeDetails() would (that's only for "nothing
-    // is selected"), and still scroll/highlight it like a tag selection.
-    el.detailsEmpty.hidden = false;
+    // just not an editable one in the usual sense; it gets the Split Content
+    // panel instead of the details form. Don't wipe the tree selection the
+    // way closeDetails() would (that's only for "nothing is selected"), and
+    // still scroll/highlight it like a tag selection.
+    el.detailsEmpty.hidden = true;
+    el.splitContentPanel.hidden = false;
     el.detailsForm.hidden = true;
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
     updateActualTextReviewUI(null);
+    refreshSplitContentPanel(nodeId);
     const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
     row?.scrollIntoView({ block: 'nearest' });
     highlightNodeOnPage(nodeId, { allowPageJump: true });
@@ -69,6 +73,8 @@ export function refreshDetailsForSelection() {
   const multi = state.selectedNodeIds.size > 1;
 
   el.detailsEmpty.hidden = true;
+  el.splitContentPanel.hidden = true;
+  resetSplitContentPanel();
   el.detailsForm.hidden = false;
   el.fieldNodeId.value = node.id;
   setFieldValueUnlessFocused(el.fieldRole, node.role || '');
@@ -164,6 +170,8 @@ export function closeDetails() {
   state.selectedNodeIds = new Set();
   state.selectionAnchorId = null;
   el.detailsForm.hidden = true;
+  el.splitContentPanel.hidden = true;
+  resetSplitContentPanel();
   el.detailsEmpty.hidden = false;
   el.detailsForm.reset();
   state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight

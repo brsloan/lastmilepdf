@@ -192,9 +192,14 @@ export interface AppState {
   notifyDesktop: boolean;
   notifyChime: boolean;
 
+  // --- Split Content (see split-content.js) ------------------------------
+  /** The content leaf the Split Content panel currently shows, or null. */
+  splitContentNodeId: string | null;
+
   // --- invalidation tokens for in-flight async work ---------------------
   highlightToken: number;
   tablePreviewToken: number;
   actualTextPlaceholderToken: number;
   tableEditorToken: number;
+  splitContentToken: number;
 }

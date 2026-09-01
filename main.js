@@ -790,6 +790,14 @@ ipcMain.handle('tags:join-tags', async (_event, { docId, nodeIds }) => {
   return callWorker('join_tags', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:get-leaf-text', async (_event, { docId, nodeId }) => {
+  return callWorker('get_leaf_text', { docId, nodeId });
+});
+
+ipcMain.handle('tags:split-leaf', async (_event, { docId, nodeId, splitIndex }) => {
+  return callWorker('split_leaf', { docId, nodeId, splitIndex });
+});
+
 ipcMain.handle('tags:figure-from-rect', async (_event, { docId, pageIndex, rect }) => {
   return callWorker('figure_from_rect', { docId, pageIndex, rect });
 });

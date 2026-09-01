@@ -47,13 +47,16 @@ Scope / known limitations (read this before extending):
   - Every command here mutates the struct tree only - except
     figure_from_rect(), which also *reads* (never writes) a page's content
     stream, to recover where image XObjects are actually placed (see its
-    section for why and how), and delete_nodes(), which *writes* a narrowly
+    section for why and how); delete_nodes(), which *writes* a narrowly
     scoped edit: the opening BDC operator of each MCID it's unlinking from
     the struct tree gets rewritten to `/Artifact BMC` (see _artifact_leaves/
     _artifact_mcids_on_page), so unlinked content reads as a real PDF
     artifact instead of an orphaned tag when a consumer checks the content
-    stream directly, as Acrobat's accessibility Full Check does. No other
-    operator is added, removed, or reordered.
+    stream directly, as Acrobat's accessibility Full Check does; and
+    split_leaf() (see "content-leaf text splitting" below), which divides one
+    MCID's `BDC ... EMC` span into two so each half can be tagged separately.
+    Both of those touch content streams in a narrowly scoped, mechanically
+    verified way - never a free-form rewrite.
   - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
     bytes) before each mutation, rather than recording inverse edits. Simple
     and correct by construction, at the cost of an O(document size) copy per
@@ -62,6 +65,7 @@ Scope / known limitations (read this before extending):
     rapidly. `MAX_UNDO_DEPTH` bounds how many snapshots we hold onto.
 """
 
+import base64
 import io
 import json
 import re
@@ -2480,6 +2484,560 @@ def join_tags(doc_id, node_ids):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+# --- content-leaf text splitting ------------------------------------------
+#
+# Backs the Tag Properties panel's "Split Content" action: given a content
+# leaf whose drawn text is e.g. "1.) Blah", split it into two leaves - one
+# carrying "1.)", the other "Blah" - so they can be tagged separately (a Lbl
+# and an LBody, most commonly). Unlike everything else content-leaf-related
+# in this file (reorder, delete, wrap - see the module docstring), this is
+# real content-stream surgery: the leaf's text isn't an attribute anywhere,
+# it's baked into `Tj`/`TJ`/`'`/`"` operators inside the leaf's own
+# `BDC ... EMC` span, so "splitting the leaf" means finding the exact byte
+# offset inside those operators and dividing them in two.
+#
+# The one rule this whole section is built around: never guess. A font's
+# text is only as splittable as it is *provably* decodable. Two separate
+# questions have to both be answered with certainty before a single font
+# code can be sliced out of a string operand:
+#   - how many bytes is one code? (_font_code_width) - always 1 for a simple
+#     font; for a Type0/CID font, 2 for the near-ubiquitous /Identity-H (or
+#     -V) predefined encoding, or read from an embedded /Encoding CMap's own
+#     codespace range. This deliberately does *not* come from the font's
+#     /ToUnicode CMap's own codespacerange, even though that's also present
+#     there - real-world ToUnicode streams commonly declare a *wider*
+#     codespace than any code they actually map (e.g. a spec-compliant
+#     `<00> <FF>` / `<0100> <FFFF>` pair sitting alongside bfchar entries
+#     that are all 2-byte) since it exists to be looked up by, not to
+#     describe, the font's real encoding.
+#   - what Unicode text does a code of that width decode to?
+#     (_parse_bf_mappings, reading the font's /ToUnicode bfchar/bfrange)
+# An unrecognized font subtype, an unsupported predefined CMap, a mixed-width
+# embedded CMap, an undecodable code, marked content nested inside the span,
+# or a split point that doesn't land exactly on a character boundary all
+# refuse with a specific reason rather than produce a plausible-looking
+# wrong split. A wrong reorder is a tree the user can drag back; a wrong
+# content-stream split can corrupt what a viewer actually paints, which is
+# why this code takes the conservative branch every time it's unsure.
+#
+# get_leaf_text() (read-only) and split_leaf() (mutating) share the same
+# decode pipeline (_decode_leaf) so what the Tag Properties panel shows the
+# user to place a cursor in is *exactly* what split_leaf() will operate on -
+# not pdf.js's own text extraction (which the tag tree's preview elsewhere
+# uses), since any drift between "what you see" and "what gets split" would
+# make the cursor position lie.
+
+def _codespace_widths(text):
+    """The distinct byte-widths declared by every `begincodespacerange`
+    block in a CMap's own text - {len(lo_hex) // 2 for each <lo> <hi> pair}.
+    Shared by _font_code_width() (reading a font's *own* /Encoding CMap,
+    when it's an embedded stream rather than a predefined name) - not used
+    against a /ToUnicode CMap's codespace, which can legitimately be wider
+    than any code it actually maps (see the section docstring above)."""
+    widths = set()
+    for block in re.findall(r"begincodespacerange(.*?)endcodespacerange", text, re.S):
+        for lo, _hi in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
+            widths.add(len(lo) // 2)
+    return widths
+
+
+def _font_code_width(font):
+    """How many bytes one font code occupies in a `Tj`/`TJ`/`'`/`"` string
+    operand for `font` - the width _decode_leaf_content() needs to chop a
+    raw operand into codes, before any /ToUnicode lookup happens at all.
+    Always 1 for a simple font. For a Type0 (composite) font, 2 for the
+    near-ubiquitous predefined /Identity-H or /Identity-V encoding, or
+    whatever a single-width embedded /Encoding CMap's own codespace range
+    declares - any other predefined CMap name, or a mixed-width embedded
+    one, isn't supported (raises ValueError; see the section docstring)."""
+    subtype = str(font.get("/Subtype", ""))
+    if subtype != "/Type0":
+        return 1
+    encoding = font.get("/Encoding")
+    if isinstance(encoding, pikepdf.Name):
+        if str(encoding) in ("/Identity-H", "/Identity-V"):
+            return 2
+        raise ValueError(f"Unsupported predefined CMap encoding: {encoding}")
+    if isinstance(encoding, (pikepdf.Dictionary, pikepdf.Stream)):
+        try:
+            text = bytes(encoding.read_bytes()).decode("latin-1")
+        except Exception as exc:
+            raise ValueError(f"Could not read this font's Encoding CMap: {exc}") from exc
+        widths = _codespace_widths(text)
+        if len(widths) != 1:
+            raise ValueError("This font's Encoding CMap has no single, unambiguous character width")
+        return widths.pop()
+    raise ValueError("This font's character encoding isn't recognized")
+
+
+def _parse_bf_mappings(stream_bytes):
+    """Parses a /ToUnicode CMap stream's `beginbfchar`/`beginbfrange` blocks
+    into {code_int: decoded_str}. This is a light regex-based reader for the
+    predictable shape font-embedding tools actually emit, not a full
+    PostScript interpreter - anything it doesn't recognize (a malformed
+    range, ...) raises ValueError rather than silently mis-parsing, since a
+    wrong decode here would silently mis-split real text."""
+    try:
+        text = stream_bytes.decode("latin-1")
+    except Exception as exc:
+        raise ValueError(f"Could not read this font's ToUnicode CMap: {exc}") from exc
+
+    def dst_to_text(hex_str):
+        raw = bytes.fromhex(hex_str)
+        if len(raw) % 2 != 0:
+            raise ValueError("Malformed ToUnicode destination string")
+        return raw.decode("utf-16-be")
+
+    mapping = {}
+    for block in re.findall(r"beginbfchar(.*?)endbfchar", text, re.S):
+        for code_hex, dst_hex in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
+            mapping[int(code_hex, 16)] = dst_to_text(dst_hex)
+
+    for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
+        # Array form: <lo> <hi> [ <d0> <d1> ... ] - one explicit destination
+        # per code in the range.
+        for lo_hex, hi_hex, array_body in re.findall(
+            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[(.*?)\]", block, re.S
+        ):
+            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
+            dsts = re.findall(r"<([0-9A-Fa-f]+)>", array_body)
+            if len(dsts) != hi - lo + 1:
+                raise ValueError("Malformed ToUnicode bfrange array")
+            for code, dst_hex in zip(range(lo, hi + 1), dsts):
+                mapping[code] = dst_to_text(dst_hex)
+        # Scalar form: <lo> <hi> <dst> - dst increments by (code - lo) for
+        # each code in the range. Matched against whatever the array form
+        # above didn't already consume, so the two forms can't double-count
+        # the same range.
+        remainder = re.sub(r"<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\[.*?\]", "", block, flags=re.S)
+        for lo_hex, hi_hex, dst_hex in re.findall(
+            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", remainder
+        ):
+            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
+            dst_bytes = bytes.fromhex(dst_hex)
+            base = int.from_bytes(dst_bytes, "big")
+            for offset, code in enumerate(range(lo, hi + 1)):
+                value = base + offset
+                mapping[code] = value.to_bytes(len(dst_bytes), "big").decode("utf-16-be")
+
+    return mapping
+
+
+def _font_tounicode(page, font_name):
+    """(width, mapping) - width from _font_code_width(), mapping from
+    _parse_bf_mappings() - for /Resources/Font/<font_name> on `page`, or
+    None if the font can't be resolved, its encoding isn't one this file
+    understands, or it carries no /ToUnicode. /Resources is inheritable the
+    same way /MediaBox is (see _resolve_inherited) - a font used by every
+    page in a section is often set once on a shared /Pages node rather than
+    repeated per page."""
+    resources = _resolve_inherited(page.obj, "/Resources")
+    fonts = resources.get("/Font") if isinstance(resources, pikepdf.Dictionary) else None
+    font = fonts.get(font_name) if isinstance(fonts, pikepdf.Dictionary) else None
+    if not isinstance(font, pikepdf.Dictionary) or "/ToUnicode" not in font:
+        return None
+    try:
+        width = _font_code_width(font)
+        mapping = _parse_bf_mappings(bytes(font["/ToUnicode"].read_bytes()))
+    except Exception:
+        return None
+    return width, mapping
+
+
+def _find_mcid_block(instructions, mcid):
+    """(start, end) indices into `instructions` such that instructions[start]
+    is the top-level `<role> BDC <</MCID mcid>>` operator and instructions[end]
+    is its matching EMC, tracking BDC/BMC...EMC nesting depth so the match is
+    exact even if (unusually, for a plain text leaf) something is nested
+    inside it. None if no top-level BDC names this mcid, or its span never
+    closes (a malformed content stream) - either way, nothing to split."""
+    for i, instr in enumerate(instructions):
+        if str(instr.operator) != "BDC" or len(instr.operands) != 2:
+            continue
+        props = instr.operands[1]
+        if not isinstance(props, pikepdf.Dictionary) or "/MCID" not in props:
+            continue
+        try:
+            if int(props["/MCID"]) != mcid:
+                continue
+        except (TypeError, ValueError):
+            continue
+        depth = 1
+        for j in range(i + 1, len(instructions)):
+            op = str(instructions[j].operator)
+            if op in ("BDC", "BMC"):
+                depth += 1
+            elif op == "EMC":
+                depth -= 1
+                if depth == 0:
+                    return i, j
+        return None
+    return None
+
+
+def _active_font_before(instructions, index):
+    """The font resource name (e.g. "/F1") set by the most recent `Tf`
+    strictly before `instructions[index]`, or None if there isn't one - the
+    font a marked-content span's own text inherits when the span itself
+    contains no Tf of its own."""
+    for j in range(index - 1, -1, -1):
+        if str(instructions[j].operator) == "Tf" and len(instructions[j].operands) == 2:
+            return str(instructions[j].operands[0])
+    return None
+
+
+def _decode_leaf_content(page, instructions, block_start, block_end, font_before):
+    """Decodes every text-showing operator strictly inside (block_start,
+    block_end) - i.e. between a marked-content span's BDC and its EMC - into
+    an ordered list of {"text", "instr" (absolute index into `instructions`),
+    "operand_index", "byte_offset"} entries, one per font code. `text` is
+    that code's decoded Unicode text per its active font's /ToUnicode (see
+    _font_tounicode) - almost always one character, but a ligature code can
+    decode to more than one. Raises ValueError, never guesses, the moment
+    anything can't be decoded with full confidence (see the section docstring
+    above) - ["instr"]/["operand_index"]/["byte_offset"] together are exactly
+    enough for _split_block() to slice the original operators back apart at
+    any code boundary this returns."""
+    current_font = font_before
+    font_cache = {}
+    codes = []
+
+    def font_info(name):
+        if name not in font_cache:
+            font_cache[name] = _font_tounicode(page, name) if name else None
+        return font_cache[name]
+
+    def decode_operand(instr_idx, operand_index, pikepdf_string, width, mapping):
+        raw = bytes(pikepdf_string)
+        if len(raw) % width != 0:
+            raise ValueError("This text's bytes don't align to its font's character width")
+        for offset in range(0, len(raw), width):
+            code = int.from_bytes(raw[offset:offset + width], "big")
+            if code not in mapping:
+                raise ValueError("This text has a character with no Unicode mapping")
+            codes.append({
+                "text": mapping[code], "instr": instr_idx,
+                "operand_index": operand_index, "byte_offset": offset,
+            })
+
+    for idx in range(block_start + 1, block_end):
+        instr = instructions[idx]
+        op = str(instr.operator)
+        if op == "Tf" and len(instr.operands) == 2:
+            current_font = str(instr.operands[0])
+            continue
+        if op not in ("Tj", "'", '"', "TJ"):
+            continue
+        if not current_font:
+            raise ValueError("This text has no font set - can't determine character boundaries")
+        info = font_info(current_font)
+        if info is None:
+            raise ValueError("This text's font has no embedded Unicode mapping (ToUnicode) - can't safely split it")
+        width, mapping = info
+
+        if op in ("Tj", "'"):
+            if not instr.operands or not isinstance(instr.operands[-1], pikepdf.String):
+                raise ValueError("Unrecognized text-showing operator")
+            decode_operand(idx, len(instr.operands) - 1, instr.operands[-1], width, mapping)
+        elif op == '"':
+            if len(instr.operands) != 3 or not isinstance(instr.operands[2], pikepdf.String):
+                raise ValueError("Unrecognized text-showing operator")
+            decode_operand(idx, 2, instr.operands[2], width, mapping)
+        elif op == "TJ":
+            if len(instr.operands) != 1 or not isinstance(instr.operands[0], pikepdf.Array):
+                raise ValueError("Unrecognized text-showing operator")
+            for element_index, element in enumerate(instr.operands[0]):
+                if isinstance(element, pikepdf.String):
+                    decode_operand(idx, element_index, element, width, mapping)
+
+    return codes
+
+
+def _leaf_page_and_mcid(doc, node_id):
+    """(page_index, mcid) for a text-bearing content leaf, or raises
+    ValueError - an /OBJR (annotation reference) or a leaf with no readable
+    MCID has no content-stream text to decode in the first place."""
+    kind = doc["node_kind"].get(node_id)
+    if kind not in ("content-int", "content-dict"):
+        raise ValueError("Only a content leaf's text can be split")
+    page_index = doc["node_pages"].get(node_id)
+    if page_index is None:
+        raise ValueError("This content leaf's page could not be resolved")
+    obj = doc["elements"][node_id]
+    if kind == "content-int":
+        mcid = int(obj)
+    else:
+        if not isinstance(obj, pikepdf.Dictionary) or "/MCID" not in obj:
+            raise ValueError("This is an object reference, not text - nothing to split")
+        try:
+            mcid = int(obj["/MCID"])
+        except (TypeError, ValueError):
+            raise ValueError("This content leaf has no readable marked-content id")
+    return page_index, mcid
+
+
+def _decode_leaf(doc, node_id):
+    """Full read pipeline shared by get_leaf_text() and split_leaf(): locate
+    `node_id`'s marked-content span on its page and decode every
+    text-showing operator inside it. Returns (page, page_index, block_start,
+    block_end, instructions, codes) on success. Raises ValueError - with a
+    message safe to show the user as-is - the instant anything can't be
+    decoded with full confidence; see the section docstring above."""
+    page_index, mcid = _leaf_page_and_mcid(doc, node_id)
+    page = doc["pdf"].pages[page_index]
+    page.contents_coalesce()
+    try:
+        instructions = pikepdf.parse_content_stream(page)
+    except Exception as exc:
+        raise ValueError(f"Could not read this page's content stream: {exc}") from exc
+
+    found = _find_mcid_block(instructions, mcid)
+    if found is None:
+        raise ValueError(
+            "Could not find this content leaf's marked content on the page "
+            "(or it contains nested marked content, which isn't supported)"
+        )
+    block_start, block_end = found
+
+    codes = _decode_leaf_content(
+        page, instructions, block_start, block_end,
+        font_before=_active_font_before(instructions, block_start),
+    )
+    if not codes:
+        raise ValueError("This content leaf has no text to split")
+
+    return page, page_index, block_start, block_end, instructions, codes
+
+
+def get_leaf_text(doc_id, node_id):
+    """Read-only: the exact text split_leaf() would operate on for this
+    content leaf. `text` is null with a human-readable `reason` when this
+    leaf can't be safely decoded (no /ToUnicode, nested marked content, an
+    object reference, ...) - the Tag Properties panel shows that in place of
+    the split field rather than letting the user try to split something that
+    isn't provably splittable."""
+    doc = documents[doc_id]
+    try:
+        _page, _page_index, _start, _end, _instructions, codes = _decode_leaf(doc, node_id)
+    except ValueError as exc:
+        return {"text": None, "reason": str(exc)}
+    return {"text": "".join(c["text"] for c in codes)}
+
+
+def _split_instruction(instr, cut_operand_index, cut_byte_offset):
+    """Splits one text-showing ContentStreamInstruction into (before, after)
+    at `cut_byte_offset` within its operand at `cut_operand_index` - either
+    half is None when the cut falls exactly at that half's edge (e.g.
+    splitting right before a TJ array's first element leaves nothing for
+    "before"). Only ever called with a cut that _decode_leaf_content already
+    proved lands cleanly on a font-code boundary."""
+    op = str(instr.operator)
+    if op in ("Tj", "'"):
+        raw = bytes(instr.operands[-1])
+        before, after = raw[:cut_byte_offset], raw[cut_byte_offset:]
+        fixed = list(instr.operands[:-1])
+        before_instr = pikepdf.ContentStreamInstruction(fixed + [pikepdf.String(before)], instr.operator) if before else None
+        after_instr = pikepdf.ContentStreamInstruction(fixed + [pikepdf.String(after)], instr.operator) if after else None
+        return before_instr, after_instr
+    if op == '"':
+        raw = bytes(instr.operands[2])
+        before, after = raw[:cut_byte_offset], raw[cut_byte_offset:]
+        aw, ac = instr.operands[0], instr.operands[1]
+        before_instr = pikepdf.ContentStreamInstruction([aw, ac, pikepdf.String(before)], instr.operator) if before else None
+        after_instr = pikepdf.ContentStreamInstruction([aw, ac, pikepdf.String(after)], instr.operator) if after else None
+        return before_instr, after_instr
+    if op == "TJ":
+        array = list(instr.operands[0])
+        before_items = list(array[:cut_operand_index])
+        after_items = list(array[cut_operand_index + 1:])
+        raw = bytes(array[cut_operand_index])
+        before_bytes, after_bytes = raw[:cut_byte_offset], raw[cut_byte_offset:]
+        if before_bytes:
+            before_items.append(pikepdf.String(before_bytes))
+        if after_bytes:
+            after_items.insert(0, pikepdf.String(after_bytes))
+        before_instr = pikepdf.ContentStreamInstruction([pikepdf.Array(before_items)], instr.operator) if before_items else None
+        after_instr = pikepdf.ContentStreamInstruction([pikepdf.Array(after_items)], instr.operator) if after_items else None
+        return before_instr, after_instr
+    raise ValueError("Unsupported text-showing operator")
+
+
+def _split_block(instructions, block_start, block_end, split_code_index, codes):
+    """Everything strictly between a marked-content span's BDC (block_start)
+    and EMC (block_end), divided into (instructions_a, instructions_b) at the
+    point named by `split_code_index` - codes[:split_code_index] ends up
+    drawn by instructions_a, codes[split_code_index:] by instructions_b.
+    Anything that carries no text (Tf, positioning, color, ...) simply rides
+    along with whichever side it already falls on in document order - moving
+    it across a new BDC/EMC pair has no effect on what it does, since marked
+    content is transparent to every other operator (see the section
+    docstring's note on this)."""
+    before_code = codes[split_code_index - 1]
+    after_code = codes[split_code_index]
+    split_instr_idx = after_code["instr"]
+
+    instructions_a = list(instructions[block_start + 1:split_instr_idx])
+    instructions_b = list(instructions[split_instr_idx:block_end])
+
+    if before_code["instr"] == split_instr_idx:
+        # The cut falls inside the same instruction both codes belong to -
+        # either mid-string (same operand_index) or, for a TJ array, exactly
+        # at the boundary between two of its elements (byte_offset 0 of the
+        # next element, nothing to slice).
+        cut_byte_offset = after_code["byte_offset"] if before_code["operand_index"] == after_code["operand_index"] else 0
+        before_instr, after_instr = _split_instruction(
+            instructions[split_instr_idx], after_code["operand_index"], cut_byte_offset,
+        )
+        instructions_b = instructions_b[1:]  # drop the whole, un-split original
+        if before_instr is not None:
+            instructions_a.append(before_instr)
+        if after_instr is not None:
+            instructions_b.insert(0, after_instr)
+    # else: a clean break between two whole instructions - before_code's
+    # instruction is already the tail of instructions_a (it's whatever index
+    # < split_instr_idx it was) and split_instr_idx's instruction is already
+    # the head of instructions_b, both via the slices above.
+
+    return instructions_a, instructions_b
+
+
+def _next_mcid_on_page(doc, page_index):
+    """One past the highest MCID currently in use on `page_index` - by its
+    content stream (the source of truth) or, for safety, by whatever the
+    struct tree itself already claims there (see _content_owners) in case
+    the two have drifted apart (e.g. repair_orphaned_marked_content hasn't
+    run yet) - so a freshly split leaf never mints an id that collides with
+    either."""
+    page = doc["pdf"].pages[page_index]
+    highest = -1
+    try:
+        for instr in pikepdf.parse_content_stream(page):
+            if str(instr.operator) == "BDC" and len(instr.operands) == 2:
+                props = instr.operands[1]
+                if isinstance(props, pikepdf.Dictionary) and "/MCID" in props:
+                    try:
+                        highest = max(highest, int(props["/MCID"]))
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass
+    per_page, _ = _content_owners(doc)
+    for mcid in per_page.get(page_index, {}):
+        highest = max(highest, mcid)
+    return highest + 1
+
+
+def _leaf_id_for_mcid(doc, page_index, mcid):
+    """The just-rebuilt registry's node id for the content leaf on
+    `page_index` carrying `mcid`, or None - used right after
+    _rebuild_after_mutation() to translate split_leaf()'s two new MCIDs back
+    into the fresh node ids the renderer needs to select them."""
+    for node_id, kind in doc["node_kind"].items():
+        if kind not in ("content-int", "content-dict"):
+            continue
+        if doc["node_pages"].get(node_id) != page_index:
+            continue
+        obj = doc["elements"][node_id]
+        if kind == "content-int":
+            if int(obj) == mcid:
+                return node_id
+        elif isinstance(obj, pikepdf.Dictionary) and "/MCID" in obj:
+            try:
+                if int(obj["/MCID"]) == mcid:
+                    return node_id
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def split_leaf(doc_id, node_id, split_index):
+    """Splits one content leaf's marked content into two at character offset
+    `split_index` into get_leaf_text()'s decoded text (so `split_index` must
+    land exactly between two font codes - not inside one, e.g. a ligature -
+    with real text on both sides). Backs the Tag Properties panel's "Split
+    Content" action. The new leaf lands as `node_id`'s immediate next
+    sibling, carrying a freshly minted MCID (see _next_mcid_on_page);
+    `node_id` itself keeps its original MCID and, for a bare-MCID leaf, its
+    node id too - only a /MCR leaf needs a new dict, since the original
+    keeps every key (/Pg included) except /MCID.
+
+    Unlike every other mutating command here, the result also carries a
+    fresh `pdfBase64` snapshot of the whole (still unsaved) document: this
+    is the one command that rewrites a page's *content stream*, and the
+    renderer's PDF preview is pdf.js's own separate parse of that same
+    stream, taken once at open and otherwise never re-fed new bytes (a
+    struct-tree-only edit never needs to be, since content streams don't
+    change). Without handing back fresh bytes here, the preview's page text
+    and highlight boxes would keep reading the pre-split content stream -
+    right MCIDs in the tree, stale text/positions on the page - until the
+    next full close/reopen."""
+    doc = documents[doc_id]
+    if node_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {node_id}")
+
+    page, page_index, block_start, block_end, instructions, codes = _decode_leaf(doc, node_id)
+
+    boundaries = [0]
+    for c in codes:
+        boundaries.append(boundaries[-1] + len(c["text"]))
+    try:
+        split_code_index = boundaries.index(split_index)
+    except ValueError:
+        split_code_index = -1
+    if split_code_index <= 0 or split_code_index >= len(codes):
+        raise ValueError("Place the cursor strictly between two characters, with text on both sides, to split there")
+
+    parent_id = doc["parent_map"].get(node_id)
+    if parent_id is None:
+        raise ValueError("This content leaf has no parent to split it within")
+    parent_obj = doc["elements"][parent_id]
+    node_obj = doc["elements"][node_id]
+    index_in_parent = _kid_index(parent_obj, node_obj)
+    if index_in_parent == -1:
+        raise ValueError("Could not locate this content leaf in its parent")
+
+    instructions_a, instructions_b = _split_block(instructions, block_start, block_end, split_code_index, codes)
+
+    orig_bdc = instructions[block_start]
+    tag_operand = orig_bdc.operands[0]
+    props_a = orig_bdc.operands[1]
+    original_mcid = int(props_a["/MCID"])
+    new_mcid = _next_mcid_on_page(doc, page_index)
+    props_b = pikepdf.Dictionary({k: v for k, v in props_a.items()})
+    props_b["/MCID"] = new_mcid
+
+    emc = pikepdf.ContentStreamInstruction([], pikepdf.Operator("EMC"))
+    bdc_b = pikepdf.ContentStreamInstruction([tag_operand, props_b], pikepdf.Operator("BDC"))
+    new_sequence = [orig_bdc, *instructions_a, emc, bdc_b, *instructions_b, emc]
+    final_instructions = instructions[:block_start] + new_sequence + instructions[block_end + 1:]
+
+    _push_undo_snapshot(doc)
+
+    page.obj.Contents.write(pikepdf.unparse_content_stream(final_instructions))
+
+    kind = doc["node_kind"].get(node_id)
+    leaf_a = node_obj
+    if kind == "content-int":
+        leaf_b = new_mcid
+    else:
+        leaf_b = pikepdf.Dictionary({k: v for k, v in node_obj.items()})
+        leaf_b["/MCID"] = new_mcid
+
+    _remove_kid(parent_obj, node_obj)
+    _insert_kid(parent_obj, leaf_a, index_in_parent)
+    _insert_kid(parent_obj, leaf_b, index_in_parent + 1)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_id_a = _leaf_id_for_mcid(doc, page_index, original_mcid)
+    new_id_b = _leaf_id_for_mcid(doc, page_index, new_mcid)
+    pdf_base64 = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
+
+    return {
+        "tree": tree, "newNodeIds": [new_id_a, new_id_b], "pdfBase64": pdf_base64,
+        **_undo_state(doc),
+    }
+
+
 # --- figure-from-rectangle tagging ----------------------------------------
 #
 # Backs the "Add Figure" draw tool: the renderer lets the user drag a
@@ -3139,6 +3697,10 @@ def main():
                 result = repair_orphaned_marked_content(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
+            elif cmd == "get_leaf_text":
+                result = get_leaf_text(request["docId"], request["nodeId"])
+            elif cmd == "split_leaf":
+                result = split_leaf(request["docId"], request["nodeId"], request["splitIndex"])
             elif cmd == "figure_from_rect":
                 result = figure_from_rect(request["docId"], request["pageIndex"], request["rect"])
             elif cmd == "insert_paragraph_after":

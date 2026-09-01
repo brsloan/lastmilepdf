@@ -28,6 +28,8 @@ const { contextBridge, ipcRenderer } = require('electron');
  * @typedef {import('./types/domain').AiBatchEntry} AiBatchEntry
  * @typedef {import('./types/domain').AiBatchEstimate} AiBatchEstimate
  * @typedef {import('./types/domain').DiscardChoice} DiscardChoice
+ * @typedef {import('./types/domain').LeafTextResult} LeafTextResult
+ * @typedef {import('./types/domain').SplitLeafResult} SplitLeafResult
  */
 
 const api = {
@@ -123,6 +125,21 @@ const api = {
    */
   joinTags: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:join-tags', { docId, nodeIds }),
+  /**
+   * @param {string} docId
+   * @param {string} nodeId
+   * @returns {Promise<LeafTextResult>}
+   */
+  getLeafText: (docId, nodeId) =>
+    ipcRenderer.invoke('tags:get-leaf-text', { docId, nodeId }),
+  /**
+   * @param {string} docId
+   * @param {string} nodeId
+   * @param {number} splitIndex
+   * @returns {Promise<SplitLeafResult>}
+   */
+  splitLeaf: (docId, nodeId, splitIndex) =>
+    ipcRenderer.invoke('tags:split-leaf', { docId, nodeId, splitIndex }),
   /**
    * Tags a user-drawn rectangle as a new /Figure.
    * @param {string} docId

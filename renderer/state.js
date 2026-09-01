@@ -54,6 +54,8 @@ export const state = {
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
   actualTextPlaceholderToken: 0, // invalidates in-flight Actual Text placeholder pulls when selection/doc changes
+  splitContentToken: 0,          // invalidates an in-flight get_leaf_text() pull superseded by a newer one - see split-content.js
+  splitContentNodeId: null,      // the content leaf the Split Content panel currently shows, or null
   tableEditorToken: 0,          // invalidates in-flight Table Editor dialog builds (see renderTableEditor())
   tableEditorTableId: null,     // id of the Table tag currently open in the Table Editor dialog
   tableEditorSelectedIds: new Set(), // selected TH/TD cell ids within the Table Editor
