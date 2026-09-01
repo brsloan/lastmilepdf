@@ -358,6 +358,36 @@ body.busy * {
   box-shadow: 0 0 0 0.5px red;
 }
 
+/* Selected tag's role, shown resting on its highlight box (File > Settings >
+   Appearance > Show Tag Type Label): one copy above the box, one hanging
+   below it, both left-aligned to the box. Anchored to the box's own left
+   edge (top, or top-of-bottom-edge) so both track it through zoom/resize.
+   Colored per-category to match the same tag's chip in the tree - see
+   categoryForRole() and the .tag-chip[data-category] rules below. */
+.highlight-label {
+  position: absolute;
+  padding: 1px 4px;
+  font: 11px/1.4 ui-monospace, 'SF Mono', Consolas, monospace;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--panel);
+  pointer-events: none;
+}
+.highlight-label.above {
+  transform: translateY(-100%);
+  border-radius: 2px 2px 0 0;
+}
+.highlight-label.below {
+  border-radius: 0 0 2px 2px;
+}
+.highlight-label[data-category="heading"] { color: var(--cat-heading); }
+.highlight-label[data-category="container"] { color: var(--cat-container); }
+.highlight-label[data-category="list"] { color: var(--cat-list); }
+.highlight-label[data-category="table"] { color: var(--cat-table); }
+.highlight-label[data-category="figure"] { color: var(--cat-figure); }
+.highlight-label[data-category="inline"] { color: var(--cat-inline); }
+.highlight-label[data-category="leaf"] { color: var(--cat-leaf); }
+
 /* --- in-progress "Add Figure" rubber-band rectangle, overlaid above
    .highlight-layer (see #draw-overlay in index.html) --- */
 

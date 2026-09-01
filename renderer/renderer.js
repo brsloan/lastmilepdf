@@ -77,6 +77,7 @@ const state = {
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.
   findReplaceLastMatchId: null, // id most recently found/replaced by the Find/Replace dialog - see doFindNext()
   showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
+  showTagTypeLabel: true, // File > Settings > Appearance > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
   atChangeFlags: new Map(), // nodeId -> { original, suggested } - tags whose Actual Text no longer matches their pulled content text, found by the Show AT Changes sweep (computeAtChangeFlags()). Same shape as aiProposals so it shares renderActualTextDiff()/pruneStaleAiProposals(), but recomputed from the file itself rather than from in-session state, so it still works after a save/reopen.
   atChangeSweepToken: 0, // invalidates an in-flight computeAtChangeFlags() sweep superseded by a newer one (toggle off/on again, or a fresh document)
 };
@@ -2068,6 +2069,21 @@ async function updateAtChangeFlagForNode(nodeId) {
   }
 }
 
+// File > Settings > Appearance > Show Tag Type Label - persisted in
+// settings.json via main.js (not localStorage) so the native menu
+// checkbox's `checked` state is already correct at startup, before the
+// renderer has loaded; this just brings the renderer's copy in line with
+// whatever that was, then keeps it in sync when the checkbox is toggled.
+window.api.getShowTagTypeLabel().then((value) => {
+  state.showTagTypeLabel = value;
+  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+});
+
+window.api.onMenuShowTagTypeLabel((_event, checked) => {
+  state.showTagTypeLabel = checked;
+  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+});
+
 window.api.onMenuShowAtChanges(async (_event, checked) => {
   state.showAtChanges = checked;
   if (!checked) {
@@ -2717,18 +2733,46 @@ function syncHighlightLayerBounds() {
 function renderHighlightRects(boxes, viewport) {
   el.highlightLayer.innerHTML = '';
   let activeBox = null;
-  for (const { rect: r, active, isFigure } of boxes) {
+  for (const { rect: r, active, isFigure, role } of boxes) {
     const box = document.createElement('div');
     box.className = active ? 'highlight-box' : 'highlight-box secondary';
     // Percentages of the viewport's own pixel size so boxes stay aligned
     // even though the canvas is scaled down by CSS (max-width: 100%).
-    box.style.left = `${(100 * r.x / viewport.width).toFixed(3)}%`;
-    box.style.top = `${(100 * r.y / viewport.height).toFixed(3)}%`;
+    const leftPct = 100 * r.x / viewport.width;
+    const topPct = 100 * r.y / viewport.height;
+    box.style.left = `${leftPct.toFixed(3)}%`;
+    box.style.top = `${topPct.toFixed(3)}%`;
     box.style.width = `${(100 * r.width / viewport.width).toFixed(3)}%`;
     box.style.height = `${(100 * r.height / viewport.height).toFixed(3)}%`;
     el.highlightLayer.appendChild(box);
     if (active) activeBox = box;
     if (isFigure) for (const line of buildCrosshair(r, viewport)) el.highlightLayer.appendChild(line);
+    // Only the actively-selected tag (not other members of a multi-selection)
+    // gets role labels - one resting on top of the box, one hanging below it,
+    // both left-aligned to the box, so the role reads clearly regardless of
+    // which edge of the box is scrolled into view. Both reuse the tree
+    // chip's category color so they read as "the same tag" at a glance (see
+    // categoryForRole()).
+    if (active && role && state.showTagTypeLabel) {
+      const category = categoryForRole(role);
+      const bottomEdgePct = 100 * (r.y + r.height) / viewport.height;
+
+      const topLabel = document.createElement('div');
+      topLabel.className = 'highlight-label above';
+      topLabel.dataset.category = category;
+      topLabel.textContent = `/${role}`;
+      topLabel.style.left = `${leftPct.toFixed(3)}%`;
+      topLabel.style.top = `${topPct.toFixed(3)}%`;
+      el.highlightLayer.appendChild(topLabel);
+
+      const bottomLabel = document.createElement('div');
+      bottomLabel.className = 'highlight-label below';
+      bottomLabel.dataset.category = category;
+      bottomLabel.textContent = `/${role}`;
+      bottomLabel.style.left = `${leftPct.toFixed(3)}%`;
+      bottomLabel.style.top = `${bottomEdgePct.toFixed(3)}%`;
+      el.highlightLayer.appendChild(bottomLabel);
+    }
   }
   // Tall/wide pages can overflow the canvas-wrap pane (it scrolls), so the
   // newly-selected tag's box may be off-screen even though it's on the
@@ -2848,7 +2892,7 @@ async function highlightNodeOnPage(nodeId, { allowPageJump }) {
       if (rects.length === 0) continue;
       const rect = unionRects(rects);
       const role = state.nodesById.get(id)?.node.role;
-      if (rect) boxes.push({ rect, active: id === nodeId, isFigure: categoryForRole(role) === 'figure' });
+      if (rect) boxes.push({ rect, active: id === nodeId, isFigure: categoryForRole(role) === 'figure', role });
     }
     syncHighlightLayerBounds();
     renderHighlightRects(boxes, viewport);

@@ -222,6 +222,20 @@ function clearStoredApiKey() {
   writeSettingsFile(settings);
 }
 
+// Whether the PDF preview labels a selected tag's role above its highlight
+// box (File > Settings > Appearance). Persisted in the same settings.json as
+// the API key so the checkbox's initial `checked` state (set when the menu
+// is built, before the renderer has loaded) is already correct.
+function getShowTagTypeLabel() {
+  return readSettingsFile().showTagTypeLabel !== false; // default on
+}
+
+function setShowTagTypeLabel(value) {
+  const settings = readSettingsFile();
+  settings.showTagTypeLabel = value;
+  writeSettingsFile(settings);
+}
+
 // --- Window -----------------------------------------------------------------
 
 // Whether the renderer currently holds tag edits that aren't on disk. The
@@ -315,6 +329,21 @@ function buildAppMenu() {
           label: 'Settings',
           submenu: [
             { label: 'API Key…', click: (_item, win) => win?.webContents.send('menu:settings') },
+            { type: 'separator' },
+            {
+              label: 'Appearance',
+              submenu: [
+                {
+                  label: 'Show Tag Type Label on Highlight',
+                  type: 'checkbox',
+                  checked: getShowTagTypeLabel(),
+                  click: (item, win) => {
+                    setShowTagTypeLabel(item.checked);
+                    win?.webContents.send('menu:show-tag-type-label', item.checked);
+                  },
+                },
+              ],
+            },
           ],
         },
         { type: 'separator' },
@@ -600,6 +629,8 @@ ipcMain.handle('settings:clear-api-key', async () => {
   clearStoredApiKey();
   return true;
 });
+
+ipcMain.handle('settings:get-show-tag-type-label', async () => getShowTagTypeLabel());
 
 // --- AI (Fix with AI) ------------------------------------------------------
 

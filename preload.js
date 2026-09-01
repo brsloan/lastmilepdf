@@ -89,6 +89,11 @@ contextBridge.exposeInMainWorld('api', {
   clearApiKey: () => ipcRenderer.invoke('settings:clear-api-key'),
   onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
 
+  // File > Settings > Appearance > Show Tag Type Label - persisted in
+  // settings.json (see main.js) so it's remembered between sessions.
+  getShowTagTypeLabel: () => ipcRenderer.invoke('settings:get-show-tag-type-label'),
+  onMenuShowTagTypeLabel: (callback) => ipcRenderer.on('menu:show-tag-type-label', callback),
+
   fixActualText: (text) => ipcRenderer.invoke('ai:fix-actual-text', { text }),
   fixActualTextBatch: (items) => ipcRenderer.invoke('ai:fix-actual-text-batch', { items }),
 
