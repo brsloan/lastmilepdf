@@ -1,0 +1,31 @@
+{
+  // Type-checks the renderer. Separate from the root jsconfig.json because
+  // renderer.js is an ES module running in the browser: it needs the DOM
+  // libs and ESM resolution, and must NOT get Node's globals - `fs` and
+  // friends genuinely aren't reachable from here (contextIsolation is on),
+  // so pretending otherwise would hide real mistakes.
+  //
+  // ../types/renderer-globals.d.ts is what makes `window.api` typed.
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    // Don't auto-include every @types package for the renderer - it runs
+    // with contextIsolation on, so Node's API genuinely isn't reachable
+    // here. Note this doesn't block Node's types entirely: they still
+    // arrive transitively through electron.d.ts (pulled in by preload.js,
+    // which is what types `window.api`), which is why AppState's
+    // walkTimerId uses ReturnType<typeof setTimeout> rather than `number`.
+    "types": [],
+
+    // See the note in the root jsconfig.json - loose on purpose to start.
+    "strict": false,
+    "noImplicitAny": false
+  },
+  "include": ["renderer.js", "../types/**/*.d.ts"]
+}

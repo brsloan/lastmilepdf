@@ -14,7 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const readline = require('readline');
-const Anthropic = require('@anthropic-ai/sdk');
+const { Anthropic } = require('@anthropic-ai/sdk');
 const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 const { z } = require('zod');
 
@@ -81,7 +81,7 @@ function startWorker() {
   // Handle it and let the renderer surface it through the normal error path
   // instead. 'exit' may or may not follow an 'error', so settle whatever is
   // in flight here rather than relying on the exit handler to do it.
-  child.on('error', (err) => {
+  child.on('error', (/** @type {NodeJS.ErrnoException} */ err) => {
     console.error('[tag_worker] failed to start:', err);
     lastWorkerError = `Could not start the PDF worker process (${err.code || err.message}). ` + (
       app.isPackaged
@@ -405,24 +405,44 @@ function createWindow() {
 // renderer.js) - Save picks between writing straight to the last-used path
 // or falling back to a Save As dialog; Close just releases the current
 // document without exiting the app.
+/**
+ * Sends a menu event to the window whose menu was clicked.
+ *
+ * Electron types a menu click's window argument as BaseWindow, which has no
+ * `webContents`. The app menu here is only ever attached to a BrowserWindow,
+ * which does - so this records that assumption once, with a name, instead of
+ * repeating an inline cast at all fifteen call sites.
+ *
+ * @param {import('electron').BaseWindow | undefined} win
+ * @param {string} channel
+ * @param {...unknown} args
+ */
+function sendToWindow(win, channel, ...args) {
+  const browserWin = /** @type {import('electron').BrowserWindow | undefined} */ (win);
+  browserWin?.webContents.send(channel, ...args);
+}
+
 function buildAppMenu() {
   const isMac = process.platform === 'darwin';
+  /** @type {import('electron').MenuItemConstructorOptions[]} */
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac
+      ? [/** @type {import('electron').MenuItemConstructorOptions} */ ({ role: 'appMenu' })]
+      : []),
     {
       label: 'File',
       submenu: [
-        { label: 'Open PDF…', accelerator: 'CmdOrCtrl+O', click: (_item, win) => win?.webContents.send('menu:open') },
+        { label: 'Open PDF…', accelerator: 'CmdOrCtrl+O', click: (_item, win) => sendToWindow(win, 'menu:open') },
         { type: 'separator' },
-        { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => win?.webContents.send('menu:save') },
-        { label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => win?.webContents.send('menu:save-as') },
+        { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => sendToWindow(win, 'menu:save') },
+        { label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => sendToWindow(win, 'menu:save-as') },
         { type: 'separator' },
-        { label: 'Close', accelerator: 'CmdOrCtrl+W', click: (_item, win) => win?.webContents.send('menu:close') },
+        { label: 'Close', accelerator: 'CmdOrCtrl+W', click: (_item, win) => sendToWindow(win, 'menu:close') },
         { type: 'separator' },
         {
           label: 'Settings',
           submenu: [
-            { label: 'API Key…', click: (_item, win) => win?.webContents.send('menu:settings') },
+            { label: 'API Key…', click: (_item, win) => sendToWindow(win, 'menu:settings') },
             { type: 'separator' },
             {
               label: 'Appearance',
@@ -433,7 +453,7 @@ function buildAppMenu() {
                   checked: getShowTagTypeLabel(),
                   click: (item, win) => {
                     setShowTagTypeLabel(item.checked);
-                    win?.webContents.send('menu:show-tag-type-label', item.checked);
+                    sendToWindow(win, 'menu:show-tag-type-label', item.checked);
                   },
                 },
               ],
@@ -447,7 +467,7 @@ function buildAppMenu() {
                   checked: getNotifyDesktop(),
                   click: (item, win) => {
                     setNotifyDesktop(item.checked);
-                    win?.webContents.send('menu:notify-desktop', item.checked);
+                    sendToWindow(win, 'menu:notify-desktop', item.checked);
                   },
                 },
                 {
@@ -456,7 +476,7 @@ function buildAppMenu() {
                   checked: getNotifyChime(),
                   click: (item, win) => {
                     setNotifyChime(item.checked);
-                    win?.webContents.send('menu:notify-chime', item.checked);
+                    sendToWindow(win, 'menu:notify-chime', item.checked);
                   },
                 },
               ],
@@ -470,8 +490,8 @@ function buildAppMenu() {
     {
       label: 'Edit',
       submenu: [
-        { id: 'menu-undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, enabled: false, click: (_item, win) => win?.webContents.send('menu:undo') },
-        { id: 'menu-redo', label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, enabled: false, click: (_item, win) => win?.webContents.send('menu:redo') },
+        { id: 'menu-undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, enabled: false, click: (_item, win) => sendToWindow(win, 'menu:undo') },
+        { id: 'menu-redo', label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, enabled: false, click: (_item, win) => sendToWindow(win, 'menu:redo') },
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },
@@ -492,23 +512,23 @@ function buildAppMenu() {
     {
       label: 'Tools',
       submenu: [
-        { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => win?.webContents.send('menu:find-replace') },
+        { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => sendToWindow(win, 'menu:find-replace') },
         { type: 'separator' },
         {
           label: 'Show AT Changes',
           type: 'checkbox',
           checked: false,
-          click: (item, win) => win?.webContents.send('menu:show-at-changes', item.checked),
+          click: (item, win) => sendToWindow(win, 'menu:show-at-changes', item.checked),
         },
       ],
     },
     {
       label: 'Help',
       submenu: [
-        { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => win?.webContents.send('menu:shortcuts') },
-        { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => win?.webContents.send('menu:help-doc') },
+        { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => sendToWindow(win, 'menu:shortcuts') },
+        { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => sendToWindow(win, 'menu:help-doc') },
         { type: 'separator' },
-        { label: 'About LastMilePDF', click: (_item, win) => win?.webContents.send('menu:about', { version: app.getVersion() }) },
+        { label: 'About LastMilePDF', click: (_item, win) => sendToWindow(win, 'menu:about', { version: app.getVersion() }) },
       ],
     },
   ];

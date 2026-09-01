@@ -32,6 +32,7 @@ function setFileName(fileName) {
   document.title = fileName ? `${APP_NAME} — ${marker}${fileName}` : APP_NAME;
 }
 
+/** @type {import('../types/app-state').AppState} */
 const state = {
   docId: null,
   fileName: null,
@@ -92,105 +93,151 @@ const PAGE_SCALE = 1.4;
 
 // --- DOM refs -----------------------------------------------------------
 
+// --- typed element lookups ----------------------------------------------
+//
+// document.getElementById() is typed `HTMLElement | null`, which knows about
+// neither `.value`/`.disabled`/`.showModal()` nor the fact that every id
+// below is a static, always-present part of renderer/index.html. These
+// wrappers say which kind of element each id refers to, so the ~170 uses of
+// those properties further down are checked rather than silently untyped.
+//
+// The cast is an assertion, not a check: if an id is renamed in index.html
+// without being renamed here, this still compiles and the app breaks at
+// runtime exactly as it did before. What it does buy is that *using* a ref
+// the wrong way - `el.tagFilter.checked`, say - is now an error.
+
+/** @param {string} id @returns {HTMLElement} */
+const asElement = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLButtonElement} */
+const asButton = (id) => /** @type {HTMLButtonElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLInputElement} */
+const asInput = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLSelectElement} */
+const asSelect = (id) => /** @type {HTMLSelectElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLTextAreaElement} */
+const asTextarea = (id) => /** @type {HTMLTextAreaElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLDialogElement} */
+const asDialog = (id) => /** @type {HTMLDialogElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLCanvasElement} */
+const asCanvas = (id) => /** @type {HTMLCanvasElement} */ (document.getElementById(id));
+/** @param {string} id @returns {HTMLFormElement} */
+const asForm = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
+
 const el = {
-  btnOpen: document.getElementById('btn-open'),
-  btnFlatten: document.getElementById('btn-flatten'),
-  btnScopeTables: document.getElementById('btn-scope-tables'),
-  btnSmartifact: document.getElementById('btn-smartifact'),
-  btnAddFigure: document.getElementById('btn-add-figure'),
-  btnAddP: document.getElementById('btn-add-p'),
-  btnWalk: document.getElementById('btn-walk'),
-  btnVerify: document.getElementById('btn-verify'),
-  tagFilter: document.getElementById('tag-filter'),
-  statusBar: document.getElementById('status-bar'),
-  noStructBanner: document.getElementById('no-struct-banner'),
-  canvas: document.getElementById('pdf-canvas'),
-  viewerPlaceholder: document.getElementById('viewer-placeholder'),
-  btnPrevPage: document.getElementById('btn-prev-page'),
-  btnNextPage: document.getElementById('btn-next-page'),
-  pageIndicatorInput: document.getElementById('page-indicator-input'),
-  pageIndicatorTotal: document.getElementById('page-indicator-total'),
-  tagTree: document.getElementById('tag-tree'),
-  highlightLayer: document.getElementById('highlight-layer'),
-  drawOverlay: document.getElementById('draw-overlay'),
-  detailsEmpty: document.getElementById('details-empty'),
-  detailsForm: document.getElementById('details-form'),
-  fieldNodeId: document.getElementById('field-node-id'),
-  fieldRole: document.getElementById('field-role'),
-  fieldAlt: document.getElementById('field-alt'),
-  fieldAltWrap: document.getElementById('field-alt-wrap'),
-  fieldActualText: document.getElementById('field-actual-text'),
-  fieldActualTextWrap: document.getElementById('field-actual-text-wrap'),
-  fieldDocInfoSection: document.getElementById('field-docinfo-section'),
-  fieldDocTitle: document.getElementById('field-doc-title'),
-  fieldDocAuthor: document.getElementById('field-doc-author'),
-  tablePreviewWrap: document.getElementById('field-table-preview'),
-  tablePreviewContainer: document.getElementById('table-preview-container'),
-  btnExpandTablePreview: document.getElementById('btn-expand-table-preview'),
-  tablePreviewDialog: document.getElementById('table-preview-dialog'),
-  tablePreviewDialogContainer: document.getElementById('table-preview-dialog-container'),
-  btnCloseTablePreview: document.getElementById('btn-close-table-preview'),
-  tableEditorForm: document.getElementById('table-editor-fields'),
-  tableEditorHint: document.getElementById('table-editor-hint'),
-  tableEditorFieldRow: document.getElementById('table-editor-field-row'),
-  tableEditorScopeWrap: document.getElementById('table-editor-scope-wrap'),
-  tableEditorScope: document.getElementById('table-editor-scope'),
-  tableEditorColSpan: document.getElementById('table-editor-col-span'),
-  tableEditorRowSpan: document.getElementById('table-editor-row-span'),
-  btnTableEditorToTh: document.getElementById('btn-table-editor-to-th'),
-  btnTableEditorToTd: document.getElementById('btn-table-editor-to-td'),
-  fieldLang: document.getElementById('field-lang'),
-  fieldLangLabel: document.getElementById('field-lang-label'),
-  thSection: document.getElementById('field-th-section'),
-  fieldScopeWrap: document.getElementById('field-scope-wrap'),
-  fieldScope: document.getElementById('field-scope'),
-  fieldColSpan: document.getElementById('field-col-span'),
-  fieldRowSpan: document.getElementById('field-row-span'),
-  btnPullContent: document.getElementById('btn-pull-content'),
-  btnFixActualText: document.getElementById('btn-fix-actual-text'),
-  btnFixAllActualText: document.getElementById('btn-fix-all-actual-text'),
-  aiBatchProgressDialog: document.getElementById('ai-batch-progress-dialog'),
-  aiBatchProgressEstimate: document.getElementById('ai-batch-progress-estimate'),
-  aiBatchProgressTimer: document.getElementById('ai-batch-progress-timer'),
-  actualTextHighlight: document.getElementById('field-actual-text-highlight'),
-  actualTextReviewBar: document.getElementById('actual-text-review-bar'),
-  actualTextReviewLabel: document.getElementById('actual-text-review-label'),
-  btnRevertAiFix: document.getElementById('btn-revert-ai-fix'),
-  settingsDialog: document.getElementById('settings-dialog'),
-  settingsForm: document.getElementById('settings-form'),
-  btnCloseSettings: document.getElementById('btn-close-settings'),
-  settingsApiKey: document.getElementById('settings-api-key'),
-  settingsApiKeyStatus: document.getElementById('settings-api-key-status'),
-  btnSaveApiKey: document.getElementById('btn-save-api-key'),
-  btnClearApiKey: document.getElementById('btn-clear-api-key'),
-  shortcutsDialog: document.getElementById('shortcuts-dialog'),
-  btnCloseShortcuts: document.getElementById('btn-close-shortcuts'),
-  helpDialog: document.getElementById('help-dialog'),
-  btnCloseHelp: document.getElementById('btn-close-help'),
-  aboutDialog: document.getElementById('about-dialog'),
-  btnCloseAbout: document.getElementById('btn-close-about'),
-  aboutVersion: document.getElementById('about-version'),
-  verifyDialog: document.getElementById('verify-dialog'),
-  btnCloseVerify: document.getElementById('btn-close-verify'),
-  verifyBody: document.getElementById('verify-body'),
-  detailsPane: document.getElementById('details-pane'),
-  findReplaceDialog: document.getElementById('find-replace-dialog'),
-  btnCloseFindReplace: document.getElementById('btn-close-find-replace'),
-  findReplaceFind: document.getElementById('find-replace-find'),
-  findReplaceReplace: document.getElementById('find-replace-replace'),
-  findReplaceStatus: document.getElementById('find-replace-status'),
-  btnFindNext: document.getElementById('btn-find-next'),
-  btnFindReplaceOne: document.getElementById('btn-find-replace-one'),
-  btnFindReplaceAll: document.getElementById('btn-find-replace-all'),
-  tabProperties: document.getElementById('tab-properties'),
-  tabBookmarks: document.getElementById('tab-bookmarks'),
-  panelProperties: document.getElementById('panel-properties'),
-  panelBookmarks: document.getElementById('panel-bookmarks'),
-  btnAddBookmark: document.getElementById('btn-add-bookmark'),
-  btnGenerateBookmarks: document.getElementById('btn-generate-bookmarks'),
-  bookmarksEmpty: document.getElementById('bookmarks-empty'),
-  bookmarkTree: document.getElementById('bookmark-tree'),
+  btnOpen: asButton('btn-open'),
+  btnFlatten: asButton('btn-flatten'),
+  btnScopeTables: asButton('btn-scope-tables'),
+  btnSmartifact: asButton('btn-smartifact'),
+  btnAddFigure: asButton('btn-add-figure'),
+  btnAddP: asButton('btn-add-p'),
+  btnWalk: asButton('btn-walk'),
+  btnVerify: asButton('btn-verify'),
+  tagFilter: asSelect('tag-filter'),
+  statusBar: asElement('status-bar'),
+  noStructBanner: asElement('no-struct-banner'),
+  canvas: asCanvas('pdf-canvas'),
+  viewerPlaceholder: asElement('viewer-placeholder'),
+  btnPrevPage: asButton('btn-prev-page'),
+  btnNextPage: asButton('btn-next-page'),
+  pageIndicatorInput: asInput('page-indicator-input'),
+  pageIndicatorTotal: asElement('page-indicator-total'),
+  tagTree: asElement('tag-tree'),
+  highlightLayer: asElement('highlight-layer'),
+  drawOverlay: asElement('draw-overlay'),
+  detailsEmpty: asElement('details-empty'),
+  detailsForm: asForm('details-form'),
+  fieldNodeId: asInput('field-node-id'),
+  fieldRole: asInput('field-role'),
+  fieldAlt: asTextarea('field-alt'),
+  fieldAltWrap: asElement('field-alt-wrap'),
+  fieldActualText: asTextarea('field-actual-text'),
+  fieldActualTextWrap: asElement('field-actual-text-wrap'),
+  fieldDocInfoSection: asElement('field-docinfo-section'),
+  fieldDocTitle: asInput('field-doc-title'),
+  fieldDocAuthor: asInput('field-doc-author'),
+  tablePreviewWrap: asElement('field-table-preview'),
+  tablePreviewContainer: asElement('table-preview-container'),
+  btnExpandTablePreview: asButton('btn-expand-table-preview'),
+  tablePreviewDialog: asDialog('table-preview-dialog'),
+  tablePreviewDialogContainer: asElement('table-preview-dialog-container'),
+  btnCloseTablePreview: asButton('btn-close-table-preview'),
+  tableEditorForm: asForm('table-editor-fields'),
+  tableEditorHint: asElement('table-editor-hint'),
+  tableEditorFieldRow: asElement('table-editor-field-row'),
+  tableEditorScopeWrap: asElement('table-editor-scope-wrap'),
+  tableEditorScope: asSelect('table-editor-scope'),
+  tableEditorColSpan: asInput('table-editor-col-span'),
+  tableEditorRowSpan: asInput('table-editor-row-span'),
+  btnTableEditorToTh: asButton('btn-table-editor-to-th'),
+  btnTableEditorToTd: asButton('btn-table-editor-to-td'),
+  fieldLang: asInput('field-lang'),
+  fieldLangLabel: asElement('field-lang-label'),
+  thSection: asElement('field-th-section'),
+  fieldScopeWrap: asElement('field-scope-wrap'),
+  fieldScope: asSelect('field-scope'),
+  fieldColSpan: asInput('field-col-span'),
+  fieldRowSpan: asInput('field-row-span'),
+  btnPullContent: asButton('btn-pull-content'),
+  btnFixActualText: asButton('btn-fix-actual-text'),
+  btnFixAllActualText: asButton('btn-fix-all-actual-text'),
+  aiBatchProgressDialog: asDialog('ai-batch-progress-dialog'),
+  aiBatchProgressEstimate: asElement('ai-batch-progress-estimate'),
+  aiBatchProgressTimer: asElement('ai-batch-progress-timer'),
+  actualTextHighlight: asElement('field-actual-text-highlight'),
+  actualTextReviewBar: asElement('actual-text-review-bar'),
+  actualTextReviewLabel: asElement('actual-text-review-label'),
+  btnRevertAiFix: asButton('btn-revert-ai-fix'),
+  settingsDialog: asDialog('settings-dialog'),
+  settingsForm: asForm('settings-form'),
+  btnCloseSettings: asButton('btn-close-settings'),
+  settingsApiKey: asInput('settings-api-key'),
+  settingsApiKeyStatus: asElement('settings-api-key-status'),
+  btnSaveApiKey: asButton('btn-save-api-key'),
+  btnClearApiKey: asButton('btn-clear-api-key'),
+  shortcutsDialog: asDialog('shortcuts-dialog'),
+  btnCloseShortcuts: asButton('btn-close-shortcuts'),
+  helpDialog: asDialog('help-dialog'),
+  btnCloseHelp: asButton('btn-close-help'),
+  aboutDialog: asDialog('about-dialog'),
+  btnCloseAbout: asButton('btn-close-about'),
+  aboutVersion: asElement('about-version'),
+  verifyDialog: asDialog('verify-dialog'),
+  btnCloseVerify: asButton('btn-close-verify'),
+  verifyBody: asElement('verify-body'),
+  detailsPane: asElement('details-pane'),
+  findReplaceDialog: asDialog('find-replace-dialog'),
+  btnCloseFindReplace: asButton('btn-close-find-replace'),
+  findReplaceFind: asInput('find-replace-find'),
+  findReplaceReplace: asInput('find-replace-replace'),
+  findReplaceStatus: asElement('find-replace-status'),
+  btnFindNext: asButton('btn-find-next'),
+  btnFindReplaceOne: asButton('btn-find-replace-one'),
+  btnFindReplaceAll: asButton('btn-find-replace-all'),
+  tabProperties: asButton('tab-properties'),
+  tabBookmarks: asButton('tab-bookmarks'),
+  panelProperties: asElement('panel-properties'),
+  panelBookmarks: asElement('panel-bookmarks'),
+  btnAddBookmark: asButton('btn-add-bookmark'),
+  btnGenerateBookmarks: asButton('btn-generate-bookmarks'),
+  bookmarksEmpty: asElement('bookmarks-empty'),
+  bookmarkTree: asElement('bookmark-tree'),
 };
+
+/**
+ * Every selectable row currently in the tag tree, in display order.
+ *
+ * querySelectorAll is typed as returning plain `Element`, which has no
+ * `dataset` - but these rows are the divs renderTreeNode() builds, each
+ * carrying a data-node-id. Naming the query once narrows it for all its
+ * call sites and keeps the selector in a single place.
+ *
+ * @returns {HTMLElement[]}
+ */
+function selectableRows() {
+  return /** @type {HTMLElement[]} */ (
+    Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'))
+  );
+}
 
 // The Actual Text field's placeholder as authored in index.html - restored
 // whenever the selection doesn't warrant swapping in pulled content text
@@ -706,7 +753,7 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
     // dragged descendant of another dragged tag just comes along inside
     // its (also-moving) ancestor - ordered by their current document
     // position regardless of click/drag order.
-    const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+    const rows = selectableRows();
     const orderedIds = rows.map((r) => r.dataset.nodeId).filter((id) => draggedIds.includes(id));
     const topLevelIds = orderedIds.filter((id) => !orderedIds.some((other) => other !== id && isDescendant(other, id)));
 
@@ -1198,7 +1245,7 @@ function extendSelectionTo(nodeId) {
     return;
   }
 
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const anchorIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectionAnchorId);
   const targetIndex = rows.findIndex((row) => row.dataset.nodeId === nodeId);
   if (anchorIndex === -1 || targetIndex === -1) {
@@ -2396,7 +2443,8 @@ function handleTableEditorCellClick(e, cellId) {
 // Restyles the already-built cells in place rather than a full rebuild -
 // selection alone never changes the table's shape or content.
 function refreshTableEditorSelectionUI() {
-  el.tablePreviewDialogContainer.querySelectorAll('.editor-cell').forEach((cellEl) => {
+  el.tablePreviewDialogContainer.querySelectorAll('.editor-cell')
+    .forEach((/** @type {HTMLElement} */ cellEl) => {
     const id = cellEl.dataset.cellId;
     cellEl.classList.toggle('cell-selected', state.tableEditorSelectedIds.has(id));
     cellEl.classList.toggle('cell-anchor', id === state.tableEditorAnchorId);
@@ -2428,8 +2476,8 @@ function updateTableEditorFields() {
     : ids[ids.length - 1];
   const repNode = state.nodesById.get(repId)?.node;
   el.tableEditorScope.value = allTH ? (repNode?.scope || '') : '';
-  el.tableEditorColSpan.value = repNode?.colSpan != null ? repNode.colSpan : '';
-  el.tableEditorRowSpan.value = repNode?.rowSpan != null ? repNode.rowSpan : '';
+  el.tableEditorColSpan.value = repNode?.colSpan != null ? String(repNode.colSpan) : '';
+  el.tableEditorRowSpan.value = repNode?.rowSpan != null ? String(repNode.rowSpan) : '';
 }
 
 // Re-reads the Table tag from the just-refreshed tree and rebuilds the
@@ -2933,7 +2981,8 @@ function scheduleLiveApply() {
 }
 
 el.detailsForm.addEventListener('input', (e) => {
-  if (e.target.tagName === 'SELECT') return;
+  const target = /** @type {HTMLElement} */ (e.target);
+  if (target.tagName === 'SELECT') return;
   scheduleLiveApply();
 });
 
@@ -3352,7 +3401,7 @@ el.fieldAlt.addEventListener('keydown', async (e) => {
 
   await applyDetailsChange();
 
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const currentIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectedNodeId);
   if (currentIndex === -1) return;
 
@@ -3718,7 +3767,7 @@ window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const currentIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectedNodeId);
   if (currentIndex === -1) return;
 
@@ -3856,7 +3905,7 @@ async function moveSelectedSibling(direction) {
 // outdent generalization for blocks, since "just before/after the parent"
 // isn't well-defined once more than one tag is moving.
 async function moveSelectedBlock(direction) {
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const orderedIds = rows.map((r) => r.dataset.nodeId).filter((id) => state.selectedNodeIds.has(id));
   const topLevelIds = orderedIds.filter((id) => !orderedIds.some((other) => other !== id && isDescendant(other, id)));
   if (topLevelIds.length === 0) return;
@@ -4045,7 +4094,7 @@ async function deleteSelection() {
   //
   // If the selection spans more than one parent, the reference parent is
   // whichever one holds the (visually) last deleted top-level tag.
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const orderedTopLevelIds = rows.map((row) => row.dataset.nodeId).filter((id) => topLevelIds.includes(id));
   const lastDeletedId = orderedTopLevelIds[orderedTopLevelIds.length - 1] ?? topLevelIds[0];
   const refParentId = state.nodesById.get(lastDeletedId)?.parentId ?? null;
@@ -4310,7 +4359,7 @@ async function groupSelectionIntoList() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
 
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
   const firstId = orderedIds[0] ?? ids[0];
 
@@ -4339,7 +4388,7 @@ async function groupSelectionIntoContainer(apiCall, label) {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
 
-  const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  const rows = selectableRows();
   const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
   const firstId = orderedIds[0] ?? ids[0];
 
@@ -4386,7 +4435,7 @@ async function joinSelection() {
     const idx = siblings.findIndex((child) => child.id === topLevelIds[0]);
     if (idx > 0) targetId = siblings[idx - 1].id;
   } else {
-    const rows = Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+    const rows = selectableRows();
     const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => topLevelIds.includes(id));
     targetId = orderedIds[0] ?? topLevelIds[0];
   }
@@ -5465,7 +5514,7 @@ function saveWalkSpeed(speed) {
 }
 
 function getWalkRows() {
-  return Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'));
+  return selectableRows();
 }
 
 function updateWalkButtonUI() {
@@ -5557,7 +5606,7 @@ window.addEventListener('keydown', (e) => {
 }, true);
 
 el.tagFilter.addEventListener('change', () => {
-  state.filter = el.tagFilter.value;
+  state.filter = /** @type {typeof state.filter} */ (el.tagFilter.value);
   renderTree();
   // Move focus off the <select> and back to the tree so arrow keys
   // immediately navigate rows again - keyboard tree nav bails out

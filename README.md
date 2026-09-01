@@ -76,6 +76,45 @@ interpreter, e.g. `PYTHON_BIN=$(pwd)/.venv/bin/python npm start`.
 npm start
 ```
 
+## Type checking
+
+The code is plain JavaScript with no build step - `npm start` runs the
+source directly. Types are supplied by JSDoc comments and the declarations
+in `types/`, and checked without compiling anything:
+
+```
+npm run typecheck
+```
+
+That reports mistakes TypeScript can see statically: a misspelled
+`window.api` method or `state` field, a call with the wrong number of
+arguments, a string where a number belongs, a property that doesn't exist on
+an element. It emits nothing and changes nothing.
+
+Two projects are checked, because the two halves of the app run in different
+places and need opposite settings:
+
+| Config | Covers | Environment |
+| --- | --- | --- |
+| `jsconfig.json` | `main.js`, `preload.js` | CommonJS, Node globals |
+| `renderer/jsconfig.json` | `renderer/renderer.js` | ES module, DOM globals |
+
+Shared shapes live in `types/domain.d.ts` (what crosses the JS/Python
+boundary) and `types/app-state.d.ts` (the renderer's `state` object). The
+type of `window.api` isn't written out by hand - it's derived from the
+object `preload.js` exposes, so the bridge and the renderer can't drift
+apart.
+
+Two caveats worth knowing:
+
+- The Python worker is a separate process handing over JSON. TypeScript
+  can't check it, so `types/domain.d.ts` is a written-down contract, not a
+  proof - **if you change a dict key in `tag_worker.py`, change it there
+  too.**
+- Settings are deliberately loose (`strict` and `noImplicitAny` off), so an
+  unannotated parameter is simply untyped rather than an error. Tighten them
+  as more of the code gains annotations.
+
 ## Packaging
 
 For distribution to users who don't have Node or Python installed, the app

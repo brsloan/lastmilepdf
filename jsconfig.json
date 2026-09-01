@@ -1,0 +1,33 @@
+{
+  // Type-checks the Electron main process and the preload bridge.
+  //
+  // These two files are CommonJS and run in Node, so they get Node's globals
+  // and "module": "commonjs" - which is what lets TypeScript pull real
+  // Electron types out of `require('electron')`. The renderer is checked
+  // separately by renderer/jsconfig.json, because it is an ES module running
+  // in the browser and needs the opposite settings.
+  //
+  // Nothing here emits anything: `npm run typecheck` only reports. The app
+  // still runs the .js files directly, exactly as before.
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+
+    // Deliberately loose for now. `strict` off and `noImplicitAny` off means
+    // an unannotated parameter is simply `any` rather than an error, so the
+    // checker reports genuine mistakes (typos, wrong argument counts, bad
+    // property names) instead of thousands of "needs a type" complaints.
+    // Tighten these as more of the code gains JSDoc annotations.
+    "strict": false,
+    "noImplicitAny": false
+  },
+  "include": ["main.js", "preload.js", "types/**/*.d.ts"]
+}
