@@ -43,9 +43,8 @@ tree and re-renders from the fresh one - there's no way for the UI to hold
 a stale id that silently points at the wrong node after an edit.
 
 PDF.js renders the page preview and is linked to the tag tree in both
-directions: selecting a tag highlights its marked content on the page
-(text only - see limitations), and clicking marked content on the page
-selects its owning tag.
+directions: selecting a tag highlights its marked content on the page,
+and clicking marked content on the page selects its owning tag.
 
 ## Setup
 
@@ -117,9 +116,9 @@ Things this scaffold deliberately does not solve yet:
   page its containing StructElem resolves to - so reparenting one onto a
   tag on a different page is refused rather than silently mislabeling
   which page it points at. Same-page reordering/reparenting is supported.
-- **`RoleMap` / `ParentTree` / `ClassMap` are ignored.** Custom
-  (non-standard) role names round-trip as opaque strings; nothing here
-  resolves them against a document's `RoleMap`.
+- **`RoleMap` / `ClassMap` are ignored.** Custom (non-standard) role names
+  round-trip as opaque strings; nothing here resolves them against a
+  document's `RoleMap`.
 - **Whole-file IPC transfer.** The opened PDF is read into memory and
   passed to the renderer as base64 in one shot. Fine for typical
   documents; a very large PDF would benefit from streaming instead.
