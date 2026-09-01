@@ -1391,6 +1391,29 @@ body.busy-cursor * {
   margin-top: 4px;
 }
 
+/* --- find/replace dialog ---
+   Reuses .shortcuts-header for the title bar and .settings-body/
+   .settings-actions/.settings-hint from the settings dialog above - it's
+   the same "form + status line + right-aligned action row" shape. */
+
+.find-replace-dialog {
+  width: min(380px, 92vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.find-replace-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.find-replace-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
 /* --- verify (accessibility check) dialog ---
    Reuses .shortcuts-header for the title bar. Body is its own single-column
    list of check groups, each holding one or more named checks; a failing/

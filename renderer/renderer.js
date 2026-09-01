@@ -75,6 +75,7 @@ const state = {
   docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
   hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.
+  findReplaceLastMatchId: null, // id most recently found/replaced by the Find/Replace dialog - see doFindNext()
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -163,6 +164,14 @@ const el = {
   verifyDialog: document.getElementById('verify-dialog'),
   btnCloseVerify: document.getElementById('btn-close-verify'),
   verifyBody: document.getElementById('verify-body'),
+  findReplaceDialog: document.getElementById('find-replace-dialog'),
+  btnCloseFindReplace: document.getElementById('btn-close-find-replace'),
+  findReplaceFind: document.getElementById('find-replace-find'),
+  findReplaceReplace: document.getElementById('find-replace-replace'),
+  findReplaceStatus: document.getElementById('find-replace-status'),
+  btnFindNext: document.getElementById('btn-find-next'),
+  btnFindReplaceOne: document.getElementById('btn-find-replace-one'),
+  btnFindReplaceAll: document.getElementById('btn-find-replace-all'),
   tabProperties: document.getElementById('tab-properties'),
   tabBookmarks: document.getElementById('tab-bookmarks'),
   panelProperties: document.getElementById('panel-properties'),
@@ -3224,6 +3233,150 @@ el.btnClearApiKey.addEventListener('click', async () => {
     setStatus('Anthropic API key removed.');
   } catch (err) {
     reportError('Could not remove API key', err);
+  }
+});
+
+// Find/Replace dialog: relabels tags by role. "Find" steps through every
+// /<role> element in document order (wrapping around); "Replace" swaps the
+// currently-found tag's role and advances to the next match; "Replace All"
+// relabels every match in one batch call. Matches are recomputed fresh on
+// every click rather than cached, since a replace changes which tags match.
+function allElementIdsInOrder() {
+  const ids = [];
+  if (!state.tree) return ids;
+  (function visit(node) {
+    if (node.type === 'element') ids.push(node.id);
+    for (const child of node.children || []) visit(child);
+  })(state.tree);
+  return ids;
+}
+
+function findReplaceMatches(role) {
+  const matches = [];
+  if (!state.tree || !role) return matches;
+  (function visit(node) {
+    if (node.type === 'element' && node.role === role) matches.push(node.id);
+    for (const child of node.children || []) visit(child);
+  })(state.tree);
+  return matches;
+}
+
+// Advances from wherever findReplaceLastMatchId last landed (tracked by
+// document position, not by list index, so it still lands in the right
+// place after a Replace changes which tags match) to the next /<role> tag,
+// wrapping back to the first match past the end.
+function doFindNext() {
+  const role = el.findReplaceFind.value.trim();
+  if (!role) {
+    el.findReplaceStatus.textContent = 'Enter a tag type to find.';
+    return null;
+  }
+  if (!state.tree) {
+    el.findReplaceStatus.textContent = 'No document loaded.';
+    return null;
+  }
+  const matches = findReplaceMatches(role);
+  if (matches.length === 0) {
+    state.findReplaceLastMatchId = null;
+    el.findReplaceStatus.textContent = `No /${role} tags found.`;
+    return null;
+  }
+  let nextIndex = 0;
+  if (state.findReplaceLastMatchId) {
+    const order = allElementIdsInOrder();
+    const anchorPos = order.indexOf(state.findReplaceLastMatchId);
+    if (anchorPos !== -1) {
+      const idx = matches.findIndex((id) => order.indexOf(id) > anchorPos);
+      if (idx !== -1) nextIndex = idx;
+    }
+  }
+  const nextId = matches[nextIndex];
+  state.findReplaceLastMatchId = nextId;
+  selectNode(nextId);
+  el.findReplaceStatus.textContent = `Match ${nextIndex + 1} of ${matches.length}.`;
+  return nextId;
+}
+
+el.btnFindNext.addEventListener('click', () => doFindNext());
+
+el.btnFindReplaceOne.addEventListener('click', async () => {
+  const findRole = el.findReplaceFind.value.trim();
+  const replaceRole = el.findReplaceReplace.value.trim();
+  if (!findRole || !replaceRole) {
+    el.findReplaceStatus.textContent = 'Enter both a tag type to find and one to replace it with.';
+    return;
+  }
+  // No valid current match to act on yet (dialog just opened, or the tree
+  // changed under us) - just locate one instead of replacing blindly.
+  const entry = state.findReplaceLastMatchId ? state.nodesById.get(state.findReplaceLastMatchId) : null;
+  if (!entry || entry.node.role !== findRole) {
+    doFindNext();
+    return;
+  }
+  const targetId = state.findReplaceLastMatchId;
+  try {
+    const result = await window.api.updateNode(state.docId, targetId, { role: replaceRole });
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    setStatus(`Replaced /${findRole} with /${replaceRole}.`);
+    doFindNext();
+  } catch (err) {
+    reportError('Could not replace tag', err);
+  }
+});
+
+el.btnFindReplaceAll.addEventListener('click', async () => {
+  const findRole = el.findReplaceFind.value.trim();
+  const replaceRole = el.findReplaceReplace.value.trim();
+  if (!findRole || !replaceRole) {
+    el.findReplaceStatus.textContent = 'Enter both a tag type to find and one to replace it with.';
+    return;
+  }
+  if (!state.tree) {
+    el.findReplaceStatus.textContent = 'No document loaded.';
+    return;
+  }
+  const matches = findReplaceMatches(findRole);
+  if (matches.length === 0) {
+    el.findReplaceStatus.textContent = `No /${findRole} tags found.`;
+    return;
+  }
+  try {
+    const result = await window.api.updateNodes(state.docId, matches, { role: replaceRole });
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    state.findReplaceLastMatchId = null;
+    const count = matches.length;
+    el.findReplaceStatus.textContent = `Replaced ${count} tag${count === 1 ? '' : 's'}.`;
+    setStatus(`Replaced ${count} /${findRole} tag${count === 1 ? '' : 's'} with /${replaceRole}.`);
+  } catch (err) {
+    reportError('Could not replace tags', err);
+  }
+});
+
+window.api.onMenuFindReplace(() => {
+  state.findReplaceLastMatchId = null;
+  el.findReplaceStatus.textContent = ' ';
+  el.findReplaceDialog.showModal();
+  el.findReplaceFind.focus();
+});
+el.btnCloseFindReplace.addEventListener('click', () => el.findReplaceDialog.close());
+el.findReplaceDialog.addEventListener('click', (e) => {
+  if (e.target === el.findReplaceDialog) el.findReplaceDialog.close();
+});
+
+// Enter in either field acts like clicking the button below it, so the
+// dialog is usable without reaching for the mouse.
+el.findReplaceFind.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    doFindNext();
+  }
+});
+el.findReplaceReplace.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    el.btnFindReplaceOne.click();
   }
 });
 

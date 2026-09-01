@@ -344,6 +344,12 @@ function buildAppMenu() {
       ],
     },
     {
+      label: 'Tools',
+      submenu: [
+        { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => win?.webContents.send('menu:find-replace') },
+      ],
+    },
+    {
       label: 'Help',
       submenu: [
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => win?.webContents.send('menu:shortcuts') },

@@ -64,13 +64,14 @@ contextBridge.exposeInMainWorld('api', {
   generateBookmarks: (docId, headings) =>
     ipcRenderer.invoke('outline:generate-bookmarks', { docId, headings }),
 
-  // Fired when the user picks Open/Undo/Redo/Save/Save As/Close/Shortcuts/Help Doc/About from the app menu - see main.js.
+  // Fired when the user picks Open/Undo/Redo/Save/Save As/Close/Find-Replace/Shortcuts/Help Doc/About from the app menu - see main.js.
   onMenuOpen: (callback) => ipcRenderer.on('menu:open', callback),
   onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),
   onMenuRedo: (callback) => ipcRenderer.on('menu:redo', callback),
   onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
   onMenuSaveAs: (callback) => ipcRenderer.on('menu:save-as', callback),
   onMenuClose: (callback) => ipcRenderer.on('menu:close', callback),
+  onMenuFindReplace: (callback) => ipcRenderer.on('menu:find-replace', callback),
   onMenuShortcuts: (callback) => ipcRenderer.on('menu:shortcuts', callback),
   onMenuHelpDoc: (callback) => ipcRenderer.on('menu:help-doc', callback),
   onMenuAbout: (callback) => ipcRenderer.on('menu:about', callback),
