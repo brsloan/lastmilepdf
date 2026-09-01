@@ -46,8 +46,14 @@ Scope / known limitations (read this before extending):
     that merely opening a file never modifies it.
   - Every command here mutates the struct tree only - except
     figure_from_rect(), which also *reads* (never writes) a page's content
-    stream, to recover where image XObjects are actually placed. See its
-    section for why and how.
+    stream, to recover where image XObjects are actually placed (see its
+    section for why and how), and delete_nodes(), which *writes* a narrowly
+    scoped edit: the opening BDC operator of each MCID it's unlinking from
+    the struct tree gets rewritten to `/Artifact BMC` (see _artifact_leaves/
+    _artifact_mcids_on_page), so unlinked content reads as a real PDF
+    artifact instead of an orphaned tag when a consumer checks the content
+    stream directly, as Acrobat's accessibility Full Check does. No other
+    operator is added, removed, or reordered.
   - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
     bytes) before each mutation, rather than recording inverse edits. Simple
     and correct by construction, at the cost of an O(document size) copy per
@@ -2141,16 +2147,214 @@ def scope_tables(doc_id):
     return {"tree": _rebuild_after_mutation(doc_id), "tablesScoped": scoped, **_undo_state(doc)}
 
 
+def _content_leaves_under(doc, node_id):
+    """`node_id` itself if it's already a content/object-ref leaf, otherwise
+    every such leaf anywhere under it (via _collect_leaf_ids). What
+    delete_nodes() needs artifacted isn't just the node the caller selected -
+    deleting a struct element takes its whole subtree with it, and every
+    piece of marked content in that subtree is about to be orphaned from the
+    struct tree exactly the same way a directly-selected leaf is."""
+    if doc["node_kind"].get(node_id) != "element":
+        return [node_id]
+    return _collect_leaf_ids(doc, node_id)
+
+
+def _artifact_leaves(doc, leaf_ids):
+    """Turns each of `leaf_ids` - content/object-ref leaves about to be
+    unlinked from the struct tree by delete_nodes() - into a real PDF
+    artifact, not just an orphaned struct-tree reference.
+
+    Unlinking a leaf from its parent's /K was, until this function existed,
+    treated as sufficient: the comment used to justify it read "assistive
+    tech skips unreferenced content exactly as it would a real /Artifact
+    tag." That's not true of Acrobat's accessibility Full Check, and isn't
+    guaranteed of any consumer: this editor never rewrites content-stream
+    marked-content operators (see the module docstring), so a bare-MCID or
+    /MCR leaf's `/Figure BDC <</MCID 32>>` (or whatever role it had) is
+    still sitting in the page's content stream afterward, still naming that
+    role, still carrying that MCID. A checker that reads the content stream
+    directly - which Acrobat's does - finds a live tagged region with no
+    structure element claiming it and fails it (observed as "Other elements
+    ... alternate text -- failed", invisible in the Tags panel but visible
+    in the Content panel's raw marked-content view). PDF/UA only recognizes
+    content as an artifact when the content stream itself says so, via
+    `/Artifact BMC`/`BDC` - so that's what a targeted leaf's opening BDC
+    operator is rewritten to here.
+
+    An /OBJR leaf (an image XObject or annotation referenced directly, never
+    wrapped in marked content - see the module docstring) has no BDC/EMC to
+    rewrite, but may carry its own /StructParent key pointing into
+    /ParentTree; that key is left dangling by an ordinary unlink the same
+    way an MCID is, so it's cleared here too.
+
+    Every mcid target is grouped by page first, so each page's content
+    stream is parsed and rewritten exactly once no matter how many leaves on
+    it are being artifacted in this call."""
+    mcids_by_page = {}  # page_index -> set of mcid
+    objr_targets = []
+
+    for leaf_id in leaf_ids:
+        kind = doc["node_kind"].get(leaf_id)
+        if kind == "content-int":
+            page = doc["node_pages"].get(leaf_id)
+            if page is not None:
+                mcids_by_page.setdefault(page, set()).add(int(doc["elements"][leaf_id]))
+        elif kind == "content-dict":
+            obj = doc["elements"][leaf_id]
+            if str(obj.get("/Type")) == "/OBJR":
+                target = obj.get("/Obj")
+                if isinstance(target, (pikepdf.Dictionary, pikepdf.Stream)):
+                    objr_targets.append(target)
+            elif "/MCID" in obj:
+                page = doc["node_pages"].get(leaf_id)
+                if page is not None:
+                    try:
+                        mcids_by_page.setdefault(page, set()).add(int(obj["/MCID"]))
+                    except (TypeError, ValueError):
+                        pass
+
+    for page_index, mcids in mcids_by_page.items():
+        _artifact_mcids_on_page(doc, page_index, mcids)
+
+    for target in objr_targets:
+        if "/StructParent" in target:
+            del target["/StructParent"]
+
+
+def _artifact_mcids_on_page(doc, page_index, mcids):
+    """Rewrites every top-level `<role> BDC <</MCID n>>` on `page_index`
+    whose `n` is in `mcids` to a plain `/Artifact BMC` - same tag name every
+    real artifact in a PDF/UA-conforming file uses, and the same one this
+    editor's other commands leave alone (they never touch content streams -
+    this is the one deliberate, narrowly-targeted exception, only ever
+    turning a specific already-selected-for-deletion MCID into an artifact,
+    never adding, removing, or reordering any actual drawing operator).
+
+    The matching EMC needs no change: it carries no operands, so the same
+    token closes a BMC block exactly as it closed the BDC block it used to.
+    A page whose content stream can't be parsed is left as-is - the
+    struct-tree unlink still happens, same as if this function didn't
+    exist, so this can only add a fix on top of the old behavior, never
+    remove one."""
+    pdf = doc["pdf"]
+    if page_index < 0 or page_index >= len(pdf.pages):
+        return
+    page = pdf.pages[page_index]
+    page.contents_coalesce()
+    try:
+        instructions = pikepdf.parse_content_stream(page)
+    except Exception:
+        return
+
+    changed = False
+    rewritten = []
+    for instr in instructions:
+        mcid = None
+        if str(instr.operator) == "BDC" and len(instr.operands) == 2:
+            props = instr.operands[1]
+            if isinstance(props, pikepdf.Dictionary) and "/MCID" in props:
+                try:
+                    mcid = int(props["/MCID"])
+                except (TypeError, ValueError):
+                    mcid = None
+        if mcid is not None and mcid in mcids:
+            rewritten.append(pikepdf.ContentStreamInstruction(
+                [pikepdf.Name("/Artifact")], pikepdf.Operator("BMC")
+            ))
+            changed = True
+        else:
+            rewritten.append(instr)
+
+    if changed:
+        page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
+
+
+def _find_orphaned_mcids(page, claimed_mcids):
+    """Every MCID `page`'s own content stream marks via a non-/Artifact BDC
+    operator that isn't a key in `claimed_mcids` - i.e. content the stream
+    itself says is tagged (it names a real role and carries an MCID) but
+    that the struct tree, as it stands right now, doesn't claim for this
+    page. Read-only: only reports what repair_orphaned_marked_content()
+    would need to fix, via a later call to _artifact_mcids_on_page."""
+    try:
+        instructions = pikepdf.parse_content_stream(page)
+    except Exception:
+        return set()
+
+    orphans = set()
+    for instr in instructions:
+        if str(instr.operator) != "BDC" or len(instr.operands) != 2:
+            continue
+        tag, props = instr.operands
+        if str(tag) == "/Artifact":
+            continue
+        if not isinstance(props, pikepdf.Dictionary) or "/MCID" not in props:
+            continue
+        try:
+            mcid = int(props["/MCID"])
+        except (TypeError, ValueError):
+            continue
+        if mcid not in claimed_mcids:
+            orphans.add(mcid)
+    return orphans
+
+
+def repair_orphaned_marked_content(doc_id):
+    """One-off repair pass for PDFs already damaged by the bug
+    _artifact_leaves/_artifact_mcids_on_page now prevents: older versions of
+    delete_nodes() (and the Smartifact tool, which is backed by it) unlinked
+    a leaf from the struct tree without rewriting its content-stream BDC
+    operator, leaving marked content that still names a real struct role
+    (commonly /Figure, for a "smartified" full-page scan) with an MCID no
+    structure element claims any more. That reads fine in this editor and
+    in the Tags panel - nothing there ever walked the raw content stream -
+    but Acrobat's accessibility Full Check does read it directly, finds a
+    live tagged region with no owner, and fails it (the "Other elements ...
+    alternate text -- failed" report, visible in Acrobat's Content panel,
+    invisible in its Tags panel - see the module docstring's delete_nodes()
+    entry for the full mechanism).
+
+    Compares what each page's content stream actually marks against what
+    the struct tree currently claims for that page (_content_owners, the
+    same reverse index _rebuild_parent_tree uses) - anything marked but
+    unclaimed is exactly this bug's leftovers, and gets converted to a real
+    /Artifact the same way a fresh delete already does. A document with no
+    struct tree at all has nothing to compare against, so it's rejected
+    up front rather than silently doing nothing."""
+    doc = documents[doc_id]
+    if doc["elements"].get("root") is None:
+        raise ValueError("Document has no structure tree to repair")
+
+    per_page, _ = _content_owners(doc)
+    orphans_by_page = {}
+    for page_index, page in enumerate(doc["pdf"].pages):
+        claimed = per_page.get(page_index, {})
+        orphans = _find_orphaned_mcids(page, claimed)
+        if orphans:
+            orphans_by_page[page_index] = orphans
+
+    if not orphans_by_page:
+        return {"tree": _rebuild_registry(doc_id), "repairedCount": 0, **_undo_state(doc)}
+
+    _push_undo_snapshot(doc)
+    repaired_count = 0
+    for page_index, mcids in orphans_by_page.items():
+        _artifact_mcids_on_page(doc, page_index, mcids)
+        repaired_count += len(mcids)
+
+    return {"tree": _rebuild_after_mutation(doc_id), "repairedCount": repaired_count, **_undo_state(doc)}
+
+
 def delete_nodes(doc_id, node_ids):
     """Removes each of `node_ids` from its parent's /K, taking its entire
     subtree with it. Backs the tag tree's Delete key for both cases it
     handles: a struct element ("tag") is fully removed along with its
     descendants, and a content/object-ref leaf is unlinked from the struct
-    tree the same way - since this editor never touches content-stream
-    marked-content operators (see the module docstring), removing
-    structure's only reference to a piece of content is what "artifact" it
-    means here: assistive tech skips unreferenced content exactly as it
-    would a real /Artifact tag."""
+    tree the same way - and, since that unlink alone isn't enough to read as
+    an artifact to a consumer that checks the content stream (see
+    _artifact_leaves), every leaf involved - the directly-selected one, or
+    any pulled in by deleting an ancestor - has its underlying content
+    turned into a real /Artifact first."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No nodes to delete")
@@ -2166,6 +2370,12 @@ def delete_nodes(doc_id, node_ids):
     top_level = _top_level_selection(doc, node_ids)
 
     _push_undo_snapshot(doc)
+
+    leaf_ids = []
+    for node_id in top_level:
+        leaf_ids.extend(_content_leaves_under(doc, node_id))
+    _artifact_leaves(doc, leaf_ids)
+
     for node_id in top_level:
         node_obj = doc["elements"][node_id]
         parent_id = doc["parent_map"].get(node_id)
@@ -2925,6 +3135,8 @@ def main():
                 result = scope_tables(request["docId"])
             elif cmd == "delete_nodes":
                 result = delete_nodes(request["docId"], request["nodeIds"])
+            elif cmd == "repair_orphaned_artifacts":
+                result = repair_orphaned_marked_content(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "figure_from_rect":

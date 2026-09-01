@@ -4000,8 +4000,9 @@ window.addEventListener('keydown', (e) => {
 
 // Delete removes the current selection from the struct tree. A tag
 // (element node) is deleted along with its whole subtree; a content/
-// object-ref leaf is just unlinked from its tag, which is what "artifact"
-// it amounts to here - see delete_nodes() in tag_worker.py.
+// object-ref leaf is unlinked from its tag and its underlying content is
+// turned into a real PDF artifact - see delete_nodes()/_artifact_leaves()
+// in tag_worker.py.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete') return;
   if (state.activePanel === 'bookmarks') return; // handled by the Bookmarks-panel Delete listener instead
