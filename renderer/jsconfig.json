@@ -27,5 +27,5 @@
     "strict": false,
     "noImplicitAny": false
   },
-  "include": ["renderer.js", "../types/**/*.d.ts"]
+  "include": ["*.js", "../types/**/*.d.ts"]
 }

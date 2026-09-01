@@ -9,8 +9,19 @@ no framework, no bundler, no TypeScript.
 ```
 renderer/ (Chromium, no Node access)
   index.html    - layout: toolbar, PDF canvas pane, tag tree pane, details form
-  renderer.js   - PDF.js viewer, tag tree rendering + drag/drop, wiring to window.api
+  renderer.js   - entry point: event wiring, menu handlers
   styles.css
+
+  state.js dom.js util.js pdfjs.js        - leaves: shared state, elements, helpers
+  shell.js tree-index.js page-content.js  - title/status, tree lookups, page reads
+  viewer.js       - PDF.js page rendering + the tag highlight overlay
+  tree-view.js    - the tag tree: rows, filtering, drag/drop, selection
+  details.js      - the tag properties pane
+  editing.js      - structural edits: move, delete, role changes, grouping, undo
+  doc-io.js       - open / save / close
+  bookmarks.js verify.js table-preview.js table-editor.js
+  actual-text.js find-replace.js walk.js figure-draw.js ai-batch.js
+                  - one feature each; see "Renderer module layout" below
 
 preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,updateNodes,
                   shiftHeadingLevels,reorderNode,reorderMany,flattenTags,undo,redo,
@@ -76,6 +87,34 @@ interpreter, e.g. `PYTHON_BIN=$(pwd)/.venv/bin/python npm start`.
 npm start
 ```
 
+## Renderer module layout
+
+The renderer is split into small ES modules, loaded natively by the browser -
+still no bundler and no build step. `renderer.js` is the entry point: it holds
+the event wiring (which button does what, which menu message goes where) and
+imports everything else.
+
+Modules are layered, and the layering is what keeps the graph from tangling:
+
+| Layer | Modules | Depends on |
+| --- | --- | --- |
+| Leaves | `state`, `dom`, `util`, `pdfjs` | nothing |
+| Low-level | `shell`, `tree-index`, `page-content` | leaves |
+| Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `ai-batch` | the above |
+| Entry | `renderer.js` | everything |
+
+Two things are worth knowing before moving code between them:
+
+- **`state.js` and `dom.js` must stay leaves.** Everything imports them, so
+  the moment one of them imports a feature module, most of the renderer
+  becomes one cycle. `npm run typecheck` fails if that happens.
+- **There is exactly one deliberate import cycle**, `tree-view` <->
+  `details`: selecting a row refreshes the properties pane, and editing in
+  that pane rewrites the tree. It is safe only because every function
+  crossing it is a hoisted `function` declaration. The reasoning is written
+  out at the top of `renderer/tree-view.js`, and `npm run typecheck` reports
+  any *other* cycle that appears.
+
 ## Type checking
 
 The code is plain JavaScript with no build step - `npm start` runs the
@@ -89,7 +128,8 @@ npm run typecheck
 That reports mistakes TypeScript can see statically: a misspelled
 `window.api` method or `state` field, a call with the wrong number of
 arguments, a string where a number belongs, a property that doesn't exist on
-an element. It emits nothing and changes nothing.
+an element, a name used in a module that doesn't import it. It also reports
+unexpected import cycles (see above). It emits nothing and changes nothing.
 
 Two projects are checked, because the two halves of the app run in different
 places and need opposite settings:
@@ -97,7 +137,7 @@ places and need opposite settings:
 | Config | Covers | Environment |
 | --- | --- | --- |
 | `jsconfig.json` | `main.js`, `preload.js` | CommonJS, Node globals |
-| `renderer/jsconfig.json` | `renderer/renderer.js` | ES module, DOM globals |
+| `renderer/jsconfig.json` | every module in `renderer/` | ES modules, DOM globals |
 
 Shared shapes live in `types/domain.d.ts` (what crosses the JS/Python
 boundary) and `types/app-state.d.ts` (the renderer's `state` object). The
