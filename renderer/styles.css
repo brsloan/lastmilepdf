@@ -658,6 +658,16 @@ body.busy * {
   overflow: auto;
 }
 
+/* Same [hidden]-vs-flex gotcha as .field-row/.field/.actual-text-review-bar
+   above: `.details-form`'s own `display: flex` otherwise outranks the
+   default UA `[hidden] { display: none }` rule, which left the whole form -
+   still showing the previously selected tag's stale field values - visible
+   on top of the "Select a tag..." message whenever a content/object-ref
+   leaf (not editable, see refreshDetailsForSelection()) was selected. */
+.details-form[hidden] {
+  display: none;
+}
+
 .field {
   display: flex;
   flex-direction: column;
