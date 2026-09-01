@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('api', {
 
   undo: (docId) => ipcRenderer.invoke('tags:undo', { docId }),
   redo: (docId) => ipcRenderer.invoke('tags:redo', { docId }),
+  // Tells main.js whether to grey out the Edit menu's Undo/Redo items -
+  // there's no toolbar button reflecting this, so the menu is it.
+  setUndoState: (undoState) => ipcRenderer.send('menu:undo-state-changed', undoState),
 
   addBookmark: (docId, page, title) =>
     ipcRenderer.invoke('outline:add-bookmark', { docId, page, title }),

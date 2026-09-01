@@ -54,6 +54,8 @@ const state = {
   renderTask: null,      // in-flight pdf.js RenderTask, so a new page render can cancel it
   renderToken: 0,        // invalidates a render whose getPage() await was overtaken - see renderCurrentPage()
   dirty: false,          // tag edits made since the last save - see markDirty()
+  canUndo: false,        // mirrors the Edit menu's Undo/Redo enabled state - see applyUndoState()
+  canRedo: false,
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
@@ -90,8 +92,6 @@ const PAGE_SCALE = 1.4;
 
 const el = {
   btnOpen: document.getElementById('btn-open'),
-  btnUndo: document.getElementById('btn-undo'),
-  btnRedo: document.getElementById('btn-redo'),
   btnFlatten: document.getElementById('btn-flatten'),
   btnScopeTables: document.getElementById('btn-scope-tables'),
   btnSmartifact: document.getElementById('btn-smartifact'),
@@ -221,8 +221,9 @@ function markDirty(dirty) {
 // and undo/redo, which genuinely do move the document away from the saved
 // file) set the flag themselves.
 function applyUndoState(result) {
-  el.btnUndo.disabled = !result.canUndo;
-  el.btnRedo.disabled = !result.canRedo;
+  state.canUndo = !!result.canUndo;
+  state.canRedo = !!result.canRedo;
+  window.api.setUndoState({ canUndo: state.canUndo, canRedo: state.canRedo });
   markDirty(true);
 }
 
@@ -3268,7 +3269,7 @@ el.fieldAlt.addEventListener('keydown', async (e) => {
 // than guess, we just clear the selection and let the user re-pick.
 
 async function performUndo() {
-  if (!state.docId || el.btnUndo.disabled) return;
+  if (!state.docId || !state.canUndo) return;
   try {
     const result = await window.api.undo(state.docId);
     applyFreshTree(result.tree);
@@ -3284,7 +3285,7 @@ async function performUndo() {
 }
 
 async function performRedo() {
-  if (!state.docId || el.btnRedo.disabled) return;
+  if (!state.docId || !state.canRedo) return;
   try {
     const result = await window.api.redo(state.docId);
     applyFreshTree(result.tree);
@@ -3299,8 +3300,6 @@ async function performRedo() {
   }
 }
 
-el.btnUndo.addEventListener('click', () => performUndo());
-el.btnRedo.addEventListener('click', () => performRedo());
 window.api.onMenuUndo(() => performUndo());
 window.api.onMenuRedo(() => performRedo());
 
@@ -5115,8 +5114,9 @@ async function performClose() {
   el.btnVerify.disabled = true;
   el.btnAddBookmark.disabled = true;
   el.btnGenerateBookmarks.disabled = true;
-  el.btnUndo.disabled = true;
-  el.btnRedo.disabled = true;
+  state.canUndo = false;
+  state.canRedo = false;
+  window.api.setUndoState({ canUndo: false, canRedo: false });
   el.noStructBanner.hidden = true;
 
   el.canvas.getContext('2d').clearRect(0, 0, el.canvas.width, el.canvas.height);

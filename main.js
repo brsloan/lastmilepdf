@@ -298,13 +298,16 @@ function createWindow() {
 // live in the renderer's own state, so the Edit menu can't run them
 // directly - it just forwards the command as an IPC event and lets the
 // renderer's existing performUndo()/performRedo() (see renderer.js) do the
-// actual work, same as the toolbar buttons and Ctrl+Z/Ctrl+Y do. The
-// accelerators below use registerAccelerator: false - they're shown in the
-// menu for reference only and don't register as OS-level shortcuts, since
-// the renderer already binds Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z itself and steps
-// aside when a text field is focused so native field-undo still works
-// there - a real menu accelerator would fire regardless of focus and
-// bypass that.
+// actual work, same as Ctrl+Z/Ctrl+Y do (there is no toolbar button for
+// either - the menu is the only visible entry point). The accelerators
+// below use registerAccelerator: false - they're shown in the menu for
+// reference only and don't register as OS-level shortcuts, since the
+// renderer already binds Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z itself and steps aside
+// when a text field is focused so native field-undo still works there - a
+// real menu accelerator would fire regardless of focus and bypass that.
+// The two items carry ids so the 'menu:undo-state-changed' handler below
+// can grey them out when there's nothing to undo/redo, since without a
+// toolbar button that's the only place this state is now shown.
 // Open/Save/Save As/Close are driven the same way as Undo/Redo above: forwarded
 // as IPC events to the renderer, which owns the docId and does the actual
 // work (performOpen()/performSave()/performSaveAs()/performClose() in
@@ -353,8 +356,8 @@ function buildAppMenu() {
     {
       label: 'Edit',
       submenu: [
-        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, click: (_item, win) => win?.webContents.send('menu:undo') },
-        { label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, click: (_item, win) => win?.webContents.send('menu:redo') },
+        { id: 'menu-undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, enabled: false, click: (_item, win) => win?.webContents.send('menu:undo') },
+        { id: 'menu-redo', label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, enabled: false, click: (_item, win) => win?.webContents.send('menu:redo') },
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },
@@ -456,6 +459,17 @@ ipcMain.handle('dialog:open-pdf', async () => {
 
 ipcMain.on('doc:dirty-changed', (_event, dirty) => {
   hasUnsavedChanges = !!dirty;
+});
+
+// Keeps the Edit menu's Undo/Redo items in sync with the renderer's undo
+// stack - see the comment above buildAppMenu() for why there's no toolbar
+// button doing this instead.
+ipcMain.on('menu:undo-state-changed', (_event, { canUndo, canRedo }) => {
+  const menu = Menu.getApplicationMenu();
+  const undoItem = menu?.getMenuItemById('menu-undo');
+  const redoItem = menu?.getMenuItemById('menu-redo');
+  if (undoItem) undoItem.enabled = !!canUndo;
+  if (redoItem) redoItem.enabled = !!canRedo;
 });
 
 ipcMain.handle('dialog:confirm-discard', async (event, { detail }) => {
