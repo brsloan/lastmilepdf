@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('api', {
   onMenuSaveAs: (callback) => ipcRenderer.on('menu:save-as', callback),
   onMenuClose: (callback) => ipcRenderer.on('menu:close', callback),
   onMenuFindReplace: (callback) => ipcRenderer.on('menu:find-replace', callback),
+  onMenuShowAtChanges: (callback) => ipcRenderer.on('menu:show-at-changes', callback),
   onMenuShortcuts: (callback) => ipcRenderer.on('menu:shortcuts', callback),
   onMenuHelpDoc: (callback) => ipcRenderer.on('menu:help-doc', callback),
   onMenuAbout: (callback) => ipcRenderer.on('menu:about', callback),

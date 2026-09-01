@@ -76,6 +76,9 @@ const state = {
   hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.
   findReplaceLastMatchId: null, // id most recently found/replaced by the Find/Replace dialog - see doFindNext()
+  showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
+  atChangeFlags: new Map(), // nodeId -> { original, suggested } - tags whose Actual Text no longer matches their pulled content text, found by the Show AT Changes sweep (computeAtChangeFlags()). Same shape as aiProposals so it shares renderActualTextDiff()/pruneStaleAiProposals(), but recomputed from the file itself rather than from in-session state, so it still works after a save/reopen.
+  atChangeSweepToken: 0, // invalidates an in-flight computeAtChangeFlags() sweep superseded by a newer one (toggle off/on again, or a fresh document)
 };
 
 // Must match the scale used for page.getViewport() in renderCurrentPage() -
@@ -146,6 +149,7 @@ const el = {
   aiBatchProgressDialog: document.getElementById('ai-batch-progress-dialog'),
   actualTextHighlight: document.getElementById('field-actual-text-highlight'),
   actualTextReviewBar: document.getElementById('actual-text-review-bar'),
+  actualTextReviewLabel: document.getElementById('actual-text-review-label'),
   btnRevertAiFix: document.getElementById('btn-revert-ai-fix'),
   settingsDialog: document.getElementById('settings-dialog'),
   settingsForm: document.getElementById('settings-form'),
@@ -453,6 +457,11 @@ function appendElementChipAndFlag(row, node) {
     aiFlag.className = 'ai-fix-flag';
     aiFlag.textContent = 'AI fix';
     row.appendChild(aiFlag);
+  } else if (state.showAtChanges && state.atChangeFlags.has(node.id)) {
+    const atFlag = document.createElement('span');
+    atFlag.className = 'ai-fix-flag';
+    atFlag.textContent = 'AT changed';
+    row.appendChild(atFlag);
   }
 }
 
@@ -735,12 +744,20 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
 // and Undo, and a manual edit (see the 'input' listener below, which clears
 // its own entry immediately rather than waiting for a rebuild). Either way,
 // once node.actualText has moved on from `suggested`, the diff no longer
-// describes anything real, so drop it.
+// describes anything real, so drop it. state.atChangeFlags (see
+// computeAtChangeFlags()) shares the same { original, suggested } shape and
+// the same staleness risk, so it's pruned the same way here.
 function pruneStaleAiProposals() {
   for (const [id, proposal] of state.aiProposals) {
     const node = state.nodesById.get(id)?.node;
     if (!node || (node.actualText || '') !== proposal.suggested) {
       state.aiProposals.delete(id);
+    }
+  }
+  for (const [id, proposal] of state.atChangeFlags) {
+    const node = state.nodesById.get(id)?.node;
+    if (!node || (node.actualText || '') !== proposal.suggested) {
+      state.atChangeFlags.delete(id);
     }
   }
 }
@@ -1903,16 +1920,19 @@ function renderActualTextDiff(originalText, suggestedText) {
   }
 }
 
-// Shows/hides the review UI for `nodeId`'s applied AI fix, if any. Called
-// from refreshDetailsForSelection()/closeDetails() on every selection
-// change, and directly with `null` to force-hide it. The field's value is
-// already correct by the time this runs - refreshDetailsForSelection() sets
-// it from node.actualText, which already IS the AI's fix - so this only
-// toggles the highlight overlay on top of it, diffing the proposal's
-// recorded `original` against the field's current (== node.actualText)
-// value.
+// Shows/hides the review UI for `nodeId`'s applied AI fix (or, in Tools >
+// Show AT Changes mode, its flagged Actual-Text-vs-content difference), if
+// any. Called from refreshDetailsForSelection()/closeDetails() on every
+// selection change, and directly with `null` to force-hide it. The field's
+// value is already correct by the time this runs - refreshDetailsForSelection()
+// sets it from node.actualText - so this only toggles the highlight overlay
+// on top of it, diffing the proposal's recorded `original` against the
+// field's current (== node.actualText) value. aiProposals wins when a tag
+// has both, since it reflects this session's own fix more precisely than a
+// re-derived sweep result.
 function updateActualTextReviewUI(nodeId) {
-  const proposal = nodeId ? state.aiProposals.get(nodeId) : null;
+  const aiProposal = nodeId ? state.aiProposals.get(nodeId) : null;
+  const proposal = aiProposal || (nodeId && state.showAtChanges ? state.atChangeFlags.get(nodeId) : null);
   if (!proposal) {
     el.fieldActualText.classList.remove('actual-text-reviewing');
     el.actualTextHighlight.classList.remove('visible');
@@ -1924,6 +1944,9 @@ function updateActualTextReviewUI(nodeId) {
   renderActualTextDiff(proposal.original, el.fieldActualText.value);
   el.actualTextHighlight.classList.add('visible');
   el.actualTextReviewBar.hidden = false;
+  el.actualTextReviewLabel.textContent = aiProposal
+    ? 'AI fix applied – changes highlighted'
+    : 'Actual Text differs from pulled content – changes highlighted';
   el.actualTextHighlight.scrollTop = el.fieldActualText.scrollTop;
 }
 
@@ -1940,24 +1963,26 @@ el.fieldActualText.addEventListener('scroll', () => {
 // a diff against text the user has now moved past.
 el.fieldActualText.addEventListener('input', () => {
   const nodeId = el.fieldNodeId.value;
-  if (!nodeId || !state.aiProposals.has(nodeId)) return;
+  if (!nodeId || (!state.aiProposals.has(nodeId) && !state.atChangeFlags.has(nodeId))) return;
   state.aiProposals.delete(nodeId);
+  state.atChangeFlags.delete(nodeId);
   el.fieldActualText.classList.remove('actual-text-reviewing');
   el.actualTextHighlight.classList.remove('visible');
   el.actualTextHighlight.innerHTML = '';
   el.actualTextReviewBar.hidden = true;
-  renderTree(); // drop that row's "AI fix" flag
+  renderTree(); // drop that row's "AI fix"/"AT changed" flag
 });
 
-// Discards this tag's AI fix by re-pulling its content leaf's raw text
-// (same source "Pull Content" uses) and saving that in place of it - no
-// "original" value is kept in state to revert to; it's re-derived fresh
-// every time, same as if the user clicked Pull Content themselves right
-// now. If the tag has no content leaf (nothing to pull), this clears
-// Actual Text entirely rather than silently doing nothing.
+// Discards this tag's AI fix (or, in Show AT Changes mode, its flagged
+// difference) by re-pulling its content leaf's raw text (same source "Pull
+// Content" uses) and saving that in place of it - no "original" value is
+// kept in state to revert to; it's re-derived fresh every time, same as if
+// the user clicked Pull Content themselves right now. If the tag has no
+// content leaf (nothing to pull), this clears Actual Text entirely rather
+// than silently doing nothing.
 el.btnRevertAiFix.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;
-  if (!nodeId || !state.aiProposals.has(nodeId)) return;
+  if (!nodeId || (!state.aiProposals.has(nodeId) && !state.atChangeFlags.has(nodeId))) return;
   try {
     setStatus('Reverting to the tag’s original content…');
     el.btnRevertAiFix.disabled = true;
@@ -1965,6 +1990,7 @@ el.btnRevertAiFix.addEventListener('click', async () => {
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = original;
     state.aiProposals.delete(nodeId);
+    state.atChangeFlags.delete(nodeId);
     await applyDetailsChange(); // persists via the normal update path, which also re-renders the tree/field
     setStatus('Reverted to the tag’s original content.');
   } catch (err) {
@@ -1972,6 +1998,61 @@ el.btnRevertAiFix.addEventListener('click', async () => {
   } finally {
     if (el.fieldNodeId.value === nodeId) el.btnRevertAiFix.disabled = false;
   }
+});
+
+// --- "Show AT Changes" review sweep ---------------------------------------
+//
+// Unlike aiProposals (only ever populated by clicking "Fix All Actual Text
+// (AI)" this session, and gone the moment the app restarts), this recomputes
+// straight from the file: any tag whose Actual Text no longer matches what
+// "Pull Content" would produce right now gets flagged, so past AI edits (or
+// any other hand edit that diverged from the raw content) stay reviewable
+// even after the file was saved, closed, and reopened. Mirrors the
+// candidate scan in el.btnFixAllActualText below, minus the AI call - note
+// hasDirectContentLeaf() is NOT required here the way it is there: that
+// check only gates *seeding* a pull for a tag with no Actual Text yet, but
+// every candidate here already has Actual Text, so it's always worth
+// pulling and comparing regardless of whether its content leaf sits
+// directly inside it or deeper in the subtree (pullContentText() walks the
+// whole subtree either way).
+async function computeAtChangeFlags() {
+  const token = ++state.atChangeSweepToken;
+  const flags = new Map();
+  if (state.tree && state.pdfDoc) {
+    const candidates = [];
+    walkTree(state.tree, (node) => {
+      if (node.type !== 'element' || node.role === 'Table' || node.role === 'Document') return;
+      if (!node.actualText || !node.actualText.trim()) return;
+      candidates.push(node);
+    });
+    for (const node of candidates) {
+      const pulled = (await pullContentText(node.id)) || '';
+      if (token !== state.atChangeSweepToken) return; // superseded by a newer sweep
+      if (pulled !== node.actualText) {
+        flags.set(node.id, { original: pulled, suggested: node.actualText });
+      }
+    }
+  }
+  if (token !== state.atChangeSweepToken) return;
+  state.atChangeFlags = flags;
+}
+
+window.api.onMenuShowAtChanges(async (_event, checked) => {
+  state.showAtChanges = checked;
+  if (!checked) {
+    state.atChangeFlags = new Map();
+    renderTree();
+    updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
+    setStatus('Hid Actual Text change highlighting.');
+    return;
+  }
+  setStatus('Scanning tags for Actual Text changed from content…');
+  await computeAtChangeFlags();
+  renderTree();
+  updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
+  setStatus(state.atChangeFlags.size > 0
+    ? `Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content - flagged in the tag tree.`
+    : 'No tags have Actual Text that differs from their pulled content.');
 });
 
 // --- table tag -> generated HTML preview ---------------------------------
@@ -4805,6 +4886,7 @@ async function performOpen() {
     el.btnVerify.disabled = false; // Verify's Document-level checks apply even to an untagged PDF
     stopWalking();
     state.aiProposals = new Map(); // ids from the outgoing document don't carry over
+    state.atChangeFlags = new Map(); // stale sweep results for the outgoing document
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     state.docInfo = opened.docInfo || { title: null, author: null };
@@ -4818,6 +4900,15 @@ async function performOpen() {
     closeDetails();
 
     await loadPdfPreview(opened.pdfBase64);
+
+    // Show AT Changes is a session-wide toggle (see the menu handler above),
+    // so a document opened while it's already on gets swept immediately
+    // rather than waiting for the user to re-toggle it - needs state.pdfDoc,
+    // hence only now that loadPdfPreview() above has set it.
+    if (state.showAtChanges) {
+      await computeAtChangeFlags();
+      renderTree();
+    }
 
     // Land on the /Document tag by default, once the preview (and so
     // state.pdfDoc) is in place for the resulting highlight to target.
@@ -4909,6 +5000,7 @@ async function performClose() {
   state.hasStructTree = false;
   state.docInfo = { title: null, author: null };
   state.aiProposals = new Map();
+  state.atChangeFlags = new Map();
   state.selectedBookmarkId = null;
   state.pageCount = 0;
   state.currentPage = 1;

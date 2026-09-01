@@ -347,6 +347,13 @@ function buildAppMenu() {
       label: 'Tools',
       submenu: [
         { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => win?.webContents.send('menu:find-replace') },
+        { type: 'separator' },
+        {
+          label: 'Show AT Changes',
+          type: 'checkbox',
+          checked: false,
+          click: (item, win) => win?.webContents.send('menu:show-at-changes', item.checked),
+        },
       ],
     },
     {
