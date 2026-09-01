@@ -125,7 +125,8 @@ in `types/`, and checked without compiling anything:
 npm run typecheck
 ```
 
-That reports mistakes TypeScript can see statically: a misspelled
+It covers `main.js`, `preload.js`, `scripts/` and every module in
+`renderer/`, and reports mistakes TypeScript can see statically: a misspelled
 `window.api` method or `state` field, a call with the wrong number of
 arguments, a string where a number belongs, a property that doesn't exist on
 an element, a name used in a module that doesn't import it. It also reports
@@ -136,7 +137,7 @@ places and need opposite settings:
 
 | Config | Covers | Environment |
 | --- | --- | --- |
-| `jsconfig.json` | `main.js`, `preload.js` | CommonJS, Node globals |
+| `jsconfig.json` | `main.js`, `preload.js`, `scripts/` | CommonJS, Node globals |
 | `renderer/jsconfig.json` | every module in `renderer/` | ES modules, DOM globals |
 
 Shared shapes live in `types/domain.d.ts` (what crosses the JS/Python
@@ -154,6 +155,44 @@ Two caveats worth knowing:
 - Settings are deliberately loose (`strict` and `noImplicitAny` off), so an
   unannotated parameter is simply untyped rather than an error. Tighten them
   as more of the code gains annotations.
+
+## Tests
+
+```
+npm test
+```
+
+Runs `scripts/smoke-test.js`, which drives `python/tag_worker.py` directly
+over the same JSON-lines protocol `main.js` uses - no Electron and no UI
+involved. It takes about 8 seconds.
+
+This covers the layer where the bugs actually happen. The worker is where PDF
+semantics live, and a wrong edit there produces a file that looks correct in
+this app but is broken in Acrobat; neither the type checker nor the renderer
+can see that. Nearly every test therefore has the same shape:
+
+> make an edit -> save -> reopen the saved file -> check the edit is really
+> there and the document still parses
+
+An edit that only holds until you close the file is exactly the failure mode
+worth catching, and it is invisible from inside the running app.
+
+The suite runs against the three checked-in fixture PDFs (`test-figure.pdf`,
+`test-complex-short.pdf`, `test-complex.pdf`), covering alt text and Actual
+Text, document title/author/language, role changes, delete, insert, reorder,
+undo/redo, flatten, figure-from-rectangle, list grouping, table scoping and
+structure, bookmarks, and rejection of bad input. Fixtures are opened
+read-only; every save goes to a temp directory that is removed afterwards.
+
+Tests **skip** rather than fail when a fixture lacks suitable input - the
+minimal `test-figure.pdf` has no tables or spans, for example. Every test
+runs against at least one fixture, and `test-complex.pdf` exercises all of
+them. Skips are reported so a fixture change that silently stops exercising
+something is visible.
+
+Adding a check is worthwhile whenever a bug turns out to have been in
+`tag_worker.py`: reproduce it as an edit/save/reopen assertion, and it can't
+come back quietly.
 
 ## Packaging
 

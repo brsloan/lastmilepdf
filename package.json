@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "typecheck": "node scripts/typecheck.js",
+    "test": "node scripts/smoke-test.js",
     "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
     "dist:win": "npm run build:worker && electron-builder --win"
   },

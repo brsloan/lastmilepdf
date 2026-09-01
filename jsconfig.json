@@ -29,5 +29,5 @@
     "strict": false,
     "noImplicitAny": false
   },
-  "include": ["main.js", "preload.js", "types/**/*.d.ts"]
+  "include": ["main.js", "preload.js", "scripts/**/*.js", "types/**/*.d.ts"]
 }
