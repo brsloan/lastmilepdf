@@ -503,7 +503,13 @@ function renderTreeNode(node) {
       const textSpan = document.createElement('span');
       textSpan.className = 'tree-node-text';
       row.appendChild(textSpan);
-      loadContentText(node.page, node.mcid, textSpan);
+      const cached = formatCachedLeafText(node.page, node.mcid);
+      if (cached) {
+        textSpan.textContent = cached.text;
+        textSpan.title = cached.title;
+      } else {
+        loadContentText(node.page, node.mcid, textSpan);
+      }
     }
 
     row.addEventListener('click', (e) => handleRowClick(node.id, e));
@@ -2253,6 +2259,45 @@ async function convertTableEditorSelection(role) {
 el.btnTableEditorToTh.addEventListener('click', () => convertTableEditorSelection('TH'));
 el.btnTableEditorToTd.addEventListener('click', () => convertTableEditorSelection('TD'));
 
+// Synchronous counterpart to loadContentText(), for when the page's mcid
+// lookups are already cached (e.g. it's the page currently showing in the
+// preview, or a content leaf on it was rendered before). Lets
+// renderTreeNode() give a leaf its final text/height on the very same
+// render instead of always starting blank and growing a tick later - that
+// late growth, multiplied across every content leaf on a page, was what
+// made arrow-key navigation through an expanded tag feel erratic (each
+// keypress re-renders the whole tree - see renderTree() - so every leaf's
+// text was being torn down and re-fetched on every step; by the time it
+// came back the already-scrolled-to selection had been shoved off screen
+// by rows above it changing height). Returns null when the page hasn't
+// been looked up yet, so the caller falls back to the async path.
+function formatCachedLeafText(page0, mcid) {
+  const pageNumber = page0 + 1;
+  const textMap = state.mcidTextCache.get(pageNumber);
+  if (!textMap) return null;
+  const text = textMap.get(mcid);
+  if (text) return { text: `“${text}”`, title: text };
+  const graphics = state.mcidGraphicsCache.get(pageNumber);
+  if (!graphics) return null;
+  if (graphics.imageRects.has(mcid)) return { text: '[Image]', title: '' };
+  if (graphics.vectorMcids.has(mcid)) return { text: '[Graphic]', title: '' };
+  return { text: '', title: '' };
+}
+
+// Sets a leaf's text/title and, since that can change its row's height,
+// re-anchors the current selection - a leaf higher up the tree resolving
+// its text after the selection was already scrolled into view would
+// otherwise be able to push the selection off screen with no way to bring
+// it back short of navigating again.
+function applyLeafText(targetEl, { text, title }) {
+  targetEl.textContent = text;
+  targetEl.title = title;
+  const selectedRow = state.selectedNodeId
+    ? el.tagTree.querySelector(`[data-node-id="${state.selectedNodeId}"]`)
+    : null;
+  selectedRow?.scrollIntoView({ block: 'nearest' });
+}
+
 // Fills in a content leaf's text preview once pdf.js has parsed its page.
 // Async and fired off from renderTreeNode(), which is otherwise synchronous
 // - guards against the tree having been replaced/re-rendered by the time
@@ -2266,8 +2311,7 @@ async function loadContentText(page0, mcid, targetEl) {
     if (!targetEl.isConnected) return;
     const text = map.get(mcid);
     if (text) {
-      targetEl.textContent = `“${text}”`;
-      targetEl.title = text;
+      applyLeafText(targetEl, { text: `“${text}”`, title: text });
       return;
     }
     // No text run carries this mcid - the usual reason is that its content
@@ -2278,13 +2322,12 @@ async function loadContentText(page0, mcid, targetEl) {
     const { imageRects, vectorMcids } = await getPageMcidGraphicsInfo(pageNumber);
     if (!targetEl.isConnected) return;
     if (imageRects.has(mcid)) {
-      targetEl.textContent = '[Image]';
+      applyLeafText(targetEl, { text: '[Image]', title: '' });
     } else if (vectorMcids.has(mcid)) {
-      targetEl.textContent = '[Graphic]';
+      applyLeafText(targetEl, { text: '[Graphic]', title: '' });
     } else {
-      targetEl.textContent = '';
+      applyLeafText(targetEl, { text: '', title: '' });
     }
-    targetEl.title = '';
   } catch (err) {
     console.error('Could not load content text for mcid', mcid, err);
   }
