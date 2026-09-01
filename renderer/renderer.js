@@ -101,7 +101,8 @@ const el = {
   viewerPlaceholder: document.getElementById('viewer-placeholder'),
   btnPrevPage: document.getElementById('btn-prev-page'),
   btnNextPage: document.getElementById('btn-next-page'),
-  pageIndicator: document.getElementById('page-indicator'),
+  pageIndicatorInput: document.getElementById('page-indicator-input'),
+  pageIndicatorTotal: document.getElementById('page-indicator-total'),
   tagTree: document.getElementById('tag-tree'),
   highlightLayer: document.getElementById('highlight-layer'),
   drawOverlay: document.getElementById('draw-overlay'),
@@ -4431,7 +4432,16 @@ async function renderCurrentPage() {
 }
 
 function updatePageNavUI() {
-  el.pageIndicator.textContent = state.pdfDoc ? `${state.currentPage} / ${state.pageCount}` : '\u2014';
+  el.pageIndicatorInput.disabled = !state.pdfDoc;
+  if (state.pdfDoc) {
+    el.pageIndicatorTotal.textContent = `/ ${state.pageCount}`;
+    if (document.activeElement !== el.pageIndicatorInput) {
+      el.pageIndicatorInput.value = String(state.currentPage);
+    }
+  } else {
+    el.pageIndicatorTotal.textContent = '\u2014';
+    el.pageIndicatorInput.value = '';
+  }
   el.btnPrevPage.disabled = !state.pdfDoc || state.currentPage <= 1;
   el.btnNextPage.disabled = !state.pdfDoc || state.currentPage >= state.pageCount;
 }
@@ -4451,6 +4461,39 @@ el.btnNextPage.addEventListener('click', async () => {
   updatePageNavUI();
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
 });
+
+async function goToPageFromIndicatorInput() {
+  if (!state.pdfDoc) return;
+  const pageNumber = parseInt(el.pageIndicatorInput.value, 10);
+  if (!Number.isFinite(pageNumber)) {
+    updatePageNavUI();
+    return;
+  }
+  const clamped = Math.min(Math.max(pageNumber, 1), state.pageCount);
+  if (clamped !== state.currentPage) {
+    state.currentPage = clamped;
+    await renderCurrentPage();
+    if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+  }
+  updatePageNavUI();
+}
+
+el.pageIndicatorInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    el.pageIndicatorInput.blur();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    el.pageIndicatorInput.value = String(state.currentPage);
+    el.pageIndicatorInput.blur();
+  }
+});
+
+el.pageIndicatorInput.addEventListener('focus', () => {
+  el.pageIndicatorInput.select();
+});
+
+el.pageIndicatorInput.addEventListener('blur', goToPageFromIndicatorInput);
 
 // --- open / save ----------------------------------------------------------
 

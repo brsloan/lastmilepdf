@@ -47,7 +47,10 @@
         <span>Page Preview</span>
         <div class="page-nav">
           <button id="btn-prev-page" class="btn btn-ghost" disabled>&larr;</button>
-          <span id="page-indicator">&mdash;</span>
+          <span class="page-indicator">
+            <input id="page-indicator-input" class="page-indicator-input" type="text" inputmode="numeric" autocomplete="off" disabled />
+            <span id="page-indicator-total">&mdash;</span>
+          </span>
           <button id="btn-next-page" class="btn btn-ghost" disabled>&rarr;</button>
         </div>
       </div>

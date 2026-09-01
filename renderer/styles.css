@@ -257,6 +257,36 @@ body.busy * {
   font-weight: 400;
 }
 
+.page-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-indicator-input {
+  width: 3ch;
+  background: var(--panel-alt);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+  padding: 1px 4px;
+}
+
+.page-indicator-input:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.page-indicator-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.page-indicator-input:disabled {
+  background: transparent;
+}
+
 .canvas-wrap {
   position: relative;
   flex: 1;
