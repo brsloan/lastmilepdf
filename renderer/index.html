@@ -445,8 +445,6 @@
       <label class="field">
         <span class="field-label">AI provider</span>
         <select id="settings-provider">
-          <option value="anthropic">Anthropic</option>
-          <option value="custom">Custom (OpenAI-compatible)</option>
         </select>
       </label>
 
@@ -473,7 +471,7 @@
           <input id="settings-custom-api-key" type="password" autocomplete="off" spellcheck="false" />
         </label>
         <p id="settings-custom-api-key-status" class="settings-hint">No key set.</p>
-        <p class="settings-hint">Used by "Fix with AI" to call any OpenAI chat-completions-compatible endpoint - e.g. a university-hosted service. Base URL is the full completions endpoint (not just the host). Usage bills to whatever account owns that key, not ours. Key stored encrypted, on this device only.</p>
+        <p class="settings-hint">Used by "Fix with AI" to call any OpenAI chat-completions-compatible endpoint. Picking a known provider above fills in its Base URL and Model - just paste in your key from that provider - or pick "Custom" for anything else, e.g. a different university-hosted service. Usage bills to whatever account owns that key, not ours. Key stored encrypted, on this device only.</p>
       </div>
 
       <div class="settings-actions">

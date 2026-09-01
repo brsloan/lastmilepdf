@@ -612,44 +612,91 @@ el.aboutDialog.addEventListener('click', (e) => {
 
 // Settings dialog: holds the BYOK key(s) "Fix with AI" uses (see the
 // btnFixActualText handler above) - the built-in Anthropic slot, and one
-// slot for a custom OpenAI chat-completions-compatible endpoint (e.g. a
-// university-hosted service). Only one is active at a time (el.settingsProvider),
-// but both keep their saved values when you switch away, so flipping the
-// selector back doesn't lose anything. A raw key never round-trips back from
-// main.js - only whether one is currently saved - so the status lines are
-// the only feedback on save/remove.
+// slot PER OTHER PROVIDER for a custom OpenAI chat-completions-compatible
+// endpoint. A single dropdown (el.settingsProvider) picks between Anthropic,
+// a named preset (which - the first time it's picked - fills in Base URL +
+// Model as a starting point, still editable, e.g. to pick a different model
+// from the same provider), and "Custom" for anything else not listed - a
+// university-hosted service, a local model server, etc. Every provider
+// keeps its own saved key and config (see main.js's per-provider settings
+// storage), so switching the selector and back always shows what you saved
+// for THAT specific provider, not whatever was saved last for a different
+// one. main.js also remembers the exact provider id last selected here
+// (not just "anthropic vs. something else"), so it's what's used again next
+// time the app opens. A raw key never round-trips back from main.js - only
+// whether one is currently saved - so the status lines are the only
+// feedback on save/remove.
+//
+// Alphabetical by label, since that's how they're listed in the dropdown.
+const AI_PROVIDER_OPTIONS = [
+  { id: 'anthropic', label: 'Anthropic', kind: 'anthropic' },
+  { id: 'custom', label: 'Custom (OpenAI-compatible)', kind: 'custom' },
+  { id: 'gemini', label: 'Google Gemini', kind: 'preset', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-2.5-pro' },
+  { id: 'groq', label: 'Groq', kind: 'preset', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile' },
+  { id: 'mistral', label: 'Mistral', kind: 'preset', baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-large-latest' },
+  { id: 'openai', label: 'OpenAI', kind: 'preset', baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5.1' },
+  { id: 'openrouter', label: 'OpenRouter', kind: 'preset', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', model: 'openrouter/auto' },
+  { id: 'purdue-genai', label: 'Purdue GenAI Studio', kind: 'preset', baseUrl: 'https://genai.rcac.purdue.edu/api/chat/completions', model: 'llama4:latest' },
+];
+
+for (const option of AI_PROVIDER_OPTIONS) {
+  const optionEl = document.createElement('option');
+  optionEl.value = option.id;
+  optionEl.textContent = option.label;
+  el.settingsProvider.appendChild(optionEl);
+}
+
 async function refreshSettingsApiKeyStatus() {
   const has = await window.api.hasApiKey();
   el.settingsApiKeyStatus.textContent = has ? 'A key is saved on this device.' : 'No key set.';
   return has;
 }
 
-async function refreshSettingsCustomApiKeyStatus() {
-  const has = await window.api.hasCustomApiKey();
+async function refreshSettingsCustomApiKeyStatus(providerId) {
+  const has = await window.api.hasCustomApiKey(providerId);
   el.settingsCustomApiKeyStatus.textContent = has ? 'A key is saved on this device.' : 'No key set.';
   return has;
 }
 
 function updateSettingsProviderVisibility() {
-  const isCustom = el.settingsProvider.value === 'custom';
-  el.settingsAnthropicFields.hidden = isCustom;
-  el.settingsCustomFields.hidden = !isCustom;
+  const isAnthropic = el.settingsProvider.value === 'anthropic';
+  el.settingsAnthropicFields.hidden = !isAnthropic;
+  el.settingsCustomFields.hidden = isAnthropic;
 }
 
-el.settingsProvider.addEventListener('change', updateSettingsProviderVisibility);
+// Loads the Base URL/Model/key-status fields for whichever non-Anthropic
+// provider is now selected, from THAT provider's own saved slot - falling
+// back to a preset's canonical default only when nothing has been saved for
+// it yet, so a provider you've already configured shows what you actually
+// saved rather than being reset to the preset default every time you visit
+// it.
+async function loadCustomProviderFields(providerId) {
+  el.settingsCustomApiKey.value = '';
+  const [config, hasKey] = await Promise.all([
+    window.api.getCustomProviderConfig(providerId),
+    window.api.hasCustomApiKey(providerId),
+  ]);
+  const preset = AI_PROVIDER_OPTIONS.find((o) => o.id === providerId);
+  el.settingsCustomBaseUrl.value = config.baseUrl || preset?.baseUrl || '';
+  el.settingsCustomModel.value = config.model || preset?.model || '';
+  el.settingsCustomApiKeyStatus.textContent = hasKey ? 'A key is saved on this device.' : 'No key set.';
+}
+
+el.settingsProvider.addEventListener('change', async () => {
+  updateSettingsProviderVisibility();
+  const providerId = el.settingsProvider.value;
+  if (providerId !== 'anthropic') await loadCustomProviderFields(providerId);
+});
 
 window.api.onMenuSettings(async () => {
   el.settingsApiKey.value = '';
-  el.settingsCustomApiKey.value = '';
-  const [provider, customConfig] = await Promise.all([
-    window.api.getAiProvider(),
-    window.api.getCustomProviderConfig(),
-  ]);
-  el.settingsProvider.value = provider;
-  el.settingsCustomBaseUrl.value = customConfig.baseUrl;
-  el.settingsCustomModel.value = customConfig.model;
+  const provider = await window.api.getAiProvider();
+  el.settingsProvider.value = AI_PROVIDER_OPTIONS.some((o) => o.id === provider) ? provider : 'anthropic';
   updateSettingsProviderVisibility();
-  await Promise.all([refreshSettingsApiKeyStatus(), refreshSettingsCustomApiKeyStatus()]);
+  await Promise.all([
+    refreshSettingsApiKeyStatus(),
+    el.settingsProvider.value === 'anthropic' ? Promise.resolve() : loadCustomProviderFields(el.settingsProvider.value),
+  ]);
   el.settingsDialog.showModal();
 });
 
@@ -661,27 +708,29 @@ el.settingsDialog.addEventListener('click', (e) => {
 
 el.settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const provider = el.settingsProvider.value === 'custom' ? 'custom' : 'anthropic';
+  const providerId = el.settingsProvider.value;
+  const isAnthropic = providerId === 'anthropic';
   try {
-    await window.api.setAiProvider(provider);
-    if (provider === 'custom') {
-      await window.api.setCustomProviderConfig(
-        el.settingsCustomBaseUrl.value.trim(),
-        el.settingsCustomModel.value.trim(),
-      );
-      const key = el.settingsCustomApiKey.value.trim();
-      if (key) {
-        await window.api.setCustomApiKey(key);
-        el.settingsCustomApiKey.value = '';
-      }
-      await refreshSettingsCustomApiKeyStatus();
-    } else {
+    await window.api.setAiProvider(providerId);
+    if (isAnthropic) {
       const key = el.settingsApiKey.value.trim();
       if (key) {
         await window.api.setApiKey(key);
         el.settingsApiKey.value = '';
       }
       await refreshSettingsApiKeyStatus();
+    } else {
+      await window.api.setCustomProviderConfig(
+        providerId,
+        el.settingsCustomBaseUrl.value.trim(),
+        el.settingsCustomModel.value.trim(),
+      );
+      const key = el.settingsCustomApiKey.value.trim();
+      if (key) {
+        await window.api.setCustomApiKey(providerId, key);
+        el.settingsCustomApiKey.value = '';
+      }
+      await refreshSettingsCustomApiKeyStatus(providerId);
     }
     setStatus('AI provider settings saved.');
   } catch (err) {
@@ -690,16 +739,17 @@ el.settingsForm.addEventListener('submit', async (e) => {
 });
 
 el.btnClearApiKey.addEventListener('click', async () => {
-  const provider = el.settingsProvider.value === 'custom' ? 'custom' : 'anthropic';
+  const providerId = el.settingsProvider.value;
+  const isAnthropic = providerId === 'anthropic';
   try {
-    if (provider === 'custom') {
-      await window.api.clearCustomApiKey();
-      el.settingsCustomApiKey.value = '';
-      await refreshSettingsCustomApiKeyStatus();
-    } else {
+    if (isAnthropic) {
       await window.api.clearApiKey();
       el.settingsApiKey.value = '';
       await refreshSettingsApiKeyStatus();
+    } else {
+      await window.api.clearCustomApiKey(providerId);
+      el.settingsCustomApiKey.value = '';
+      await refreshSettingsCustomApiKeyStatus(providerId);
     }
     setStatus('API key removed.');
   } catch (err) {

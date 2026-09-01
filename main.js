@@ -228,60 +228,96 @@ function clearStoredApiKey() {
   writeSettingsFile(settings);
 }
 
+// The exact dropdown selection from the Settings dialog - 'anthropic', or
+// any provider id the renderer defines (a named preset like 'openai' or
+// 'purdue-genai', or 'custom' for a manually-entered endpoint). main.js
+// treats every value other than 'anthropic' identically (the generic
+// OpenAI-compatible path - see customChatCompletion() below) and never
+// needs to know the actual list of presets, so a provider the renderer adds
+// or removes later just works without a main.js change. Defaults to
+// 'anthropic' only when nothing has been saved yet; an unrecognized string
+// is preserved as-is rather than silently reset, so a provider the user
+// picked with this build still round-trips correctly even if a future
+// version's renderer no longer offers it as a preset (it still behaves as a
+// custom OpenAI-compatible endpoint - it just won't match a named preset's
+// autofill in the dialog).
 function getAiProvider() {
-  return readSettingsFile().aiProvider === 'custom' ? 'custom' : 'anthropic';
+  const provider = readSettingsFile().aiProvider;
+  return typeof provider === 'string' && provider ? provider : 'anthropic';
 }
 
 function setAiProvider(provider) {
   const settings = readSettingsFile();
-  settings.aiProvider = provider === 'custom' ? 'custom' : 'anthropic';
+  settings.aiProvider = provider;
   writeSettingsFile(settings);
 }
 
-function hasStoredCustomApiKey() {
-  return typeof readSettingsFile().customApiKey === 'string';
+// Per-provider BYOK storage - keyed by the same provider id as
+// getAiProvider() above, so switching between e.g. OpenAI and a
+// university-hosted "Custom" endpoint remembers each one's own key and
+// config instead of the two overwriting a single shared slot (the original,
+// buggy design: only one custom-provider key/config existed, so saving a
+// key for one provider silently clobbered whatever was saved for another).
+// Keys are encrypted individually via safeStorage, same as the Anthropic
+// key above; baseUrl/model aren't secret, so they're stored in plain text.
+
+function getProviderConfigs() {
+  const configs = readSettingsFile().providerConfigs;
+  return configs && typeof configs === 'object' ? configs : {};
 }
 
-function getStoredCustomApiKey() {
-  const encrypted = readSettingsFile().customApiKey;
+function getCustomProviderConfig(providerId) {
+  const config = getProviderConfigs()[providerId];
+  return {
+    baseUrl: config && typeof config.baseUrl === 'string' ? config.baseUrl : '',
+    model: config && typeof config.model === 'string' ? config.model : '',
+  };
+}
+
+function setCustomProviderConfig(providerId, baseUrl, model) {
+  const settings = readSettingsFile();
+  const configs = getProviderConfigs();
+  configs[providerId] = { baseUrl, model };
+  settings.providerConfigs = configs;
+  writeSettingsFile(settings);
+}
+
+function getProviderApiKeys() {
+  const keys = readSettingsFile().providerApiKeys;
+  return keys && typeof keys === 'object' ? keys : {};
+}
+
+function hasStoredCustomApiKey(providerId) {
+  return typeof getProviderApiKeys()[providerId] === 'string';
+}
+
+function getStoredCustomApiKey(providerId) {
+  const encrypted = getProviderApiKeys()[providerId];
   if (!encrypted || !safeStorage.isEncryptionAvailable()) return null;
   try {
     return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
   } catch (err) {
-    console.error('[settings] failed to decrypt stored custom API key:', err);
+    console.error(`[settings] failed to decrypt stored API key for provider "${providerId}":`, err);
     return null;
   }
 }
 
-function setStoredCustomApiKey(key) {
+function setStoredCustomApiKey(providerId, key) {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('This system has no OS-level credential store available to encrypt the key.');
   }
   const settings = readSettingsFile();
-  settings.customApiKey = safeStorage.encryptString(key).toString('base64');
+  const keys = getProviderApiKeys();
+  keys[providerId] = safeStorage.encryptString(key).toString('base64');
+  settings.providerApiKeys = keys;
   writeSettingsFile(settings);
 }
 
-function clearStoredCustomApiKey() {
+function clearStoredCustomApiKey(providerId) {
   const settings = readSettingsFile();
-  delete settings.customApiKey;
-  writeSettingsFile(settings);
-}
-
-// Base URL + model for the custom provider - not secret, so stored in plain
-// text in settings.json alongside (but separate from) its encrypted API key.
-function getCustomProviderConfig() {
-  const settings = readSettingsFile();
-  return {
-    baseUrl: typeof settings.customBaseUrl === 'string' ? settings.customBaseUrl : '',
-    model: typeof settings.customModel === 'string' ? settings.customModel : '',
-  };
-}
-
-function setCustomProviderConfig(baseUrl, model) {
-  const settings = readSettingsFile();
-  settings.customBaseUrl = baseUrl;
-  settings.customModel = model;
+  const keys = getProviderApiKeys();
+  delete keys[providerId];
+  settings.providerApiKeys = keys;
   writeSettingsFile(settings);
 }
 
@@ -854,22 +890,22 @@ ipcMain.handle('settings:set-ai-provider', async (_event, { provider }) => {
   return true;
 });
 
-ipcMain.handle('settings:has-custom-api-key', async () => hasStoredCustomApiKey());
+ipcMain.handle('settings:has-custom-api-key', async (_event, { providerId }) => hasStoredCustomApiKey(providerId));
 
-ipcMain.handle('settings:set-custom-api-key', async (_event, { key }) => {
-  setStoredCustomApiKey(key);
+ipcMain.handle('settings:set-custom-api-key', async (_event, { providerId, key }) => {
+  setStoredCustomApiKey(providerId, key);
   return true;
 });
 
-ipcMain.handle('settings:clear-custom-api-key', async () => {
-  clearStoredCustomApiKey();
+ipcMain.handle('settings:clear-custom-api-key', async (_event, { providerId }) => {
+  clearStoredCustomApiKey(providerId);
   return true;
 });
 
-ipcMain.handle('settings:get-custom-provider-config', async () => getCustomProviderConfig());
+ipcMain.handle('settings:get-custom-provider-config', async (_event, { providerId }) => getCustomProviderConfig(providerId));
 
-ipcMain.handle('settings:set-custom-provider-config', async (_event, { baseUrl, model }) => {
-  setCustomProviderConfig(baseUrl, model);
+ipcMain.handle('settings:set-custom-provider-config', async (_event, { providerId, baseUrl, model }) => {
+  setCustomProviderConfig(providerId, baseUrl, model);
   return true;
 });
 
@@ -897,9 +933,9 @@ function requireAnthropicKey() {
   return apiKey;
 }
 
-function requireCustomProviderConfig() {
-  const apiKey = getStoredCustomApiKey();
-  const { baseUrl, model } = getCustomProviderConfig();
+function requireCustomProviderConfig(providerId) {
+  const apiKey = getStoredCustomApiKey(providerId);
+  const { baseUrl, model } = getCustomProviderConfig(providerId);
   if (!apiKey || !baseUrl || !model) {
     throw new Error('The custom AI provider is not fully configured. Set the base URL, model, and API key via File > Settings > API Key…');
   }
@@ -911,8 +947,13 @@ function requireCustomProviderConfig() {
  * returns the reply text. `jsonMode` sets response_format: json_object as a
  * best-effort hint - endpoints that ignore unknown fields still work, since
  * the system prompt itself also spells out the required JSON shape.
+ * `maxTokens`, when given, is sent as max_tokens - some gateways otherwise
+ * fall back to a small default completion budget and silently truncate a
+ * long reply mid-JSON rather than erroring, which is a likelier cause of a
+ * "could not be parsed as JSON" failure than the model just getting the
+ * format wrong.
  */
-async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, jsonMode }) {
+async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, jsonMode, maxTokens }) {
   let response;
   try {
     response = await fetch(baseUrl, {
@@ -926,6 +967,7 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
         stream: false,
         temperature: 0,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: prompt },
@@ -960,16 +1002,69 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
   return content.trim();
 }
 
-// Strips a ```/```json fence around a model's reply, if present, before
-// parsing - see the comment above customChatCompletion() for why.
+// Scans for the first balanced {...} object in `text`, respecting string
+// literals so a brace inside a quoted value (e.g. in corrected text itself)
+// doesn't miscount. Returns null if none is found - including an unbalanced
+// one, e.g. a reply truncated mid-object by hitting a token limit, which no
+// amount of scanning can recover.
+function extractFirstJsonObject(text) {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+// Parses a model's reply as JSON, tolerating the ways a less-instructable
+// model tends to miss the "reply with only JSON" instruction: wrapping it in
+// a ```/```json fence, or prefacing/following it with a sentence or two of
+// prose. Tries the whole reply (after stripping a fence, if present) first,
+// then falls back to pulling out just the first balanced JSON object
+// wherever it appears in the raw or fenced-stripped text.
 function parseJsonReply(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = (fenced ? fenced[1] : text).trim();
   try {
     return JSON.parse(candidate);
   } catch {
-    throw new Error("The custom AI endpoint's reply could not be parsed as JSON.");
+    // Fall through to the more lenient extraction below.
   }
+  const extracted = extractFirstJsonObject(candidate) || extractFirstJsonObject(text);
+  if (extracted) {
+    try {
+      return JSON.parse(extracted);
+    } catch {
+      // Fall through to the throw below.
+    }
+  }
+  throw new Error("The custom AI endpoint's reply could not be parsed as JSON.");
+}
+
+// Recognizes an OpenAI/litellm-style "your input is bigger than this
+// model's context window" error message. Unlike Anthropic's models (all
+// large-context, sized into BATCH_FIX_CHAR_LIMIT below), a custom endpoint's
+// context window isn't knowable up front - it might be a small self-hosted
+// model with a fraction of the capacity that limit assumes - so rather than
+// guess a chunk size, the batch handler below tries the whole document first
+// and only splits in response to the endpoint actually saying it's too big.
+function isContextLengthError(message) {
+  return /context.{0,20}(window|length)|too many tokens|reduce the (length|number)/i.test(message);
 }
 
 const FIX_ACTUAL_TEXT_SYSTEM_PROMPT = `You clean up text pulled from a PDF's content stream for use as the PDF's /ActualText - the text a screen reader speaks instead of the visible content.
@@ -981,8 +1076,9 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
     throw new Error('There is no text to fix.');
   }
 
-  if (getAiProvider() === 'custom') {
-    const { apiKey, baseUrl, model } = requireCustomProviderConfig();
+  const providerId = getAiProvider();
+  if (providerId !== 'anthropic') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig(providerId);
     const content = await customChatCompletion({
       apiKey,
       baseUrl,
@@ -990,6 +1086,7 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
       system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
       prompt: text,
       jsonMode: false,
+      maxTokens: 4096,
     });
     return content;
   }
@@ -1049,6 +1146,110 @@ You will receive a JSON array of entries, each with an id and the current text f
 // in-prompt instead.
 const FIX_ACTUAL_TEXT_BATCH_JSON_INSTRUCTION = `Respond with only a single JSON object of the exact form {"items":[{"id":"...","text":"..."}]} - no markdown code fences, no explanation, no other text before or after the JSON.`;
 
+// A reply that failed to parse as JSON, or parsed but didn't match the
+// expected shape, is marked splittable the same as an explicit
+// context-length error (see isSplittableBatchError() below) - on a large
+// chunk it's more often the model running out of its output budget
+// mid-generation (truncating the JSON) or losing the format across many
+// items in one go than the model being fundamentally unable to produce it,
+// and a smaller chunk tends to fix both.
+/** @param {string} message @returns {Error & { batchSplitRetryable: true }} */
+function malformedReplyError(message) {
+  return Object.assign(new Error(message), { batchSplitRetryable: /** @type {true} */ (true) });
+}
+
+// Guards against a reply that's individually well-formed JSON, matching the
+// {items: [{id, text}]} shape, but wrong in a way the shape check alone
+// can't catch: the model dropping, duplicating, or fabricating a tag id -
+// e.g. merging two entries' text under one id and silently shifting every
+// id after it to the wrong tag, which is otherwise invisible until someone
+// reviews the saved PDF by hand. Neither provider's guarantees rule this
+// out (Anthropic's structured-output support constrains shape, not
+// content), so both check every result id against the request's before the
+// reply is trusted enough to write into the PDF - see the two call sites in
+// ai:fix-actual-text-batch below.
+function validateBatchResultIds(requestedItems, resultItems) {
+  const requestedIds = new Set(requestedItems.map((item) => item.id));
+  const seen = new Set();
+  let duplicateCount = 0;
+  let unknownCount = 0;
+  for (const result of resultItems) {
+    if (!requestedIds.has(result.id)) unknownCount++;
+    else if (seen.has(result.id)) duplicateCount++;
+    seen.add(result.id);
+  }
+  const missingCount = [...requestedIds].filter((id) => !seen.has(id)).length;
+  if (missingCount > 0 || duplicateCount > 0 || unknownCount > 0) {
+    throw malformedReplyError(
+      `The AI's reply didn't account for every tag one-to-one (${missingCount} missing, ${duplicateCount} duplicated, ${unknownCount} unrecognized) - discarding it rather than risk writing mismatched Actual Text.`,
+    );
+  }
+}
+
+// One batch-fix request to the custom endpoint for exactly this set of
+// items - no splitting. Factored out of customBatchFixWithSplit() below so
+// each half of a split goes through the same request/parse/validate path as
+// the initial whole-document attempt. max_tokens is sized to the chunk
+// itself (not a fixed constant) so a split into smaller chunks also asks for
+// less output - see the comment on customChatCompletion() for why that
+// matters.
+async function customBatchFixChunk(apiKey, baseUrl, model, items) {
+  const payload = JSON.stringify(items);
+  // Corrected text runs close to the same length as the input, plus JSON
+  // overhead - /2 (rather than the ~4 chars/token a token roughly costs)
+  // leaves a generous safety margin against undercounting.
+  const maxTokens = Math.min(16000, Math.max(1024, Math.ceil(payload.length / 2)));
+  const content = await customChatCompletion({
+    apiKey,
+    baseUrl,
+    model,
+    system: `${FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT}\n\n${FIX_ACTUAL_TEXT_BATCH_JSON_INSTRUCTION}`,
+    prompt: payload,
+    jsonMode: true,
+    maxTokens,
+  });
+  let parsed;
+  try {
+    parsed = parseJsonReply(content);
+  } catch (err) {
+    throw malformedReplyError(err.message);
+  }
+  const validation = BatchFixResultSchema.safeParse(parsed);
+  if (!validation.success) {
+    throw malformedReplyError("The custom AI endpoint's reply did not match the expected {items: [{id, text}]} shape.");
+  }
+  validateBatchResultIds(items, validation.data.items);
+  return validation.data.items;
+}
+
+function isSplittableBatchError(err) {
+  return err.batchSplitRetryable === true || isContextLengthError(err.message);
+}
+
+// Tries the whole batch as one request; on a context-length-exceeded error,
+// or a reply that didn't parse/match the expected shape (see
+// isSplittableBatchError() above), halves `items` and retries each half the
+// same way, recursively, until it succeeds. Sequential rather than parallel
+// halves - kinder to a shared endpoint (e.g. a university's rate-limited
+// gateway) than fanning out concurrent requests. Bottoms out at a single
+// item so one entry that genuinely can't be handled (too large, or the
+// model just can't produce valid JSON for it) surfaces its own clear error
+// instead of splitting forever. This does mean a split document loses some
+// of the cross-entry consistency the whole-document batch is meant to give
+// (see the comment above BatchFixResultSchema) - an unavoidable tradeoff
+// once a chunk that small still doesn't succeed in one request.
+async function customBatchFixWithSplit(apiKey, baseUrl, model, items) {
+  try {
+    return await customBatchFixChunk(apiKey, baseUrl, model, items);
+  } catch (err) {
+    if (items.length <= 1 || !isSplittableBatchError(err)) throw err;
+    const mid = Math.ceil(items.length / 2);
+    const first = await customBatchFixWithSplit(apiKey, baseUrl, model, items.slice(0, mid));
+    const second = await customBatchFixWithSplit(apiKey, baseUrl, model, items.slice(mid));
+    return [...first, ...second];
+  }
+}
+
 // Rough guard against a request too large for a single response - output is
 // close to input size (corrected text, not expanded) plus per-entry JSON
 // overhead, but without a cap a huge document would silently truncate
@@ -1078,22 +1279,9 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
   const startedAt = Date.now();
   let resultItems;
 
-  if (provider === 'custom') {
-    const { apiKey, baseUrl, model } = requireCustomProviderConfig();
-    const content = await customChatCompletion({
-      apiKey,
-      baseUrl,
-      model,
-      system: `${FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT}\n\n${FIX_ACTUAL_TEXT_BATCH_JSON_INSTRUCTION}`,
-      prompt: payload,
-      jsonMode: true,
-    });
-    const parsed = parseJsonReply(content);
-    const validation = BatchFixResultSchema.safeParse(parsed);
-    if (!validation.success) {
-      throw new Error("The custom AI endpoint's reply did not match the expected {items: [{id, text}]} shape.");
-    }
-    resultItems = validation.data.items;
+  if (provider !== 'anthropic') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig(provider);
+    resultItems = await customBatchFixWithSplit(apiKey, baseUrl, model, items);
   } else {
     const apiKey = requireAnthropicKey();
     const client = new Anthropic({ apiKey });
@@ -1112,6 +1300,7 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
       if (!response.parsed_output) {
         throw new Error('The AI did not return a valid response.');
       }
+      validateBatchResultIds(items, response.parsed_output.items);
       resultItems = response.parsed_output.items;
     } catch (err) {
       if (err instanceof Anthropic.AuthenticationError) {

@@ -294,38 +294,45 @@ const api = {
   /** @returns {Promise<void>} */
   clearApiKey: () => ipcRenderer.invoke('settings:clear-api-key'),
 
-  // Which provider "Fix with AI" currently calls - 'anthropic' (default) or
-  // 'custom' (any OpenAI chat-completions-compatible endpoint). See the
-  // settings:*-provider* handlers and getAiProvider() in main.js.
-  /** @returns {Promise<'anthropic' | 'custom'>} */
+  // Which provider "Fix with AI" currently calls - 'anthropic' (default), or
+  // any other provider id the renderer's Settings dialog defines (a named
+  // preset like 'openai'/'purdue-genai', or 'custom' for a manually-entered
+  // endpoint) - main.js treats every non-'anthropic' value the same way (a
+  // generic OpenAI-compatible call) and doesn't need to know the specific
+  // id. See the settings:*-provider* handlers and getAiProvider() in main.js.
+  /** @returns {Promise<string>} */
   getAiProvider: () => ipcRenderer.invoke('settings:get-ai-provider'),
   /**
-   * @param {'anthropic' | 'custom'} provider
+   * @param {string} provider
    * @returns {Promise<void>}
    */
   setAiProvider: (provider) => ipcRenderer.invoke('settings:set-ai-provider', { provider }),
 
-  // BYOK key + endpoint config for the custom provider - same encrypted-key
-  // handling as the Anthropic key above; baseUrl/model are stored in plain
-  // text since they aren't secret.
-  /** @returns {Promise<boolean>} */
-  hasCustomApiKey: () => ipcRenderer.invoke('settings:has-custom-api-key'),
+  // Per-provider BYOK key + endpoint config - keyed by the same provider id
+  // as getAiProvider() above, so e.g. OpenAI and a "Custom" endpoint each
+  // remember their own key/config instead of sharing one slot. Same
+  // encrypted-key handling as the Anthropic key above; baseUrl/model are
+  // stored in plain text since they aren't secret.
+  /** @param {string} providerId @returns {Promise<boolean>} */
+  hasCustomApiKey: (providerId) => ipcRenderer.invoke('settings:has-custom-api-key', { providerId }),
   /**
+   * @param {string} providerId
    * @param {string} key
    * @returns {Promise<void>}
    */
-  setCustomApiKey: (key) => ipcRenderer.invoke('settings:set-custom-api-key', { key }),
-  /** @returns {Promise<void>} */
-  clearCustomApiKey: () => ipcRenderer.invoke('settings:clear-custom-api-key'),
-  /** @returns {Promise<{ baseUrl: string, model: string }>} */
-  getCustomProviderConfig: () => ipcRenderer.invoke('settings:get-custom-provider-config'),
+  setCustomApiKey: (providerId, key) => ipcRenderer.invoke('settings:set-custom-api-key', { providerId, key }),
+  /** @param {string} providerId @returns {Promise<void>} */
+  clearCustomApiKey: (providerId) => ipcRenderer.invoke('settings:clear-custom-api-key', { providerId }),
+  /** @param {string} providerId @returns {Promise<{ baseUrl: string, model: string }>} */
+  getCustomProviderConfig: (providerId) => ipcRenderer.invoke('settings:get-custom-provider-config', { providerId }),
   /**
+   * @param {string} providerId
    * @param {string} baseUrl
    * @param {string} model
    * @returns {Promise<void>}
    */
-  setCustomProviderConfig: (baseUrl, model) =>
-    ipcRenderer.invoke('settings:set-custom-provider-config', { baseUrl, model }),
+  setCustomProviderConfig: (providerId, baseUrl, model) =>
+    ipcRenderer.invoke('settings:set-custom-provider-config', { providerId, baseUrl, model }),
 
   /** @param {() => void} callback */
   onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
