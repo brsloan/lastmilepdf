@@ -34,6 +34,13 @@ import { categoryForRole } from './util.js';
 // collapsed subtree.
 let descendantAtChangeIds = new Set();
 
+// Same idea as descendantAtChangeIds, but for AI-fix proposals - a node with
+// no AI fix of its own but a descendant (at any depth) in state.aiProposals
+// gets a "fix below" badge instead of silently hiding it behind a collapsed
+// subtree. Unlike AT changes this isn't gated behind a toggle, since
+// aiProposals badges are always shown.
+let descendantAiProposalIds = new Set();
+
 function computeDescendantAtChangeIds() {
   const ids = new Set();
   if (!state.showAtChanges || !state.tree) return ids;
@@ -49,9 +56,25 @@ function computeDescendantAtChangeIds() {
   return ids;
 }
 
+function computeDescendantAiProposalIds() {
+  const ids = new Set();
+  if (!state.tree) return ids;
+  function walk(node) {
+    let below = false;
+    for (const child of node.children || []) {
+      if (walk(child)) below = true;
+    }
+    if (below) ids.add(node.id);
+    return below || state.aiProposals.has(node.id);
+  }
+  walk(state.tree);
+  return ids;
+}
+
 export function renderTree() {
   el.tagTreeContent.innerHTML = '';
   descendantAtChangeIds = computeDescendantAtChangeIds();
+  descendantAiProposalIds = computeDescendantAiProposalIds();
   if (!state.tree) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
@@ -279,6 +302,12 @@ function appendElementChipAndFlag(row, node) {
     const aiFlag = document.createElement('span');
     aiFlag.className = 'ai-fix-flag';
     aiFlag.textContent = 'AI fix';
+    row.appendChild(aiFlag);
+  } else if (descendantAiProposalIds.has(node.id)) {
+    const aiFlag = document.createElement('span');
+    aiFlag.className = 'ai-fix-flag';
+    aiFlag.textContent = '↓ AI fix';
+    aiFlag.title = 'A tag below this one has an AI fix applied';
     row.appendChild(aiFlag);
   } else if (state.showAtChanges && state.atChangeFlags.has(node.id)) {
     const atFlag = document.createElement('span');
