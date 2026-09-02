@@ -364,6 +364,14 @@
           <div class="shortcut-row"><dt><kbd>Any other key</kbd></dt><dd>Stop walking</dd></div>
         </dl>
       </section>
+
+      <section class="shortcuts-group">
+        <h3>Proofread Mode</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Page Up</kbd>/<kbd>Page Down</kbd></dt><dd>Jump to the previous/next tag's Actual Text</dd></div>
+          <div class="shortcut-row"><dt><kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>From the Actual Text field's first/last line, jump to the previous/next tag (otherwise moves the caret a line, as usual)</dd></div>
+        </dl>
+      </section>
     </div>
   </dialog>
 
@@ -424,6 +432,11 @@
       <section class="help-section">
         <h3>Bookmarks</h3>
         <p>The Bookmarks tab shows the PDF's outline. Click a bookmark to jump to its page, double-click to rename it, or press Delete to remove the selected one. <strong>+</strong> adds a new bookmark pointing at whatever page is currently open in the preview, inserted into the tree wherever that page falls in the existing order. <strong>Generate</strong> clears the existing outline and builds a fresh one from the document's headings.</p>
+      </section>
+
+      <section class="help-section">
+        <h3>Proofread Mode</h3>
+        <p>View &gt; Proofread Mode switches to a focused layout for reading through the document's Actual Text one tag at a time: the tree collapses to a flat list of tags and the Tag Properties panel strips down to just the Actual Text field, which is where focus lands as soon as the mode is turned on. <kbd>Page Up</kbd>/<kbd>Page Down</kbd> jump to the previous/next tag's Actual Text from anywhere, including while that field is focused. While typing in the field, <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> do the same thing, but only from its very first or last line &mdash; off those edges (or with a range selected, or a modifier held) they just move the caret a line as normal. Landing on an empty tag pulls its own content text in as a starting point, the same as clicking into Actual Text normally does.</p>
       </section>
 
       <section class="help-section">
