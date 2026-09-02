@@ -81,7 +81,7 @@ el.tabBookmarks.addEventListener('click', () => setActivePanel('bookmarks'));
 // response - never assumed stable across a mutation.
 
 window.addEventListener('keydown', (e) => {
-  if (e.key !== 'Delete') return;
+  if (!isDeleteShortcut(e)) return;
   if (state.activePanel !== 'bookmarks' || !state.selectedBookmarkId) return;
 
   const tag = document.activeElement?.tagName;
@@ -232,10 +232,51 @@ window.api.getNotifyDesktop().then((value) => { state.notifyDesktop = value; });
 
 window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
 
+window.api.getExtraDeleteKeyCode().then((value) => { state.extraDeleteKeyCode = value; });
+
+// Friendly names for the KeyboardEvent.code values a user is likely to pick
+// as their extra Delete key (see the recorder below) - falls back to
+// stripping the Key/Digit prefix off a letter/digit code, then to splitting
+// an unrecognized code's camelCase (e.g. "IntlBackslash" -> "Intl Backslash")
+// so it's never blank.
+const KEY_CODE_LABELS = {
+  CapsLock: 'Caps Lock',
+  Tab: 'Tab',
+  Space: 'Space',
+  Escape: 'Esc',
+  Backquote: '`',
+  ControlLeft: 'Left Ctrl',
+  ControlRight: 'Right Ctrl',
+  ShiftLeft: 'Left Shift',
+  ShiftRight: 'Right Shift',
+  AltLeft: 'Left Alt',
+  AltRight: 'Right Alt',
+};
+
+function formatKeyCode(code) {
+  if (!code) return 'Not set';
+  if (KEY_CODE_LABELS[code]) return KEY_CODE_LABELS[code];
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  return code.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function updateDeleteKeyDisplay() {
+  el.preferencesDeleteKeyDisplay.textContent = formatKeyCode(state.extraDeleteKeyCode);
+  el.btnClearDeleteKey.hidden = !state.extraDeleteKeyCode;
+}
+
+// Delete also fires on this extra key, if the user has set one - see the
+// two Delete keydown handlers below (bookmarks panel, tag tree).
+function isDeleteShortcut(e) {
+  return e.key === 'Delete' || (!!state.extraDeleteKeyCode && e.code === state.extraDeleteKeyCode);
+}
+
 window.api.onMenuPreferences(() => {
   el.preferencesShowTagTypeLabel.checked = state.showTagTypeLabel;
   el.preferencesNotifyDesktop.checked = state.notifyDesktop;
   el.preferencesNotifyChime.checked = state.notifyChime;
+  updateDeleteKeyDisplay();
   el.preferencesDialog.showModal();
 });
 
@@ -260,6 +301,35 @@ el.preferencesNotifyDesktop.addEventListener('change', () => {
 el.preferencesNotifyChime.addEventListener('change', () => {
   state.notifyChime = el.preferencesNotifyChime.checked;
   window.api.setNotifyChime(state.notifyChime);
+});
+
+// Recorded in the capture phase and stopped from propagating further, so
+// the keypress that sets/replaces the extra Delete key can't also fall
+// through to the app's other keydown handlers (Delete itself, the P/L/I/T/…
+// role shortcuts, etc.) further down this file.
+el.btnRecordDeleteKey.addEventListener('click', () => {
+  el.preferencesDeleteKeyDisplay.textContent = 'Press a key…';
+  el.btnRecordDeleteKey.disabled = true;
+  const onKeydown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.removeEventListener('keydown', onKeydown, true);
+    el.btnRecordDeleteKey.disabled = false;
+    if (e.key === 'Escape') {
+      updateDeleteKeyDisplay();
+      return;
+    }
+    state.extraDeleteKeyCode = e.code;
+    window.api.setExtraDeleteKeyCode(e.code);
+    updateDeleteKeyDisplay();
+  };
+  window.addEventListener('keydown', onKeydown, true);
+});
+
+el.btnClearDeleteKey.addEventListener('click', () => {
+  state.extraDeleteKeyCode = null;
+  window.api.setExtraDeleteKeyCode(null);
+  updateDeleteKeyDisplay();
 });
 
 window.api.onMenuShowAtChanges(async (_event, checked) => {
@@ -1197,13 +1267,14 @@ window.addEventListener('keydown', (e) => {
   renderTree();
 });
 
-// Delete removes the current selection from the struct tree. A tag
-// (element node) is deleted along with its whole subtree; a content/
-// object-ref leaf is unlinked from its tag and its underlying content is
-// turned into a real PDF artifact - see delete_nodes()/_artifact_leaves()
-// in tag_worker.py.
+// Delete (or the extra key set in File > Settings > Preferences, see
+// isDeleteShortcut() above) removes the current selection from the struct
+// tree. A tag (element node) is deleted along with its whole subtree; a
+// content/object-ref leaf is unlinked from its tag and its underlying
+// content is turned into a real PDF artifact - see
+// delete_nodes()/_artifact_leaves() in tag_worker.py.
 window.addEventListener('keydown', (e) => {
-  if (e.key !== 'Delete') return;
+  if (!isDeleteShortcut(e)) return;
   if (state.activePanel === 'bookmarks') return; // handled by the Bookmarks-panel Delete listener instead
   if (state.selectedNodeIds.size === 0) return;
 

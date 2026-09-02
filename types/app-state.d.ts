@@ -198,6 +198,9 @@ export interface AppState {
   notifyDesktop: boolean;
   notifyChime: boolean;
 
+  /** KeyboardEvent.code (e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete shortcut, or null when unset. */
+  extraDeleteKeyCode: string | null;
+
   // --- Split Content (see split-content.js) ------------------------------
   /** The content leaf the Split Content panel currently shows, or null. */
   splitContentNodeId: string | null;

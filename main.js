@@ -357,6 +357,22 @@ function setNotifyChime(value) {
   writeSettingsFile(settings);
 }
 
+// The physical key (KeyboardEvent.code, e.g. "CapsLock") the user has
+// designated as an extra shortcut for the Tag Tree/Bookmarks Delete action
+// (File > Settings > Preferences), so it can be pressed with the opposite
+// hand from the arrow keys used to step through the tree. null when unset.
+// Persisted the same way as showTagTypeLabel above.
+function getExtraDeleteKeyCode() {
+  const value = readSettingsFile().extraDeleteKeyCode;
+  return typeof value === 'string' ? value : null;
+}
+
+function setExtraDeleteKeyCode(value) {
+  const settings = readSettingsFile();
+  settings.extraDeleteKeyCode = value;
+  writeSettingsFile(settings);
+}
+
 // --- AI batch timing log ----------------------------------------------------
 //
 // Lets the "Fix All Actual Text" progress dialog (see showAiBatchProgress()
@@ -899,6 +915,12 @@ ipcMain.handle('settings:set-notify-desktop', async (_event, { value }) => {
 ipcMain.handle('settings:get-notify-chime', async () => getNotifyChime());
 ipcMain.handle('settings:set-notify-chime', async (_event, { value }) => {
   setNotifyChime(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-extra-delete-key-code', async () => getExtraDeleteKeyCode());
+ipcMain.handle('settings:set-extra-delete-key-code', async (_event, { value }) => {
+  setExtraDeleteKeyCode(value);
   return true;
 });
 

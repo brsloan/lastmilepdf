@@ -1558,6 +1558,19 @@ body.busy-cursor * {
   height: 15px;
 }
 
+/* Preferences dialog extra-Delete-key recorder row - the label stacks above
+   the Set…/Clear buttons and the recorded key's name, same shape as
+   .field-checkbox above but with a button pair instead of a checkbox. */
+.field-shortcut-row {
+  gap: 6px;
+}
+
+.field-shortcut-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* --- find/replace dialog ---
    Reuses .shortcuts-header for the title bar and .settings-body/
    .settings-actions/.settings-hint from the settings dialog above - it's

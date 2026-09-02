@@ -378,6 +378,16 @@ const api = {
   /** @param {boolean} value @returns {Promise<void>} */
   setNotifyChime: (value) => ipcRenderer.invoke('settings:set-notify-chime', { value }),
 
+  // File > Settings > Preferences - an extra physical key (KeyboardEvent.code,
+  // e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete
+  // shortcut, so it can be pressed with the opposite hand from the arrow
+  // keys used to step through the tree. Persisted the same way as the
+  // settings above.
+  /** @returns {Promise<string | null>} */
+  getExtraDeleteKeyCode: () => ipcRenderer.invoke('settings:get-extra-delete-key-code'),
+  /** @param {string | null} value @returns {Promise<void>} */
+  setExtraDeleteKeyCode: (value) => ipcRenderer.invoke('settings:set-extra-delete-key-code', { value }),
+
   /**
    * @param {string} text
    * @returns {Promise<string>} The corrected text.
