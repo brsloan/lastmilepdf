@@ -322,9 +322,8 @@ function clearStoredCustomApiKey(providerId) {
 }
 
 // Whether the PDF preview labels a selected tag's role above its highlight
-// box (File > Settings > Appearance). Persisted in the same settings.json as
-// the API key so the checkbox's initial `checked` state (set when the menu
-// is built, before the renderer has loaded) is already correct.
+// box (File > Settings > Preferences). Persisted in the same settings.json
+// as the API key so it's remembered between sessions.
 function getShowTagTypeLabel() {
   return readSettingsFile().showTagTypeLabel !== false; // default on
 }
@@ -336,10 +335,8 @@ function setShowTagTypeLabel(value) {
 }
 
 // Whether finishing an AI batch operation (e.g. "Fix All Actual Text") pops
-// a desktop notification / plays a chime (File > Settings > Notifications).
-// Persisted the same way as showTagTypeLabel above, for the same reason -
-// the menu checkboxes need their initial `checked` state before the
-// renderer has loaded.
+// a desktop notification / plays a chime (File > Settings > Preferences).
+// Persisted the same way as showTagTypeLabel above.
 function getNotifyDesktop() {
   return readSettingsFile().notifyDesktop !== false; // default on
 }
@@ -549,43 +546,7 @@ function buildAppMenu() {
           submenu: [
             { label: 'API Key…', click: (_item, win) => sendToWindow(win, 'menu:settings') },
             { type: 'separator' },
-            {
-              label: 'Appearance',
-              submenu: [
-                {
-                  label: 'Show Tag Type Label on Highlight',
-                  type: 'checkbox',
-                  checked: getShowTagTypeLabel(),
-                  click: (item, win) => {
-                    setShowTagTypeLabel(item.checked);
-                    sendToWindow(win, 'menu:show-tag-type-label', item.checked);
-                  },
-                },
-              ],
-            },
-            {
-              label: 'Notifications',
-              submenu: [
-                {
-                  label: 'Desktop Notification When AI Batch Finishes',
-                  type: 'checkbox',
-                  checked: getNotifyDesktop(),
-                  click: (item, win) => {
-                    setNotifyDesktop(item.checked);
-                    sendToWindow(win, 'menu:notify-desktop', item.checked);
-                  },
-                },
-                {
-                  label: 'Play Chime When AI Batch Finishes',
-                  type: 'checkbox',
-                  checked: getNotifyChime(),
-                  click: (item, win) => {
-                    setNotifyChime(item.checked);
-                    sendToWindow(win, 'menu:notify-chime', item.checked);
-                  },
-                },
-              ],
-            },
+            { label: 'Preferences…', click: (_item, win) => sendToWindow(win, 'menu:preferences') },
           ],
         },
         { type: 'separator' },
@@ -925,9 +886,21 @@ ipcMain.handle('settings:set-custom-provider-config', async (_event, { providerI
 });
 
 ipcMain.handle('settings:get-show-tag-type-label', async () => getShowTagTypeLabel());
+ipcMain.handle('settings:set-show-tag-type-label', async (_event, { value }) => {
+  setShowTagTypeLabel(value);
+  return true;
+});
 
 ipcMain.handle('settings:get-notify-desktop', async () => getNotifyDesktop());
+ipcMain.handle('settings:set-notify-desktop', async (_event, { value }) => {
+  setNotifyDesktop(value);
+  return true;
+});
 ipcMain.handle('settings:get-notify-chime', async () => getNotifyChime());
+ipcMain.handle('settings:set-notify-chime', async (_event, { value }) => {
+  setNotifyChime(value);
+  return true;
+});
 
 // --- AI (Fix with AI) ------------------------------------------------------
 //

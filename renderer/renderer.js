@@ -219,30 +219,48 @@ el.btnRevertAiFix.addEventListener('click', async () => {
   }
 });
 
-// File > Settings > Appearance > Show Tag Type Label - persisted in
-// settings.json via main.js (not localStorage) so the native menu
-// checkbox's `checked` state is already correct at startup, before the
-// renderer has loaded; this just brings the renderer's copy in line with
-// whatever that was, then keeps it in sync when the checkbox is toggled.
+// File > Settings > Preferences > Appearance/Notifications - persisted in
+// settings.json via main.js (not localStorage) so it's remembered between
+// sessions; this loads the renderer's copy at startup and the Preferences
+// dialog below keeps it in sync when the user changes it.
 window.api.getShowTagTypeLabel().then((value) => {
   state.showTagTypeLabel = value;
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
 });
 
-window.api.onMenuShowTagTypeLabel((_event, checked) => {
-  state.showTagTypeLabel = checked;
-  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
-});
-
-// File > Settings > Notifications - same persisted-in-main.js pattern as
-// Show Tag Type Label above.
 window.api.getNotifyDesktop().then((value) => { state.notifyDesktop = value; });
 
 window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
 
-window.api.onMenuNotifyDesktop((_event, checked) => { state.notifyDesktop = checked; });
+window.api.onMenuPreferences(() => {
+  el.preferencesShowTagTypeLabel.checked = state.showTagTypeLabel;
+  el.preferencesNotifyDesktop.checked = state.notifyDesktop;
+  el.preferencesNotifyChime.checked = state.notifyChime;
+  el.preferencesDialog.showModal();
+});
 
-window.api.onMenuNotifyChime((_event, checked) => { state.notifyChime = checked; });
+el.btnClosePreferences.addEventListener('click', () => el.preferencesDialog.close());
+
+el.preferencesDialog.addEventListener('click', (e) => {
+  if (e.target === el.preferencesDialog) el.preferencesDialog.close();
+});
+
+el.preferencesShowTagTypeLabel.addEventListener('change', () => {
+  const checked = el.preferencesShowTagTypeLabel.checked;
+  state.showTagTypeLabel = checked;
+  window.api.setShowTagTypeLabel(checked);
+  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+});
+
+el.preferencesNotifyDesktop.addEventListener('change', () => {
+  state.notifyDesktop = el.preferencesNotifyDesktop.checked;
+  window.api.setNotifyDesktop(state.notifyDesktop);
+});
+
+el.preferencesNotifyChime.addEventListener('change', () => {
+  state.notifyChime = el.preferencesNotifyChime.checked;
+  window.api.setNotifyChime(state.notifyChime);
+});
 
 window.api.onMenuShowAtChanges(async (_event, checked) => {
   state.showAtChanges = checked;

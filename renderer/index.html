@@ -511,6 +511,30 @@
     </form>
   </dialog>
 
+  <dialog id="preferences-dialog" class="settings-dialog">
+    <div class="shortcuts-header">
+      <h2>Preferences</h2>
+      <button type="button" id="btn-close-preferences" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <div class="settings-body">
+      <p class="settings-hint">Appearance</p>
+      <label class="field field-checkbox">
+        <input type="checkbox" id="preferences-show-tag-type-label" />
+        <span>Show tag type label on highlight</span>
+      </label>
+
+      <p class="settings-hint">Notifications</p>
+      <label class="field field-checkbox">
+        <input type="checkbox" id="preferences-notify-desktop" />
+        <span>Desktop notification when AI batch finishes</span>
+      </label>
+      <label class="field field-checkbox">
+        <input type="checkbox" id="preferences-notify-chime" />
+        <span>Play chime when AI batch finishes</span>
+      </label>
+    </div>
+  </dialog>
+
   <dialog id="find-replace-dialog" class="find-replace-dialog">
     <div class="shortcuts-header">
       <h2>Find/Replace</h2>

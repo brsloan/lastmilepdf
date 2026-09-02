@@ -79,7 +79,7 @@ function playChime() {
   }
 }
 
-// File > Settings > Notifications - called once an AI batch operation (e.g.
+// File > Settings > Preferences - called once an AI batch operation (e.g.
 // "Fix All Actual Text") finishes, success or failure alike, so the user
 // can tell it's done without having to watch the window.
 export function notifyAiBatchComplete(message) {

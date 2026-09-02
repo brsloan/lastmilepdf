@@ -356,24 +356,27 @@ const api = {
   /** @param {() => void} callback */
   onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
 
-  // File > Settings > Appearance > Show Tag Type Label - persisted in
+  /** @param {() => void} callback */
+  onMenuPreferences: (callback) => ipcRenderer.on('menu:preferences', callback),
+
+  // File > Settings > Preferences > Show Tag Type Label - persisted in
   // settings.json (see main.js) so it's remembered between sessions.
   /** @returns {Promise<boolean>} */
   getShowTagTypeLabel: () => ipcRenderer.invoke('settings:get-show-tag-type-label'),
-  /** @param {(event: unknown, value: boolean) => void} callback */
-  onMenuShowTagTypeLabel: (callback) => ipcRenderer.on('menu:show-tag-type-label', callback),
+  /** @param {boolean} value @returns {Promise<void>} */
+  setShowTagTypeLabel: (value) => ipcRenderer.invoke('settings:set-show-tag-type-label', { value }),
 
-  // File > Settings > Notifications - desktop notification / chime when an
+  // File > Settings > Preferences - desktop notification / chime when an
   // AI batch operation (e.g. "Fix All Actual Text") finishes. Persisted in
   // settings.json the same way as Show Tag Type Label above.
   /** @returns {Promise<boolean>} */
   getNotifyDesktop: () => ipcRenderer.invoke('settings:get-notify-desktop'),
+  /** @param {boolean} value @returns {Promise<void>} */
+  setNotifyDesktop: (value) => ipcRenderer.invoke('settings:set-notify-desktop', { value }),
   /** @returns {Promise<boolean>} */
   getNotifyChime: () => ipcRenderer.invoke('settings:get-notify-chime'),
-  /** @param {(event: unknown, value: boolean) => void} callback */
-  onMenuNotifyDesktop: (callback) => ipcRenderer.on('menu:notify-desktop', callback),
-  /** @param {(event: unknown, value: boolean) => void} callback */
-  onMenuNotifyChime: (callback) => ipcRenderer.on('menu:notify-chime', callback),
+  /** @param {boolean} value @returns {Promise<void>} */
+  setNotifyChime: (value) => ipcRenderer.invoke('settings:set-notify-chime', { value }),
 
   /**
    * @param {string} text

@@ -76,9 +76,9 @@ export const state = {
   showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
   proofreadMode: false, // View > Proofread toggle - see proofread.js
   pendingPulledActualTextNodeId: null, // nodeId whose Actual Text field currently shows an unconfirmed Proofread Mode content-pull (real value, but not yet applied) - see updateActualTextPlaceholder() in details.js
-  showTagTypeLabel: true, // File > Settings > Appearance > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
-  notifyDesktop: true, // File > Settings > Notifications > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
-  notifyChime: true, // File > Settings > Notifications > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below
+  showTagTypeLabel: true, // File > Settings > Preferences > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
+  notifyDesktop: true, // File > Settings > Preferences > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
+  notifyChime: true, // File > Settings > Preferences > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below
   atChangeFlags: new Map(), // nodeId -> { original, suggested } - tags whose Actual Text no longer matches their pulled content text, found by the Show AT Changes sweep (computeAtChangeFlags()). Same shape as aiProposals so it shares renderActualTextDiff()/pruneStaleAiProposals(), but recomputed from the file itself rather than from in-session state, so it still works after a save/reopen.
   atChangeSweepToken: 0, // invalidates an in-flight computeAtChangeFlags() sweep superseded by a newer one (toggle off/on again, or a fresh document)
 };

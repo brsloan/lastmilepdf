@@ -1543,6 +1543,21 @@ body.busy-cursor * {
   margin-top: 4px;
 }
 
+/* Preferences dialog checkbox rows - reuses .settings-dialog/.settings-body/
+   .settings-hint above for the shell, this just lays a checkbox and its
+   label out horizontally instead of .field's default stacked layout. */
+.field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-checkbox input[type='checkbox'] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
 /* --- find/replace dialog ---
    Reuses .shortcuts-header for the title bar and .settings-body/
    .settings-actions/.settings-hint from the settings dialog above - it's
