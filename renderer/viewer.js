@@ -201,6 +201,37 @@ function renderHighlightRects(boxes, viewport) {
   }
 }
 
+// Proofread Mode (View > Proofread) needs to scroll a highlight up to line
+// level with the Actual Text field even when that highlight sits right at
+// the page's own top/bottom edge - past what .canvas-wrap would otherwise
+// let it scroll to, since normally there's nothing beyond the page to
+// scroll into. #canvas-scroll-spacer-top/-bottom (zero height outside
+// Proofread Mode - see the CSS) exist purely to give that extra room,
+// grown to a full pane's height so there's always enough regardless of
+// where on the page the highlight or the field happen to sit.
+//
+// The top spacer shifts everything below it (the canvas included) down the
+// moment its height grows from zero, which would otherwise yank whatever
+// the user is currently looking at down the same distance - so growing or
+// shrinking it compensates .canvas-wrap's own scrollTop by the same amount
+// to keep the current view visually still. The bottom spacer needs no such
+// compensation, since nothing else sits after it in the scroll content.
+//
+// The height must be applied BEFORE the scrollTop compensation, not after:
+// assigning scrollTop is clamped to the scrollable range that exists at
+// that exact moment, so compensating first (against the old, still-small
+// range) and only then growing the spacer would silently clamp the
+// compensation away instead of applying it.
+export function setProofreadScrollSpacersActive(active) {
+  const desired = active ? Math.round(el.canvasWrap.clientHeight) : 0;
+  const previousTopHeight = el.canvasScrollSpacerTop.offsetHeight;
+  el.canvasScrollSpacerTop.style.height = `${desired}px`;
+  el.canvasScrollSpacerBottom.style.height = `${desired}px`;
+  if (previousTopHeight !== desired) {
+    el.canvasWrap.scrollTop += desired - previousTopHeight;
+  }
+}
+
 // Scrolls .canvas-wrap purely vertically so `activeBox`'s top edge lands at
 // the same viewport y-coordinate as the Actual Text field's top edge. Both
 // elements' getBoundingClientRect() are already in the same (viewport)
@@ -329,6 +360,14 @@ export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
       const role = state.nodesById.get(id)?.node.role;
       if (rect) boxes.push({ rect, active: id === nodeId, isFigure: categoryForRole(role) === 'figure', role });
     }
+    // Must run BEFORE syncHighlightLayerBounds() below: growing/shrinking
+    // the top spacer shoves the canvas itself down/up within .canvas-wrap's
+    // normal flow, so reading the canvas's position for the highlight
+    // layer first would leave that layer pinned to where the canvas *was*
+    // - exactly what made a freshly-grown spacer leave the highlight
+    // floating way above the (now pushed-down) page until the next
+    // selection resynced it from scratch.
+    setProofreadScrollSpacersActive(state.proofreadMode);
     syncHighlightLayerBounds();
     renderHighlightRects(boxes, viewport);
   } catch (err) {

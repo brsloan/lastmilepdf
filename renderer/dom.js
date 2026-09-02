@@ -44,6 +44,8 @@ export const el = {
   statusBar: asElement('status-bar'),
   noStructBanner: asElement('no-struct-banner'),
   canvasWrap: asElement('canvas-wrap'),
+  canvasScrollSpacerTop: asElement('canvas-scroll-spacer-top'),
+  canvasScrollSpacerBottom: asElement('canvas-scroll-spacer-bottom'),
   canvas: asCanvas('pdf-canvas'),
   viewerPlaceholder: asElement('viewer-placeholder'),
   btnPrevPage: asButton('btn-prev-page'),

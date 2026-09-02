@@ -320,9 +320,22 @@ body.proofread-mode .tree-pane {
   overflow: auto;
   background: #131418;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 20px;
+}
+
+/* Zero-height outside Proofread Mode, so normal browsing can't scroll past
+   the page's own edges at all - unchanged from before this existed. Grown
+   to a full pane's height only while proofreading (see
+   setProofreadScrollSpacersActive() in viewer.js) so a highlight right at
+   the top/bottom edge of the page still has room to scroll level with the
+   Actual Text field, which the page's own content wouldn't otherwise allow. */
+.canvas-scroll-spacer {
+  flex: none;
+  width: 1px;
+  height: 0;
+  pointer-events: none;
 }
 
 #pdf-canvas {

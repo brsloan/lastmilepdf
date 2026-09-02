@@ -12,10 +12,16 @@ import { el, selectableRows } from './dom.js';
 import { refreshDetailsForSelection } from './details.js';
 import { state } from './state.js';
 import { selectNode } from './tree-view.js';
+import { setProofreadScrollSpacersActive } from './viewer.js';
 
 export function setProofreadMode(enabled) {
   state.proofreadMode = enabled;
   document.body.classList.toggle('proofread-mode', enabled);
+  // Turning proofreading off drops straight back to the normal "can't
+  // scroll past the page's own edges" preview - see
+  // setProofreadScrollSpacersActive() in viewer.js. Turning it on grows
+  // them lazily, the next time a selection is actually aligned.
+  if (!enabled) setProofreadScrollSpacersActive(false);
   if (state.selectedNodeId) refreshDetailsForSelection();
 }
 
