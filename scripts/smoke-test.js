@@ -124,6 +124,11 @@ function firstByRole(tree, role) {
   return byRole(tree, role)[0] || null;
 }
 
+/** Bare marked-content leaves - the tree's actual page content, not tags. */
+function contentLeaves(tree) {
+  return allNodes(tree).filter((n) => n.type === 'content');
+}
+
 function findById(tree, id) {
   return allNodes(tree).find((n) => n.id === id) || null;
 }
@@ -416,6 +421,55 @@ async function editTests(fixture) {
     await saveAndReopen(doc.docId, 'figure', (reopened) => {
       assert(byRole(reopened.tree, 'Figure').length > byRole(doc.tree, 'Figure').length,
         'the new figure is missing from the saved file');
+    });
+  }));
+
+  // split_leaf() is the only command that rewrites a page's *content stream*
+  // rather than just the struct tree, so it is the one edit that can leave a
+  // page unparseable rather than merely mistagged - and the reopen below is
+  // the only thing that would notice.
+  await test('splitting a content leaf divides its text and survives save', () => withDoc(fixture, async (doc) => {
+    // Split on an interior space: a space is always a font code of its own, so
+    // its offset is guaranteed to be one of the code boundaries split_leaf()
+    // insists on, with real text left on both sides.
+    let target = null;
+    for (const leaf of contentLeaves(doc.tree)) {
+      const { text } = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id });
+      if (!text) continue;
+      const at = text.indexOf(' ', 1);
+      if (at > 0 && at < text.length - 1) { target = { id: leaf.id, text, at }; break; }
+    }
+    if (!target) skip('no splittable content leaf in this fixture');
+
+    const leavesBefore = contentLeaves(doc.tree).length;
+    const result = await worker.call('split_leaf', {
+      docId: doc.docId, nodeId: target.id, splitIndex: target.at,
+    });
+
+    assertEqual(result.newNodeIds.length, 2, 'split did not return two leaves');
+    assert(result.pdfBase64, 'split returned no refreshed PDF bytes for the preview');
+    assertEqual(contentLeaves(result.tree).length, leavesBefore + 1,
+      'split did not add exactly one content leaf');
+
+    // The halves must read back as the original text, cut at the cursor - the
+    // whole point is that the text the user placed a cursor in is exactly what
+    // gets divided, with nothing dropped or duplicated at the seam.
+    const [idA, idB] = result.newNodeIds;
+    const a = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: idA });
+    const b = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: idB });
+    assertEqual(a.text, target.text.slice(0, target.at), 'first half lost text');
+    assertEqual(b.text, target.text.slice(target.at), 'second half lost text');
+
+    await saveAndReopen(doc.docId, 'split-leaf', async (reopened) => {
+      assertEqual(contentLeaves(reopened.tree).length, leavesBefore + 1,
+        'the split did not survive save and reopen');
+      // Ids are reassigned on every rebuild, but a save/reopen round trip
+      // rebuilds the same tree shape, so the split's own ids still name the
+      // same two leaves.
+      const reA = await worker.call('get_leaf_text', { docId: reopened.docId, nodeId: idA });
+      const reB = await worker.call('get_leaf_text', { docId: reopened.docId, nodeId: idB });
+      assertEqual(reA.text, target.text.slice(0, target.at), 'first half is wrong in the saved file');
+      assertEqual(reB.text, target.text.slice(target.at), 'second half is wrong in the saved file');
     });
   }));
 }

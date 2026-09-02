@@ -13,9 +13,9 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { convertTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
 import { isDescendant, walkTree } from './tree-index.js';
-import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, toggleNodeCollapsed } from './tree-view.js';
+import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { renderVerifyResults } from './verify.js';
-import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // renderer.js
@@ -264,8 +264,8 @@ window.api.onMenuShowAtChanges(async (_event, checked) => {
 
 // View > Proofread - see proofread.js for the layout/field-hiding toggle
 // itself and the tag-to-tag stepping the keydown handlers below drive.
-window.api.onMenuProofread((_event, checked) => {
-  setProofreadMode(checked);
+window.api.onMenuProofread(async (_event, checked) => {
+  await setProofreadMode(checked);
   setStatus(checked
     ? 'Proofread Mode on - Page Down/Up (or Up/Down at the edges of Actual Text) steps through tags.'
     : 'Proofread Mode off.');
@@ -344,6 +344,15 @@ el.canvas.addEventListener('click', async (e) => {
 
 window.addEventListener('resize', () => {
   if (state.pdfDoc) syncHighlightLayerBounds();
+  // Both spacers are sized from their pane's clientHeight at the moment they
+  // grow, so a resize leaves them measured against the old layout - too short
+  // to still align a tag sitting at the very top/bottom, until the next
+  // selection happens to regrow them. Re-measure now instead; each call also
+  // compensates its pane's scrollTop by the delta, so the view stays put.
+  if (state.proofreadMode) {
+    setProofreadScrollSpacersActive(true);
+    setTagTreeScrollSpacersActive(true);
+  }
 });
 
 el.detailsForm.addEventListener('input', (e) => {
@@ -428,6 +437,7 @@ el.btnPullContent.addEventListener('click', async () => {
   try {
     setStatus('Pulling content text…');
     const text = await pullContentText(nodeId);
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = text;
     setStatus(text ? 'Pulled content text into Actual Text.' : 'No content text found in this tag.');
   } catch (err) {

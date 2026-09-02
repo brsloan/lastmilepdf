@@ -11,6 +11,7 @@ import { formatDuration } from './util.js';
 let aiBatchProgressTimerHandle = null;
 
 export function showAiBatchProgress() {
+  clearInterval(aiBatchProgressTimerHandle); // a second show without a hide would otherwise strand the first ticker
   el.aiBatchProgressEstimate.textContent = '(This may take a few minutes…)';
   const startedAt = Date.now();
   el.aiBatchProgressTimer.textContent = formatDuration(0);

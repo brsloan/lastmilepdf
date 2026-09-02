@@ -2776,16 +2776,28 @@ def _leaf_page_and_mcid(doc, node_id):
     return page_index, mcid
 
 
-def _decode_leaf(doc, node_id):
+def _decode_leaf(doc, node_id, *, for_write=False):
     """Full read pipeline shared by get_leaf_text() and split_leaf(): locate
     `node_id`'s marked-content span on its page and decode every
     text-showing operator inside it. Returns (page, page_index, block_start,
     block_end, instructions, codes) on success. Raises ValueError - with a
     message safe to show the user as-is - the instant anything can't be
-    decoded with full confidence; see the section docstring above."""
+    decoded with full confidence; see the section docstring above.
+
+    `for_write` coalesces an array-valued /Pg /Contents down to the single
+    stream split_leaf() needs to write its rewritten operators back into.
+    That is a document mutation, so it stays off by default: get_leaf_text()
+    runs on every content-leaf *selection*, and coalescing there rewrote the
+    page's content structure behind the user's back - outside any undo
+    snapshot, without marking the document dirty, and (since it happened
+    before split_leaf()'s own _push_undo_snapshot) with no way to undo back
+    to the original array form. Reading needs no coalesce of its own:
+    parse_content_stream() already treats a page's array /Contents as one
+    coalesced stream, without touching the document."""
     page_index, mcid = _leaf_page_and_mcid(doc, node_id)
     page = doc["pdf"].pages[page_index]
-    page.contents_coalesce()
+    if for_write:
+        page.contents_coalesce()
     try:
         instructions = pikepdf.parse_content_stream(page)
     except Exception as exc:
@@ -2975,7 +2987,7 @@ def split_leaf(doc_id, node_id, split_index):
     if node_id not in doc["elements"]:
         raise ValueError(f"Unknown node id: {node_id}")
 
-    page, page_index, block_start, block_end, instructions, codes = _decode_leaf(doc, node_id)
+    page, page_index, block_start, block_end, instructions, codes = _decode_leaf(doc, node_id, for_write=True)
 
     boundaries = [0]
     for c in codes:

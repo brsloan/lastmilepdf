@@ -9,12 +9,17 @@
 // edge-of-line Up/Down arrows drive (both wired up in renderer.js).
 
 import { el, selectableRows } from './dom.js';
-import { refreshDetailsForSelection } from './details.js';
+import { flushPendingLiveApply, refreshDetailsForSelection } from './details.js';
 import { state } from './state.js';
 import { renderTree, selectNode, setTagTreeScrollSpacersActive } from './tree-view.js';
 import { setProofreadScrollSpacersActive } from './viewer.js';
 
-export function setProofreadMode(enabled) {
+export async function setProofreadMode(enabled) {
+  // Turning the mode on re-selects (below), and turning it off re-renders -
+  // either way a debounced edit still sitting in the Actual Text field has to
+  // be committed first, while el.fieldNodeId still names the tag it belongs
+  // to. See flushPendingLiveApply() in details.js.
+  await flushPendingLiveApply();
   state.proofreadMode = enabled;
   document.body.classList.toggle('proofread-mode', enabled);
   // The dropdown filter (All/Figures/Headings/Table) has no meaning once
@@ -69,10 +74,18 @@ function findProofreadNeighborRow(direction) {
 // Selects the next/previous tag and drops the caret into its Actual Text
 // field - at the end when stepping backward (picking up reading where the
 // previous tag left off) or the start when stepping forward.
-export function stepProofreadTag(direction, caretTo) {
+export async function stepProofreadTag(direction, caretTo) {
   const row = findProofreadNeighborRow(direction);
   if (!row) return;
-  selectNode(row.dataset.nodeId);
+  // Read the target id off the row BEFORE flushing: the flush re-renders the
+  // tree, detaching every row element currently in the DOM. The id itself
+  // survives, since a rebuild only reassigns ids when the tree's *shape*
+  // changes and applyDetailsChange() only ever edits attributes (see the note
+  // above pruneStaleAiProposals() in actual-text.js).
+  const targetId = row.dataset.nodeId;
+  await flushPendingLiveApply();
+  if (!state.nodesById.has(targetId)) return;
+  selectNode(targetId);
   el.fieldActualText.focus();
   const pos = caretTo === 'end' ? el.fieldActualText.value.length : 0;
   el.fieldActualText.setSelectionRange(pos, pos);

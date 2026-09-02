@@ -44,14 +44,66 @@ export function collectTargetBBoxes(nodeId) {
   return targets;
 }
 
+// Concurrent first-time builds of the same page's cache entry, deduped.
+//
+// The value caches below only ever hold *settled* results, so N callers that
+// all miss at the same moment each start their own build - and the Show AT
+// Changes sweep does exactly that, firing every candidate's pull at once on
+// purpose (see computeAtChangeFlags() in actual-text.js). A document with a
+// hundred tagged elements on a handful of pages was paying for a hundred
+// getTextContent()/getOperatorList() parses instead of one per page, which
+// ate most of what parallelizing the sweep was supposed to buy.
+//
+// Keyed by kind + page number, and dropped as soon as a build settles - from
+// then on the value cache answers directly. A build that throws caches
+// nothing and leaves no entry behind, so the next caller retries, same as
+// before.
+const inFlightBuilds = new Map();
+
+// Bumped by clearPageCaches() so a build started against the outgoing
+// document can't write its result into the incoming document's cache: these
+// are keyed by page *number*, with nothing in the key saying which file the
+// page came from.
+let cacheGeneration = 0;
+
+function dedupePageBuild(kind, pageNumber, valueCache, build) {
+  const key = `${kind}:${pageNumber}`;
+  const existing = inFlightBuilds.get(key);
+  if (existing) return existing;
+  const generation = cacheGeneration;
+  const promise = (async () => {
+    try {
+      const value = await build();
+      if (generation === cacheGeneration) valueCache.set(pageNumber, value);
+      return value;
+    } finally {
+      if (inFlightBuilds.get(key) === promise) inFlightBuilds.delete(key);
+    }
+  })();
+  inFlightBuilds.set(key, promise);
+  return promise;
+}
+
+// Drops every per-page cache derived from the document being released, and
+// invalidates any build still in flight against it. Called wherever a
+// document is swapped out or closed - see swapPdfDocument() in viewer.js and
+// performClose() in doc-io.js.
+export function clearPageCaches() {
+  cacheGeneration += 1;
+  inFlightBuilds.clear();
+  state.textContentCache.clear();
+  state.mcidTextCache.clear();
+  state.mcidGraphicsCache.clear();
+}
+
 export async function getPageTextContent(pageNumber) {
   if (state.textContentCache.has(pageNumber)) return state.textContentCache.get(pageNumber);
-  const page = await state.pdfDoc.getPage(pageNumber);
-  const textContent = await page.getTextContent({ includeMarkedContent: true });
-  const viewport = page.getViewport({ scale: PAGE_SCALE });
-  const entry = { textContent, viewport };
-  state.textContentCache.set(pageNumber, entry);
-  return entry;
+  return dedupePageBuild('text', pageNumber, state.textContentCache, async () => {
+    const page = await state.pdfDoc.getPage(pageNumber);
+    const textContent = await page.getTextContent({ includeMarkedContent: true });
+    const viewport = page.getViewport({ scale: PAGE_SCALE });
+    return { textContent, viewport };
+  });
 }
 
 // Builds a page's mcid -> text lookup once (cached) rather than re-walking
@@ -59,6 +111,10 @@ export async function getPageTextContent(pageNumber) {
 // walk instead of paying O(items) per node.
 export async function getPageMcidTextMap(pageNumber) {
   if (state.mcidTextCache.has(pageNumber)) return state.mcidTextCache.get(pageNumber);
+  return dedupePageBuild('mcidText', pageNumber, state.mcidTextCache, async () => buildPageMcidTextMap(pageNumber));
+}
+
+async function buildPageMcidTextMap(pageNumber) {
   const { textContent } = await getPageTextContent(pageNumber);
   const map = new Map();
   const mcidStack = [];
@@ -77,7 +133,6 @@ export async function getPageMcidTextMap(pageNumber) {
     map.set(currentMcid, existing + item.str + (item.hasEOL ? '\n' : ''));
   }
   for (const [mcid, text] of map) map.set(mcid, text.trim());
-  state.mcidTextCache.set(pageNumber, map);
   return map;
 }
 
@@ -98,6 +153,10 @@ export async function getPageMcidTextMap(pageNumber) {
 // approximations.
 export async function getPageMcidGraphicsInfo(pageNumber) {
   if (state.mcidGraphicsCache.has(pageNumber)) return state.mcidGraphicsCache.get(pageNumber);
+  return dedupePageBuild('graphics', pageNumber, state.mcidGraphicsCache, async () => buildPageMcidGraphicsInfo(pageNumber));
+}
+
+async function buildPageMcidGraphicsInfo(pageNumber) {
   const page = await state.pdfDoc.getPage(pageNumber);
   const viewport = page.getViewport({ scale: PAGE_SCALE });
   const { fnArray, argsArray } = await page.getOperatorList();
@@ -247,9 +306,7 @@ export async function getPageMcidGraphicsInfo(pageNumber) {
     }
   }
 
-  const info = { imageRects, vectorRects, vectorMcids };
-  state.mcidGraphicsCache.set(pageNumber, info);
-  return info;
+  return { imageRects, vectorRects, vectorMcids };
 }
 
 // Merges image and vector-path rects into one mcid -> rect[] lookup, for

@@ -7,6 +7,7 @@ import { computeAtChangeFlags } from './actual-text.js';
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails } from './details.js';
 import { el } from './dom.js';
+import { clearPageCaches } from './page-content.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
 import { findDocumentNode } from './tree-index.js';
@@ -24,6 +25,19 @@ async function confirmDiscardChanges(detail) {
   if (choice === 'cancel') return false;
   if (choice === 'save') return performSave();
   return true;
+}
+
+// Everything keyed by node id that outlives a single tree rebuild but must
+// NOT outlive the document itself. Node ids are a per-document depth-first
+// counter (see _rebuild_registry() in tag_worker.py), so an id from the
+// outgoing document names a completely unrelated tag in the incoming one -
+// leaving these in place is what had a freshly opened PDF come up with an
+// apparently random scatter of expanded/collapsed rows inherited from the
+// last one.
+function resetPerDocumentNodeState() {
+  state.collapseOverrides.clear();
+  state.findReplaceLastMatchId = null;
+  state.pendingPulledActualTextNodeId = null;
 }
 
 export async function performOpen() {
@@ -66,6 +80,8 @@ export async function performOpen() {
     stopWalking();
     state.aiProposals = new Map(); // ids from the outgoing document don't carry over
     state.atChangeFlags = new Map(); // stale sweep results for the outgoing document
+    state.atChangeSweepToken += 1;   // invalidate any per-node flag refresh still in flight for the outgoing document
+    resetPerDocumentNodeState();
 
     el.noStructBanner.hidden = !!opened.hasStructTree;
     state.docInfo = opened.docInfo || { title: null, author: null };
@@ -189,12 +205,12 @@ export async function performClose() {
   state.docInfo = { title: null, author: null };
   state.aiProposals = new Map();
   state.atChangeFlags = new Map();
+  state.atChangeSweepToken += 1;
+  resetPerDocumentNodeState();
   state.selectedBookmarkId = null;
   state.pageCount = 0;
   state.currentPage = 1;
-  state.textContentCache.clear();
-  state.mcidTextCache.clear();
-  state.mcidGraphicsCache.clear();
+  clearPageCaches();
 
   closeDetails();
   applyFreshTree(null);

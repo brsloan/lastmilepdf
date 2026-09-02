@@ -267,6 +267,27 @@ export function scheduleLiveApply() {
   liveApplyTimer = setTimeout(applyDetailsChange, LIVE_APPLY_DEBOUNCE_MS);
 }
 
+// Commits a debounced edit that hasn't fired yet, for callers about to move
+// the selection while the field the user typed into keeps focus - Proofread
+// Mode's tag-to-tag stepping (see proofread.js) is the case this exists for.
+// Normal navigation blurs the field, so the form's 'change' listener commits
+// first and there's nothing pending by the time the selection moves; keeping
+// focus skips that entirely, leaving the timer as the only save path - and by
+// the time it fires, refreshDetailsForSelection() has already replaced the
+// field's contents with the NEXT tag's, so the edit is applied to nothing and
+// silently lost.
+//
+// Gated on a timer actually being pending rather than always calling through:
+// applyDetailsChange() re-selects the node in el.fieldNodeId on its way out,
+// which for a content-leaf selection (the form is hidden, but the field still
+// holds the last *element* selected - see refreshDetailsForSelection()) would
+// yank the selection off the leaf. A pending timer can only exist when the
+// form is visible and the user typed into it, so this can't fire spuriously.
+export async function flushPendingLiveApply() {
+  if (!liveApplyTimer) return;
+  await applyDetailsChange();
+}
+
 // True if `changes` would leave the tag exactly as it already is. Every
 // mutating worker call costs an undo snapshot - a full serialization of the
 // PDF, see _push_undo_snapshot() in tag_worker.py - so applying a form

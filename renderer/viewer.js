@@ -12,7 +12,7 @@
 
 import { pdfjsLib } from './pdfjs.js';
 import { el } from './dom.js';
-import { collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent } from './page-content.js';
+import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent } from './page-content.js';
 import { PAGE_SCALE, state } from './state.js';
 import { base64ToUint8Array, categoryForRole, extractMcidFromItemId, pointInRect, unionRects } from './util.js';
 
@@ -400,14 +400,16 @@ async function swapPdfDocument(base64Data) {
     state.pdfDoc = null;
     previous.destroy().catch(() => {}); // best-effort; never block the new load
   }
+  // Dropped here, with the document they describe, rather than after the new
+  // one is adopted below: clearPageCaches() also invalidates page reads still
+  // in flight against the outgoing document, and those have to be cut loose
+  // before anything can start reading the incoming one.
+  clearPageCaches();
 
   const bytes = base64ToUint8Array(base64Data);
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   state.pdfDoc = await loadingTask.promise;
   state.pageCount = state.pdfDoc.numPages;
-  state.textContentCache.clear();
-  state.mcidTextCache.clear();
-  state.mcidGraphicsCache.clear();
 }
 
 export async function loadPdfPreview(base64Data) {

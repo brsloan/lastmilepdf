@@ -149,7 +149,13 @@ export async function updateAtChangeFlagForNode(nodeId) {
     state.atChangeFlags.delete(nodeId);
     return;
   }
+  // Same invalidation computeAtChangeFlags() uses: a full sweep replaces
+  // state.atChangeFlags wholesale, and opening/closing a document bumps the
+  // token too (see doc-io.js), so a pull that outlives either of those must
+  // not write its now-meaningless verdict into the fresh map.
+  const token = state.atChangeSweepToken;
   const pulled = (await pullContentText(nodeId)) || '';
+  if (token !== state.atChangeSweepToken) return;
   if (pulled !== node.actualText) {
     state.atChangeFlags.set(nodeId, { original: pulled, suggested: node.actualText });
   } else {
