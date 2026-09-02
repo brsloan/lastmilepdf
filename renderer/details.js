@@ -9,6 +9,7 @@
 
 import { updateActualTextReviewUI, updateAtChangeFlagForNode } from './actual-text.js';
 import { el } from './dom.js';
+import { renderListPreview } from './list-preview.js';
 import { hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { refreshSplitContentPanel, resetSplitContentPanel } from './split-content.js';
@@ -156,20 +157,29 @@ export function refreshDetailsForSelection() {
   setFieldValueUnlessFocused(el.fieldColSpan, allCell && node.colSpan != null ? node.colSpan : '', sameNode);
   setFieldValueUnlessFocused(el.fieldRowSpan, allCell && node.rowSpan != null ? node.rowSpan : '', sameNode);
 
-  // A Table tag's Actual Text is swapped out for a generated read-only HTML
-  // preview of its own row/cell structure - more useful here than a free-
-  // text field, since what actually matters for a table is its shape (see
-  // renderTablePreview()). The underlying field/value is left untouched
-  // (just hidden) so Apply still round-trips whatever actualText it had.
+  // A Table or List tag's Actual Text is swapped out for a generated
+  // read-only HTML preview of its own structure - more useful here than a
+  // free-text field, since what actually matters is the shape (a table's
+  // rows/cells, a list's items - see renderTablePreview()/renderListPreview()).
+  // The underlying field/value is left untouched (just hidden) so Apply
+  // still round-trips whatever actualText it had.
   const isTable = !multi && node.role === 'Table';
-  el.fieldActualTextWrap.hidden = isTable && !state.proofreadMode;
+  const isList = !multi && node.role === 'L';
+  el.fieldActualTextWrap.hidden = (isTable || isList) && !state.proofreadMode;
   el.tablePreviewWrap.hidden = !isTable || state.proofreadMode;
+  el.listPreviewWrap.hidden = !isList || state.proofreadMode;
   el.fieldRoleLangRow.hidden = state.proofreadMode;
   if (isTable) {
     renderTablePreview(node);
   } else {
     state.tablePreviewToken += 1;
     el.tablePreviewContainer.innerHTML = '';
+  }
+  if (isList) {
+    renderListPreview(node);
+  } else {
+    state.listPreviewToken += 1;
+    el.listPreviewContainer.innerHTML = '';
   }
 
   scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
@@ -202,11 +212,14 @@ function showRootDetails(nodeId) {
   el.fieldAltWrap.hidden = true;
   el.fieldActualTextWrap.hidden = true;
   el.tablePreviewWrap.hidden = true;
+  el.listPreviewWrap.hidden = true;
   el.thSection.hidden = true;
   el.fieldScopeWrap.hidden = true;
   el.fieldRoleLangRow.hidden = false;
   state.tablePreviewToken += 1;
   el.tablePreviewContainer.innerHTML = '';
+  state.listPreviewToken += 1;
+  el.listPreviewContainer.innerHTML = '';
 
   el.btnPullContent.disabled = true;
   el.btnFixActualText.disabled = true;
@@ -248,6 +261,9 @@ export function closeDetails() {
   state.tablePreviewToken += 1; // invalidate any table-preview build still in flight
   el.btnExpandTablePreview.disabled = true;
   el.tablePreviewContainer.innerHTML = '';
+  el.listPreviewWrap.hidden = true;
+  state.listPreviewToken += 1; // invalidate any list-preview build still in flight
+  el.listPreviewContainer.innerHTML = '';
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
 }

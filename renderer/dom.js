@@ -77,6 +77,8 @@ export const el = {
   fieldDocAuthor: asInput('field-doc-author'),
   tablePreviewWrap: asElement('field-table-preview'),
   tablePreviewContainer: asElement('table-preview-container'),
+  listPreviewWrap: asElement('field-list-preview'),
+  listPreviewContainer: asElement('list-preview-container'),
   btnExpandTablePreview: asButton('btn-expand-table-preview'),
   tablePreviewDialog: asDialog('table-preview-dialog'),
   tablePreviewDialogContainer: asElement('table-preview-dialog-container'),

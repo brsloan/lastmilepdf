@@ -212,6 +212,7 @@ export interface AppState {
   // --- invalidation tokens for in-flight async work ---------------------
   highlightToken: number;
   tablePreviewToken: number;
+  listPreviewToken: number;
   actualTextPlaceholderToken: number;
   tableEditorToken: number;
   splitContentToken: number;

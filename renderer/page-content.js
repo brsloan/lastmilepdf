@@ -522,6 +522,44 @@ export async function pullCellText(cellNode) {
   return parts.join(' ');
 }
 
+// Like pullCellText(), but for the List Preview (see list-preview.js): walks
+// a single node - typically an LI's Lbl, or the parts making up its body -
+// the same "Actual Text wins, else a Figure marker, else recurse" order as
+// pullCellText(), except a nested List (role 'L') is kept as its own
+// {list: node} part instead of being flattened into text, so the caller can
+// render it as a genuine nested <ul> rather than losing its item boundaries.
+// Returns an array of parts ({text} or {list}) rather than a joined string,
+// since a body can interleave text with a nested list (e.g. an intro
+// sentence followed by sub-bullets).
+export async function pullListBodyParts(node) {
+  const parts = [];
+  async function visit(n) {
+    if (n.type === 'content') {
+      if (n.mcid !== null && n.mcid !== undefined && n.page !== null && n.page !== undefined) {
+        const text = await resolveMcidText(n.page, n.mcid);
+        if (text) parts.push({ text });
+      }
+      return;
+    }
+    if (n.role === 'L') {
+      parts.push({ list: n });
+      return;
+    }
+    const actualText = (n.actualText || '').trim();
+    if (actualText) {
+      parts.push({ text: actualText });
+      return;
+    }
+    if (n.role === 'Figure') {
+      parts.push({ text: '[Figure]' });
+      return;
+    }
+    for (const child of n.children || []) await visit(child);
+  }
+  await visit(node);
+  return parts;
+}
+
 // True when a tag has a content leaf (bare MCID, node.type === 'content')
 // directly among its children - a strong hint that Actual Text exists to
 // replace that content, whether by an automatic placeholder pull (see
