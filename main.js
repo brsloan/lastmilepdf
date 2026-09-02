@@ -614,10 +614,16 @@ function buildAppMenu() {
         { role: 'togglefullscreen' },
         { type: 'separator' },
         {
-          label: 'Proofread',
+          label: 'Proofread Mode',
           type: 'checkbox',
           checked: false,
           click: (item, win) => sendToWindow(win, 'menu:proofread', item.checked),
+        },
+        {
+          label: 'Show AT Changes',
+          type: 'checkbox',
+          checked: false,
+          click: (item, win) => sendToWindow(win, 'menu:show-at-changes', item.checked),
         },
       ],
     },
@@ -626,12 +632,6 @@ function buildAppMenu() {
       submenu: [
         { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => sendToWindow(win, 'menu:find-replace') },
         { type: 'separator' },
-        {
-          label: 'Show AT Changes',
-          type: 'checkbox',
-          checked: false,
-          click: (item, win) => sendToWindow(win, 'menu:show-at-changes', item.checked),
-        },
       ],
     },
     {
@@ -1004,6 +1004,7 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
     throw new Error(`Custom AI endpoint error (${response.status}): ${bodyText.slice(0, 500) || response.statusText}`);
   }
 
+  /** @type {any} */
   let data;
   try {
     data = await response.json();
