@@ -545,6 +545,7 @@ el.btnFixAllActualText.addEventListener('click', async () => {
     updateAiBatchProgressEstimate(await window.api.estimateAiBatchTime(JSON.stringify(requestItems).length));
     const results = await window.api.fixActualTextBatch(requestItems);
     const byId = new Map(items.map((item) => [item.id, item]));
+    /** @type {Record<string, string>} */
     const updates = {};
     const proposals = new Map();
     for (const result of results) {
