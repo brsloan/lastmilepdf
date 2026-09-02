@@ -68,8 +68,11 @@ Scope / known limitations (read this before extending):
 import base64
 import io
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 import uuid
 
 # main.js writes JSON to this process's stdin as UTF-8 (Node's default
@@ -3624,8 +3627,28 @@ def redo_edit(doc_id):
 
 
 def save_document(doc_id, path):
+    """Writes `doc` to `path`, atomically and without ever destroying the
+    last good copy: the new PDF is written to a temp file in the same
+    directory first (so a crash or full disk mid-write leaves the existing
+    file untouched), an existing file at `path` is copied to `path.bak`
+    (overwriting any previous one) only once that write has fully
+    succeeded, and the temp file then replaces `path` via os.replace, which
+    is atomic on both POSIX and Windows."""
     doc = documents[doc_id]
-    doc["pdf"].save(path)
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tagedit-save-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            doc["pdf"].save(f)
+        if os.path.exists(path):
+            shutil.copy2(path, path + ".bak")
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
     return {"savedPath": path}
 
 
