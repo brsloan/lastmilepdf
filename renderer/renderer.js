@@ -234,6 +234,8 @@ window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
 
 window.api.getExtraDeleteKeyCode().then((value) => { state.extraDeleteKeyCode = value; });
 
+window.api.getAutoSaveEnabled().then((value) => { state.autoSaveEnabled = value; });
+
 // Friendly names for the KeyboardEvent.code values a user is likely to pick
 // as their extra Delete key (see the recorder below) - falls back to
 // stripping the Key/Digit prefix off a letter/digit code, then to splitting
@@ -274,6 +276,7 @@ function isDeleteShortcut(e) {
 
 window.api.onMenuPreferences(() => {
   el.preferencesShowTagTypeLabel.checked = state.showTagTypeLabel;
+  el.preferencesAutoSave.checked = state.autoSaveEnabled;
   el.preferencesNotifyDesktop.checked = state.notifyDesktop;
   el.preferencesNotifyChime.checked = state.notifyChime;
   updateDeleteKeyDisplay();
@@ -291,6 +294,11 @@ el.preferencesShowTagTypeLabel.addEventListener('change', () => {
   state.showTagTypeLabel = checked;
   window.api.setShowTagTypeLabel(checked);
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+});
+
+el.preferencesAutoSave.addEventListener('change', () => {
+  state.autoSaveEnabled = el.preferencesAutoSave.checked;
+  window.api.setAutoSaveEnabled(state.autoSaveEnabled);
 });
 
 el.preferencesNotifyDesktop.addEventListener('change', () => {

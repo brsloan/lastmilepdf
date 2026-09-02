@@ -127,6 +127,7 @@ export const el = {
   btnRecordDeleteKey: asButton('btn-record-delete-key'),
   preferencesDeleteKeyDisplay: asElement('preferences-delete-key-display'),
   btnClearDeleteKey: asButton('btn-clear-delete-key'),
+  preferencesAutoSave: asInput('preferences-auto-save'),
   btnSaveApiKey: asButton('btn-save-api-key'),
   btnClearApiKey: asButton('btn-clear-api-key'),
   shortcutsDialog: asDialog('shortcuts-dialog'),

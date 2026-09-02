@@ -80,6 +80,7 @@ export const state = {
   notifyDesktop: true, // File > Settings > Preferences > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
   notifyChime: true, // File > Settings > Preferences > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below
   extraDeleteKeyCode: null, // File > Settings > Preferences > Extra Delete/Artifact key - a KeyboardEvent.code (e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete shortcut, or null when unset - overwritten from the persisted value shortly after startup, see the window.api.getExtraDeleteKeyCode() call below
+  autoSaveEnabled: false, // File > Settings > Preferences > Auto-Save - overwritten from the persisted value shortly after startup, see the window.api.getAutoSaveEnabled() call below; consumed by the autosave timer in doc-io.js
   atChangeFlags: new Map(), // nodeId -> { original, suggested } - tags whose Actual Text no longer matches their pulled content text, found by the Show AT Changes sweep (computeAtChangeFlags()). Same shape as aiProposals so it shares renderActualTextDiff()/pruneStaleAiProposals(), but recomputed from the file itself rather than from in-session state, so it still works after a save/reopen.
   atChangeSweepToken: 0, // invalidates an in-flight computeAtChangeFlags() sweep superseded by a newer one (toggle off/on again, or a fresh document)
 };

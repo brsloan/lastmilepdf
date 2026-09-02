@@ -373,6 +373,21 @@ function setExtraDeleteKeyCode(value) {
   writeSettingsFile(settings);
 }
 
+// Whether the renderer periodically saves the open document to disk on its
+// own, in addition to an explicit Save (File > Settings > Preferences).
+// Persisted the same way as showTagTypeLabel above, but defaults off - unlike
+// the other Preferences here, this one writes to the user's file without an
+// explicit Save, so it should be opted into rather than assumed.
+function getAutoSaveEnabled() {
+  return readSettingsFile().autoSaveEnabled === true; // default off
+}
+
+function setAutoSaveEnabled(value) {
+  const settings = readSettingsFile();
+  settings.autoSaveEnabled = value;
+  writeSettingsFile(settings);
+}
+
 // --- AI batch timing log ----------------------------------------------------
 //
 // Lets the "Fix All Actual Text" progress dialog (see showAiBatchProgress()
@@ -921,6 +936,12 @@ ipcMain.handle('settings:set-notify-chime', async (_event, { value }) => {
 ipcMain.handle('settings:get-extra-delete-key-code', async () => getExtraDeleteKeyCode());
 ipcMain.handle('settings:set-extra-delete-key-code', async (_event, { value }) => {
   setExtraDeleteKeyCode(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-auto-save-enabled', async () => getAutoSaveEnabled());
+ipcMain.handle('settings:set-auto-save-enabled', async (_event, { value }) => {
+  setAutoSaveEnabled(value);
   return true;
 });
 

@@ -201,6 +201,10 @@ export interface AppState {
   /** KeyboardEvent.code (e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete shortcut, or null when unset. */
   extraDeleteKeyCode: string | null;
 
+  // --- Auto-Save ----------------------------------------------------------
+  /** File > Settings > Preferences > Auto-Save - periodically save to disk. */
+  autoSaveEnabled: boolean;
+
   // --- Split Content (see split-content.js) ------------------------------
   /** The content leaf the Split Content panel currently shows, or null. */
   splitContentNodeId: string | null;

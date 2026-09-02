@@ -131,6 +131,12 @@ export async function performOpen() {
   }
 }
 
+// Guards performSave()/performSaveAs()/the autosave tick below from
+// overlapping - e.g. the autosave timer firing while a manual Save is still
+// writing, or while the Save As dialog is up (both are awaited spans during
+// which the renderer's event loop keeps running).
+let saveInFlight = false;
+
 // Save overwrites the current file (the path it was opened from, or
 // wherever Save As last pointed it). Falls back to the Save As dialog in
 // the (normally unreachable) case there's no known path yet.
@@ -142,7 +148,9 @@ export async function performSave() {
   if (!state.savedFilePath) {
     return performSaveAs();
   }
+  if (saveInFlight) return false;
   try {
+    saveInFlight = true;
     setStatus('Saving\u2026');
     await window.api.saveToPath(state.docId, state.savedFilePath);
     markDirty(false);
@@ -151,12 +159,16 @@ export async function performSave() {
   } catch (err) {
     reportError('Could not save PDF', err);
     return false;
+  } finally {
+    saveInFlight = false;
   }
 }
 
 export async function performSaveAs() {
   if (!state.docId) return false;
+  if (saveInFlight) return false;
   try {
+    saveInFlight = true;
     setStatus('Saving\u2026');
     const suggested = state.fileName ? state.fileName : '.pdf';
     const savedPath = await window.api.savePdf(state.docId, suggested);
@@ -170,8 +182,39 @@ export async function performSaveAs() {
   } catch (err) {
     reportError('Could not save PDF', err);
     return false;
+  } finally {
+    saveInFlight = false;
   }
 }
+
+// How often the autosave tick below checks in. Deliberately an interval
+// rather than a per-edit debounce: performSave() re-serializes the whole PDF
+// through the Python worker (see save_document() in tag_worker.py), which
+// isn't cheap enough to run on every keystroke, and the atomic write plus
+// .bak backup it does (see the same function) bounds how much a periodic
+// save can lose to at most one interval's worth of edits.
+const AUTOSAVE_INTERVAL_MS = 2 * 60 * 1000;
+
+// File > Settings > Preferences > Auto-Save. Runs unconditionally on a
+// timer for the life of the app; each tick is a no-op unless the setting is
+// on, a document with a known path is open, and it actually has unsaved
+// edits. A failed tick is silent (besides the console) rather than routed
+// through reportError() - a background save hiccup shouldn't interrupt
+// whatever the user is doing, and the next tick (or their next manual Save)
+// will retry.
+setInterval(async () => {
+  if (!state.autoSaveEnabled || !state.dirty || !state.docId || !state.savedFilePath || saveInFlight) return;
+  try {
+    saveInFlight = true;
+    await window.api.saveToPath(state.docId, state.savedFilePath);
+    markDirty(false);
+    setStatus(`Auto-saved to ${state.savedFilePath}`);
+  } catch (err) {
+    console.error('Auto-save failed', err);
+  } finally {
+    saveInFlight = false;
+  }
+}, AUTOSAVE_INTERVAL_MS);
 
 // Releases the current document and returns the UI to its pre-open state,
 // without exiting the app - the mirror image of performOpen() adopting one.

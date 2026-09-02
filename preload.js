@@ -388,6 +388,14 @@ const api = {
   /** @param {string | null} value @returns {Promise<void>} */
   setExtraDeleteKeyCode: (value) => ipcRenderer.invoke('settings:set-extra-delete-key-code', { value }),
 
+  // File > Settings > Preferences - periodically save the open document to
+  // disk automatically, in addition to an explicit Save. Persisted the same
+  // way as the settings above.
+  /** @returns {Promise<boolean>} */
+  getAutoSaveEnabled: () => ipcRenderer.invoke('settings:get-auto-save-enabled'),
+  /** @param {boolean} value @returns {Promise<void>} */
+  setAutoSaveEnabled: (value) => ipcRenderer.invoke('settings:set-auto-save-enabled', { value }),
+
   /**
    * @param {string} text
    * @returns {Promise<string>} The corrected text.
