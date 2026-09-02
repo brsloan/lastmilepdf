@@ -21,7 +21,7 @@
 import { pruneStaleAiProposals } from './actual-text.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
-import { getPageMcidGraphicsInfo, getPageMcidTextMap } from './page-content.js';
+import { getPageMcidGraphicsInfo, getPageMcidTextMap, hasDirectContentLeaf } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { buildMcidIndex, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
@@ -50,13 +50,22 @@ function computeDescendantAtChangeIds() {
 }
 
 export function renderTree() {
-  el.tagTree.innerHTML = '';
+  el.tagTreeContent.innerHTML = '';
   descendantAtChangeIds = computeDescendantAtChangeIds();
   if (!state.tree) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
     p.textContent = 'No document loaded.';
-    el.tagTree.appendChild(p);
+    el.tagTreeContent.appendChild(p);
+    return;
+  }
+  // Proofread Mode (View > Proofread) overrides the dropdown filter
+  // entirely rather than folding into state.filter - that way the
+  // dropdown's own selection is left untouched underneath it and the tree
+  // just falls back to whatever it was already set to the moment
+  // proofreading turns back off (see setProofreadMode() in proofread.js).
+  if (state.proofreadMode) {
+    renderProofreadTree();
     return;
   }
   if (state.filter !== 'all') {
@@ -69,7 +78,7 @@ export function renderTree() {
   ul.style.padding = '0';
   ul.style.margin = '0';
   ul.appendChild(renderTreeNode(state.tree));
-  el.tagTree.appendChild(ul);
+  el.tagTreeContent.appendChild(ul);
 }
 
 function nodeMatchesFilter(node) {
@@ -98,7 +107,7 @@ function renderFilteredTree() {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
     p.textContent = 'No matching tags.';
-    el.tagTree.appendChild(p);
+    el.tagTreeContent.appendChild(p);
     return;
   }
 
@@ -110,7 +119,7 @@ function renderFilteredTree() {
   for (const node of matches) {
     ul.appendChild(nested ? renderTreeNode(node) : renderFilteredRow(node));
   }
-  el.tagTree.appendChild(ul);
+  el.tagTreeContent.appendChild(ul);
 }
 
 function renderFilteredRow(node) {
@@ -127,6 +136,103 @@ function renderFilteredRow(node) {
 
   li.appendChild(row);
   return li;
+}
+
+// Matches _is_organizational_role()'s "span" half in tag_worker.py (the
+// Flatten feature's own definition of a Span-like tag) - Span itself plus
+// any custom role name containing "span" case-insensitively, to catch
+// vendor-specific inline-span variants some generators emit under their own
+// namespaced names.
+function isSpanLikeRole(role) {
+  return !!role && role.toLowerCase().includes('span');
+}
+
+// Proofread Mode's own tag - there's nothing meaningful to proofread on a
+// tag with neither Actual Text of its own nor real page content directly
+// inside it (a bare Div/Sect wrapper, say), so it's left out rather than
+// shown as an empty stop along the way. Lbl (a list item's own bullet/
+// number label) and any Span-like tag are excluded outright even when they
+// qualify otherwise - Lbl is auto-generated marker text rather than prose,
+// and a Span is normally just an inline run inside a paragraph that already
+// gets its own stop, so listing either separately would mostly be noise.
+// Figure is excluded too - its own text field is Alt Text, not Actual Text,
+// so it's not something this mode's Actual Text field has any business
+// stepping onto (a Figure that itself carries real Actual Text is the rare
+// exception, not worth keeping the general case around for).
+function nodeQualifiesForProofread(node) {
+  return node.type === 'element' && node.role !== 'Lbl' && node.role !== 'Figure' && !isSpanLikeRole(node.role)
+    && (!!(node.actualText && node.actualText.trim()) || hasDirectContentLeaf(node));
+}
+
+// Unlike collectFilteredNodes()'s figures/table case, this never stops at a
+// match - a qualifying tag can itself contain another qualifying tag (e.g.
+// a Figure with its own Actual Text wrapping a Caption that has its own),
+// and proofreading is meant to visit both in document order, not just the
+// outermost one.
+function collectProofreadNodes(node, matches) {
+  if (nodeQualifiesForProofread(node)) matches.push(node);
+  for (const child of node.children || []) collectProofreadNodes(child, matches);
+}
+
+// The whole tree flattened down to just its proofread-worthy tags, each a
+// plain row with no toggle/indentation - a straight, stacked sequence
+// reflecting only document order, since Proofread Mode's own Page Up/Down
+// and edge-of-line Up/Down stepping (see proofread.js) is the only way
+// through it and has no use for expand/collapse or nesting.
+function renderProofreadTree() {
+  const matches = [];
+  collectProofreadNodes(state.tree, matches);
+
+  if (matches.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'tree-placeholder';
+    p.textContent = 'No tags with Actual Text or content to proofread.';
+    el.tagTreeContent.appendChild(p);
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'tree-node';
+  ul.style.listStyle = 'none';
+  ul.style.padding = '0';
+  ul.style.margin = '0';
+  for (const node of matches) ul.appendChild(renderFilteredRow(node));
+  el.tagTreeContent.appendChild(ul);
+}
+
+// Proofread Mode (View > Proofread) needs to scroll the tag tree so the
+// selected row lines up with the Actual Text field's own top edge even
+// when that row sits at the very top/bottom of the (flat, filtered) list -
+// past what #tag-tree would otherwise let it scroll to, since normally
+// there's nothing beyond the list's own first/last row to scroll into.
+// #tag-tree-scroll-spacer-top/-bottom (zero height outside Proofread Mode -
+// see the CSS) exist purely to give that extra room. Mirrors
+// setProofreadScrollSpacersActive() in viewer.js, which does the same thing
+// for the PDF preview's highlight box - including the same "apply the
+// height before compensating scrollTop" ordering, since scrollTop
+// assignments are clamped to whatever range exists at that exact moment.
+export function setTagTreeScrollSpacersActive(active) {
+  const desired = active ? Math.round(el.tagTree.clientHeight) : 0;
+  const previousTopHeight = el.tagTreeScrollSpacerTop.offsetHeight;
+  el.tagTreeScrollSpacerTop.style.height = `${desired}px`;
+  el.tagTreeScrollSpacerBottom.style.height = `${desired}px`;
+  if (previousTopHeight !== desired) {
+    el.tagTree.scrollTop += desired - previousTopHeight;
+  }
+}
+
+// Scrolls #tag-tree purely vertically so `row`'s top edge lands at the same
+// viewport y-coordinate as the Actual Text field's top edge - the tag-tree
+// counterpart to alignActiveBoxWithActualText() in viewer.js. Unlike that
+// one, `row` is an ordinary in-flow element rather than a separately
+// positioned/synced overlay, so growing the spacer above it is enough on
+// its own to leave getBoundingClientRect() reporting its real, already-
+// shifted position - no extra "resync" step needed.
+export function alignSelectedTagTreeRow(row) {
+  setTagTreeScrollSpacersActive(true);
+  const rowTop = row.getBoundingClientRect().top;
+  const fieldTop = el.fieldActualText.getBoundingClientRect().top;
+  el.tagTree.scrollTop += rowTop - fieldTop;
 }
 
 // Shared by both tree-render paths: 'selected' marks the active/focused tag
@@ -177,12 +283,18 @@ function appendElementChipAndFlag(row, node) {
   } else if (state.showAtChanges && state.atChangeFlags.has(node.id)) {
     const atFlag = document.createElement('span');
     atFlag.className = 'ai-fix-flag';
-    atFlag.textContent = 'AT changed';
+    // Proofread Mode's tree is a narrow, flat strip (see renderProofreadTree()
+    // above) - the full "AT changed" label doesn't fit it the way it does the
+    // normal tree, so it collapses to a bare asterisk there, with the full
+    // wording still available as a tooltip.
+    atFlag.textContent = state.proofreadMode ? '*' : 'AT changed';
+    if (state.proofreadMode) atFlag.title = 'Actual Text changed from content';
     row.appendChild(atFlag);
   } else if (state.showAtChanges && descendantAtChangeIds.has(node.id)) {
     const atFlag = document.createElement('span');
     atFlag.className = 'ai-fix-flag';
-    atFlag.textContent = '↓ AT changed';
+    atFlag.textContent = state.proofreadMode ? '*' : '↓ AT changed';
+    if (state.proofreadMode) atFlag.title = 'A tag below this one has Actual Text changed from content';
     row.appendChild(atFlag);
   }
 }

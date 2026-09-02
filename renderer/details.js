@@ -14,7 +14,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { refreshSplitContentPanel, resetSplitContentPanel } from './split-content.js';
 import { state } from './state.js';
 import { renderTablePreview } from './table-preview.js';
-import { applyFreshTree, selectNode } from './tree-view.js';
+import { alignSelectedTagTreeRow, applyFreshTree, selectNode } from './tree-view.js';
 import { clearHighlight, highlightNodeOnPage } from './viewer.js';
 
 // The Actual Text field's placeholder as authored in index.html - restored
@@ -50,6 +50,19 @@ function setFieldValueUnlessFocused(fieldEl, value, sameNode) {
   fieldEl.value = value;
 }
 
+// Keeps the tag tree scrolled to the current selection. In Proofread Mode,
+// levels the row with the Actual Text field's own top edge, the same way
+// the PDF preview's highlight box does (see alignSelectedTagTreeRow() in
+// tree-view.js); otherwise just brings it into view like before.
+function scrollTagTreeRowIntoView(row) {
+  if (!row) return;
+  if (state.proofreadMode) {
+    alignSelectedTagTreeRow(row);
+  } else {
+    row.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 export function refreshDetailsForSelection() {
   const nodeId = state.selectedNodeId;
   const entry = nodeId ? state.nodesById.get(nodeId) : null;
@@ -70,8 +83,7 @@ export function refreshDetailsForSelection() {
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
     updateActualTextReviewUI(null);
     refreshSplitContentPanel(nodeId);
-    const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
-    row?.scrollIntoView({ block: 'nearest' });
+    scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
     highlightNodeOnPage(nodeId, { allowPageJump: true });
     return;
   }
@@ -172,8 +184,7 @@ export function refreshDetailsForSelection() {
     el.tablePreviewContainer.innerHTML = '';
   }
 
-  const row = el.tagTree.querySelector(`[data-node-id="${nodeId}"]`);
-  row?.scrollIntoView({ block: 'nearest' });
+  scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
 
   highlightNodeOnPage(nodeId, { allowPageJump: true });
 }

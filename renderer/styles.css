@@ -446,6 +446,16 @@ body.proofread-mode .tree-pane {
   padding: 8px;
 }
 
+/* Zero-height outside Proofread Mode - same reasoning as .canvas-scroll-
+   spacer above, and the same partner (setTagTreeScrollSpacersActive() in
+   tree-view.js). #tag-tree-content is what renderTree() actually clears and
+   rebuilds on every render, so these live outside it as permanent siblings
+   that survive that rebuild, giving the selected row room to scroll level
+   with the Actual Text field even when it's the first/last row in the list. */
+.tag-tree-scroll-spacer {
+  height: 0;
+}
+
 .tree-placeholder {
   color: var(--text-faint);
   padding: 8px;

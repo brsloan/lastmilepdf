@@ -11,18 +11,46 @@
 import { el, selectableRows } from './dom.js';
 import { refreshDetailsForSelection } from './details.js';
 import { state } from './state.js';
-import { selectNode } from './tree-view.js';
+import { renderTree, selectNode, setTagTreeScrollSpacersActive } from './tree-view.js';
 import { setProofreadScrollSpacersActive } from './viewer.js';
 
 export function setProofreadMode(enabled) {
   state.proofreadMode = enabled;
   document.body.classList.toggle('proofread-mode', enabled);
-  // Turning proofreading off drops straight back to the normal "can't
-  // scroll past the page's own edges" preview - see
-  // setProofreadScrollSpacersActive() in viewer.js. Turning it on grows
-  // them lazily, the next time a selection is actually aligned.
-  if (!enabled) setProofreadScrollSpacersActive(false);
-  if (state.selectedNodeId) refreshDetailsForSelection();
+  // The dropdown filter (All/Figures/Headings/Table) has no meaning once
+  // the tree is forced down to its own proofread-only list - hide it
+  // rather than reset it, so whatever it was set to is exactly what the
+  // tree falls back to once proofreading turns back off.
+  el.tagFilter.hidden = enabled;
+  renderTree(); // switches the tree between its normal and flat proofread-only rendering - see renderProofreadTree() in tree-view.js
+
+  if (!enabled) {
+    // Drops both the PDF preview and the tag tree straight back to their
+    // normal "can't scroll past the content's own edges" behavior - see
+    // setProofreadScrollSpacersActive() in viewer.js and
+    // setTagTreeScrollSpacersActive() in tree-view.js. Turning proofreading
+    // back on grows them lazily, the next time a selection is aligned.
+    setProofreadScrollSpacersActive(false);
+    setTagTreeScrollSpacersActive(false);
+    if (state.selectedNodeId) refreshDetailsForSelection();
+    return;
+  }
+
+  // Land on the first proofread-worthy tag (selectableRows() already
+  // reflects the flat, filtered tree just rendered above) with its Actual
+  // Text selected, so proofreading can start right away without an extra
+  // click - regardless of whatever happened to be selected before turning
+  // Proofread Mode on. selectNode() re-renders the tree/details panel again
+  // on top of the renderTree() call above, which is fine - the same minor
+  // redundancy stepProofreadTag() already accepts on every step.
+  const firstRow = selectableRows()[0];
+  if (firstRow) {
+    selectNode(firstRow.dataset.nodeId);
+    el.fieldActualText.focus();
+    el.fieldActualText.select();
+  } else if (state.selectedNodeId) {
+    refreshDetailsForSelection();
+  }
 }
 
 // Next/previous selectable row that's an actual tag - the same 'element'-only
