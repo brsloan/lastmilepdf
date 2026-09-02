@@ -283,18 +283,14 @@ function appendElementChipAndFlag(row, node) {
   } else if (state.showAtChanges && state.atChangeFlags.has(node.id)) {
     const atFlag = document.createElement('span');
     atFlag.className = 'ai-fix-flag';
-    // Proofread Mode's tree is a narrow, flat strip (see renderProofreadTree()
-    // above) - the full "AT changed" label doesn't fit it the way it does the
-    // normal tree, so it collapses to a bare asterisk there, with the full
-    // wording still available as a tooltip.
-    atFlag.textContent = state.proofreadMode ? '*' : 'AT changed';
-    if (state.proofreadMode) atFlag.title = 'Actual Text changed from content';
+    atFlag.textContent = '*';
+    atFlag.title = 'Actual Text changed from content';
     row.appendChild(atFlag);
   } else if (state.showAtChanges && descendantAtChangeIds.has(node.id)) {
     const atFlag = document.createElement('span');
     atFlag.className = 'ai-fix-flag';
-    atFlag.textContent = state.proofreadMode ? '*' : '↓ AT changed';
-    if (state.proofreadMode) atFlag.title = 'A tag below this one has Actual Text changed from content';
+    atFlag.textContent = '↓*';
+    atFlag.title = 'A tag below this one has Actual Text changed from content';
     row.appendChild(atFlag);
   }
 }
