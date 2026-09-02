@@ -23,6 +23,21 @@ export function collectTargetMcids(nodeId) {
   return targets;
 }
 
+// Like collectTargetMcids(), but stops at the node's own children instead of
+// recursing into nested elements - the same "immediately inside" scope
+// hasDirectContentLeaf() tests for. Used to pull a mixed-content node's own
+// text (e.g. a <P> with a nested <Span>) without re-pulling text that a
+// nested element already contributes as its own candidate - see
+// pullDirectContentText() below.
+export function collectDirectContentMcids(nodeId) {
+  const entry = state.nodesById.get(nodeId);
+  if (!entry) return [];
+  return (entry.node.children || [])
+    .filter((child) => child.type === 'content' && child.mcid !== null && child.mcid !== undefined
+      && child.page !== null && child.page !== undefined)
+    .map((child) => ({ mcid: child.mcid, page: child.page }));
+}
+
 // A tag has no marked content at all when it was created by the "Add
 // Figure" draw tool over a region with no isolable image object (see
 // figure_from_rect()'s "bbox" strategy in tag_worker.py) - it carries a
@@ -447,6 +462,22 @@ export async function isListLabelLeaf(nodeId) {
 // the table preview's variant, which special-cases nested Figure tags.
 export async function pullContentText(nodeId) {
   const targets = collectTargetMcids(nodeId);
+  const parts = [];
+  for (const target of targets) {
+    const text = await resolveMcidText(target.page, target.mcid);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
+// Like pullContentText(), but scoped to the node's own directly-nested
+// content leaves (collectDirectContentMcids()) instead of the whole subtree.
+// Used by the "Fix All Actual Text" batch (see the click handler in
+// renderer.js): that batch already sends every qualifying descendant as its
+// own entry, so pulling a mixed-content node's full subtree here would
+// resend a nested element's text a second time under the parent's id.
+export async function pullDirectContentText(nodeId) {
+  const targets = collectDirectContentMcids(nodeId);
   const parts = [];
   for (const target of targets) {
     const text = await resolveMcidText(target.page, target.mcid);

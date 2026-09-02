@@ -7,7 +7,7 @@ import { el, selectableRows } from './dom.js';
 import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels } from './editing.js';
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
 import { doFindNext, findReplaceMatches, positionFindReplaceDialog } from './find-replace.js';
-import { findFullPageImageLeafIds, getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
+import { findFullPageImageLeafIds, getPageTextContent, hasDirectContentLeaf, pullContentText, pullDirectContentText } from './page-content.js';
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
@@ -502,13 +502,16 @@ el.btnFixAllActualText.addEventListener('click', async () => {
   try {
     // A tag that already has Actual Text is sent as-is. A tag with none,
     // but a content leaf directly inside it, has that leaf's raw text
-    // pulled first - the same source "Pull Content" uses (see
-    // pullContentText()) - so the model sees the whole document's text,
-    // giving it the full context for cross-tag consistency instead of just
-    // the fields someone already filled in by hand. Table/Document tags are
-    // skipped - their Actual Text field is swapped out for a table preview
-    // / doc-info fields respectively (see refreshDetailsForSelection()), so
-    // a highlight for one could never be shown.
+    // pulled first - scoped to just its own directly-nested leaves
+    // (pullDirectContentText(), not the whole-subtree pullContentText() the
+    // single-tag "Pull Content" button uses) - so the model sees the whole
+    // document's text, giving it the full context for cross-tag consistency
+    // instead of just the fields someone already filled in by hand, without
+    // resending a nested element's text twice under both its own id and an
+    // ancestor's. Table/Document tags are skipped - their Actual Text field
+    // is swapped out for a table preview / doc-info fields respectively (see
+    // refreshDetailsForSelection()), so a highlight for one could never be
+    // shown.
     const candidates = [];
     walkTree(state.tree, (node) => {
       if (node.type !== 'element' || node.role === 'Table' || node.role === 'Document') return;
@@ -523,7 +526,7 @@ el.btnFixAllActualText.addEventListener('click', async () => {
     if (toPull.length > 0) {
       setStatus(`Pulling content text from ${toPull.length} tag${toPull.length === 1 ? '' : 's'} with no Actual Text yet…`);
       for (const candidate of toPull) {
-        candidate.text = (await pullContentText(candidate.id)) || '';
+        candidate.text = (await pullDirectContentText(candidate.id)) || '';
       }
     }
 
