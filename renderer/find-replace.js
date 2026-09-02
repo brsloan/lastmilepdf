@@ -12,11 +12,17 @@ import { state } from './state.js';
 // currently-found tag's role and advances to the next match; "Replace All"
 // relabels every match in one batch call. Matches are recomputed fresh on
 // every click rather than cached, since a replace changes which tags match.
+// The hidden /Document wrapper (see findHiddenDocumentWrapperId() in
+// tree-index.js) is never shown in the tag tree and has no editable role of
+// its own (see showRootDetails() in details.js) - Find/Replace must skip it
+// too, or "Find" could land on a tag with no visible row to select, and
+// "Replace"/"Replace All" could relabel a tag the user can't see or undo by
+// clicking back onto it.
 function allElementIdsInOrder() {
   const ids = [];
   if (!state.tree) return ids;
   (function visit(node) {
-    if (node.type === 'element') ids.push(node.id);
+    if (node.type === 'element' && node.id !== state.hiddenDocumentId) ids.push(node.id);
     for (const child of node.children || []) visit(child);
   })(state.tree);
   return ids;
@@ -26,7 +32,7 @@ export function findReplaceMatches(role) {
   const matches = [];
   if (!state.tree || !role) return matches;
   (function visit(node) {
-    if (node.type === 'element' && node.role === role) matches.push(node.id);
+    if (node.type === 'element' && node.role === role && node.id !== state.hiddenDocumentId) matches.push(node.id);
     for (const child of node.children || []) visit(child);
   })(state.tree);
   return matches;

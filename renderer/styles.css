@@ -482,6 +482,10 @@ body.proofread-mode .tree-pane {
   cursor: grab;
 }
 
+.tree-row.root-row {
+  cursor: pointer;
+}
+
 .tree-row:hover {
   background: var(--panel-alt);
 }

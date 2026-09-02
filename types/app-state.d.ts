@@ -88,6 +88,8 @@ export interface AppState {
   tree: TagNode | null;
   /** id -> node, rebuilt every time `tree` is replaced. */
   nodesById: Map<string, IndexedNode>;
+  /** id of the sole top-level /Document wrapper, or null - see findHiddenDocumentWrapperId(). */
+  hiddenDocumentId: string | null;
   /** page (0-based) -> Map(mcid -> owning element node id). */
   mcidIndex: Map<number, Map<number, string>>;
   /** Whether the document has a /StructTreeRoot at all. */

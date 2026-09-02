@@ -78,25 +78,6 @@ export function resolveNodeByPath(path) {
   return node;
 }
 
-// Finds the /Document struct element - conventionally the sole direct child
-// of the struct tree root (id "root", itself unselectable - see
-// renderTreeNode) - so a freshly opened PDF can land on it by default. DFS
-// rather than trusting it's always the very first top-level child, since
-// that's a convention, not something the spec enforces.
-export function findDocumentNode(tree) {
-  if (!tree) return null;
-  let found = null;
-  (function visit(node) {
-    if (found) return;
-    if (node.type === 'element' && node.role === 'Document') {
-      found = node;
-      return;
-    }
-    for (const child of node.children || []) visit(child);
-  })(tree);
-  return found;
-}
-
 /**
  * Depth-first walk over a tag subtree, calling `visit` on every node
  * including the one passed in. Generic - used by the verify checks, the
@@ -105,4 +86,25 @@ export function findDocumentNode(tree) {
 export function walkTree(node, visit) {
   visit(node);
   for (const child of node.children || []) walkTree(child, visit);
+}
+
+// The id of the sole top-level /Document wrapper, when the whole structure
+// tree is conventionally shaped that way - null when there's no structure
+// tree, or when the root has anything other than exactly one /Document
+// child (multiple top-level tags, or a top-level tag of some other role,
+// are left alone: there's no single obvious wrapper to hide then).
+//
+// A PDF's real hierarchy is root -> /Document -> the actual content tags,
+// but that wrapper carries no accessibility content or attributes worth
+// exposing of its own (see showRootDetails() in details.js, which is where
+// its would-be Title/Author/Language now live instead) - Acrobat's Tags
+// panel doesn't show it either. Everywhere that walks the tree for the
+// user to see or act on (rendering, Find/Replace, Proofread Mode) skips
+// this id; everything that walks it for real structural work (drag/drop
+// reparenting, isDescendant, nodePathFromRoot) still sees it, since the
+// PDF's actual /K hierarchy hasn't changed - only what's shown has.
+export function findHiddenDocumentWrapperId(tree) {
+  if (!tree || !tree.children || tree.children.length !== 1) return null;
+  const onlyChild = tree.children[0];
+  return onlyChild.type === 'element' && onlyChild.role === 'Document' ? onlyChild.id : null;
 }

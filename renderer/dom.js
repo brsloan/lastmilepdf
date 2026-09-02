@@ -66,6 +66,7 @@ export const el = {
   detailsForm: asForm('details-form'),
   fieldNodeId: asInput('field-node-id'),
   fieldRoleLangRow: asElement('field-role-lang-row'),
+  fieldRoleWrap: asElement('field-role-wrap'),
   fieldRole: asInput('field-role'),
   fieldAlt: asTextarea('field-alt'),
   fieldAltWrap: asElement('field-alt-wrap'),

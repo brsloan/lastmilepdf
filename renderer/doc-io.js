@@ -10,7 +10,6 @@ import { el } from './dom.js';
 import { clearPageCaches } from './page-content.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
-import { findDocumentNode } from './tree-index.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
 import { loadPdfPreview, updatePageNavUI } from './viewer.js';
 import { stopWalking } from './walk.js';
@@ -120,10 +119,11 @@ export async function performOpen() {
         : ' No tags have Actual Text that differs from their pulled content.';
     }
 
-    // Land on the /Document tag by default, once the preview (and so
-    // state.pdfDoc) is in place for the resulting highlight to target.
-    const documentNode = findDocumentNode(state.tree);
-    if (documentNode) selectNode(documentNode.id);
+    // Land on the structure root by default, once the preview (and so
+    // state.pdfDoc) is in place for the resulting highlight to target - its
+    // details panel is where Title/Author/Language get set (see
+    // showRootDetails() in details.js).
+    if (state.tree) selectNode('root');
 
     setStatus((opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).') + atChangesSummary);
   } catch (err) {

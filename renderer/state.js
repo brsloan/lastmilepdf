@@ -30,6 +30,7 @@ export const state = {
   savedFilePath: null,  // path last used to save this doc (Save As sets it; Save reuses it), reset per document
   tree: null,           // current full tag tree, as returned by the worker
   nodesById: new Map(), // id -> node, rebuilt every time `tree` is replaced
+  hiddenDocumentId: null, // id of the sole top-level /Document wrapper, or null - see findHiddenDocumentWrapperId() in tree-index.js
   mcidIndex: new Map(), // page (0-based) -> Map(mcid -> owning element node id), rebuilt with nodesById
   selectedNodeId: null,      // the "active"/most-recently-clicked tag - drives the details panel, highlight, scroll
   selectedNodeIds: new Set(), // full multi-selection (shift/ctrl+click); always a superset containing selectedNodeId

@@ -24,7 +24,7 @@ import { el, selectableRows } from './dom.js';
 import { getPageMcidGraphicsInfo, getPageMcidTextMap, hasDirectContentLeaf } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
-import { buildMcidIndex, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
+import { buildMcidIndex, findHiddenDocumentWrapperId, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
 import { categoryForRole } from './util.js';
 
 // Node ids that have no AT change of their own but have a descendant (at any
@@ -182,8 +182,14 @@ function isSpanLikeRole(role) {
 // so it's not something this mode's Actual Text field has any business
 // stepping onto (a Figure that itself carries real Actual Text is the rare
 // exception, not worth keeping the general case around for).
+// The hidden /Document wrapper (see findHiddenDocumentWrapperId()) is
+// excluded outright, on top of the checks above - it has no row in the
+// ordinary tree either, and (being purely a container) would rarely
+// qualify on its own merits anyway, but this keeps that guaranteed rather
+// than incidental.
 function nodeQualifiesForProofread(node) {
-  return node.type === 'element' && node.role !== 'Lbl' && node.role !== 'Figure' && !isSpanLikeRole(node.role)
+  return node.type === 'element' && node.id !== state.hiddenDocumentId && node.role !== 'Lbl'
+    && node.role !== 'Figure' && !isSpanLikeRole(node.role)
     && (!!(node.actualText && node.actualText.trim()) || hasDirectContentLeaf(node));
 }
 
@@ -332,7 +338,16 @@ function renderTreeNode(node) {
   row.dataset.nodeId = node.id;
 
   if (node.type === 'root') {
-    row.className = 'tree-row';
+    // Not in the 'selectable' class: that also marks a row draggable
+    // (cursor: grab) and puts it in selectableRows(), which arrow-key nav
+    // and shift-click ranges walk - the root has no parent/siblings to drag
+    // among or bulk-edit alongside, so it gets its own click handling below
+    // instead, clickable only on its own via a plain click.
+    row.className = 'tree-row root-row';
+    applySelectionClasses(row, node.id);
+    const spacer = document.createElement('span');
+    spacer.className = 'tree-toggle-spacer';
+    row.appendChild(spacer);
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
     chip.dataset.category = 'container';
@@ -340,12 +355,19 @@ function renderTreeNode(node) {
     row.appendChild(chip);
     const meta = document.createElement('span');
     meta.className = 'tree-node-meta';
-    meta.textContent = 'structure root';
+    meta.textContent = 'structure root – Title/Author/Language';
     row.appendChild(meta);
-    // Root can't be selected or dragged, but it IS a valid drop target
-    // (for promoting a node to top-level), so it still gets drop handlers.
-    // It has no parent/siblings of its own, so only "into" makes sense.
-    attachDropHandlers(row, node.id, { allowBeforeAfter: false });
+    row.addEventListener('click', () => selectNode(node.id));
+    // Root can't be dragged, but it IS a valid drop target (for promoting a
+    // node to top-level), so it still gets drop handlers - it has no
+    // parent/siblings of its own, so only "into" makes sense. The actual
+    // attach point is the hidden /Document wrapper when there is one (see
+    // findHiddenDocumentWrapperId()) rather than literally 'root' - a drop
+    // that landed directly under the structure root instead would give it a
+    // second top-level child, which is exactly the shape that makes
+    // findHiddenDocumentWrapperId() stop treating /Document as hidden and
+    // bring its row back on the very next render.
+    attachDropHandlers(row, state.hiddenDocumentId || node.id, { allowBeforeAfter: false });
   } else if (node.type === 'element') {
     row.className = 'tree-row selectable';
     applySelectionClasses(row, node.id);
@@ -443,13 +465,29 @@ function renderTreeNode(node) {
   if (node.children && node.children.length > 0 && !isCollapsedElement) {
     const ul = document.createElement('ul');
     ul.className = 'tree-children';
-    for (const child of node.children) {
-      ul.appendChild(renderTreeNode(child));
-    }
+    appendChildRows(ul, node.children);
     li.appendChild(ul);
   }
 
   return li;
+}
+
+// Appends a row for each of `nodes` to `ul` - except the hidden /Document
+// wrapper (see findHiddenDocumentWrapperId()), which never gets a row of
+// its own: its children are spliced in at that same position instead, so
+// they read as if they were direct children of whatever actually holds the
+// wrapper (always the structure root, by construction). Recurses through
+// appendChildRows rather than calling renderTreeNode on them directly so
+// the substitution still applies however deep the caller is (root's own
+// children today, but this stays correct if that ever changes).
+function appendChildRows(ul, nodes) {
+  for (const node of nodes) {
+    if (node.id === state.hiddenDocumentId) {
+      appendChildRows(ul, node.children || []);
+    } else {
+      ul.appendChild(renderTreeNode(node));
+    }
+  }
 }
 
 const DRAG_OVER_CLASSES = ['drag-over-into', 'drag-over-before', 'drag-over-after'];
@@ -597,6 +635,7 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
 export function applyFreshTree(tree) {
   state.tree = tree;
   state.nodesById = indexTree(tree);
+  state.hiddenDocumentId = findHiddenDocumentWrapperId(tree);
   state.mcidIndex = tree ? buildMcidIndex(tree) : new Map();
   pruneStaleAiProposals();
 
@@ -624,6 +663,14 @@ function expandAncestors(nodeId) {
 // Plain click (and keyboard nav / page-click selection): replaces any
 // existing selection with just this one tag.
 export function selectNode(nodeId) {
+  // The hidden /Document wrapper (see findHiddenDocumentWrapperId()) has no
+  // row to select and no editable attributes of its own - every caller
+  // that finds ids by walking the tree already excludes it (Find/Replace,
+  // Proofread Mode), but this redirect is a last-resort backstop so nothing
+  // can land the details panel on it by surprise. It stands in for the
+  // whole document anyway, so falling back to the structure root - which
+  // shows the same Title/Author/Language - is the closest actual match.
+  if (nodeId === state.hiddenDocumentId) nodeId = 'root';
   state.selectedNodeIds = new Set([nodeId]);
   state.selectionAnchorId = nodeId;
   state.selectedNodeId = nodeId;
