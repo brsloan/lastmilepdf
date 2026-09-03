@@ -1,4 +1,4 @@
-import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runScopeTables, runSmartifact } from './actions.js';
+import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
@@ -1198,6 +1198,29 @@ el.findReplaceReplace.addEventListener('keydown', (e) => {
   }
 });
 
+// --- Repair Orphaned Content (Tools menu) ---------------------------------
+//
+// Unlike Find/Replace and Scripts, this isn't a dialog - it's a one-shot
+// action, so the menu click just runs the same runRepairOrphanedContent()
+// the Verify panel's inline "Repair" button calls, mirroring what used to be
+// a toolbar button's click handler. Like Find/Replace and Scripts, the menu
+// item itself has no `enabled` state to track in main.js - it's always
+// clickable, and this no-ops with nothing to report if there's no document
+// (or no structure tree) open, same as the removed button's disabled state
+// meant in practice.
+window.api.onMenuRepairOrphanedContent(async () => {
+  if (!state.docId || !state.hasStructTree) return;
+  document.body.classList.add('busy');
+  try {
+    setStatus('Scanning for orphaned marked content…');
+    setStatus(await runRepairOrphanedContent());
+  } catch (err) {
+    reportError('Could not repair orphaned content', err);
+  } finally {
+    document.body.classList.remove('busy');
+  }
+});
+
 // --- scripts (Tools > Scripts…) ------------------------------------------
 
 window.api.onMenuScripts(() => openScriptsDialog());
@@ -1536,19 +1559,32 @@ window.addEventListener('keydown', (e) => {
 // A lightweight, local approximation of Adobe Acrobat's "Full Check" report,
 // scoped to what this editor's own data already covers: document-level
 // metadata (docInfo, from _get_doc_info() in tag_worker.py), the tag tree,
-// and the outline/page count already loaded for the current document. It
-// does not attempt anything that needs rendering pixels (colour contrast),
-// form fields, or raw content-stream analysis (reading order, tab order,
-// scripts) - those aren't backed by any data this app reads today.
+// and the outline/page count already loaded for the current document, plus
+// one check (Orphaned marked content) that asks tag_worker.py to scan the
+// raw page content streams directly - see count_orphaned_marked_content()
+// there. It does not attempt anything that needs rendering pixels (colour
+// contrast), form fields, or the rest of what raw content-stream analysis
+// could in principle cover (reading order, tab order, scripts) - those
+// aren't backed by any data this app reads today. renderVerifyResults() is
+// async solely because of that one worker round-trip; every other check
+// stays a synchronous read of state already in memory.
 //
 // Each check returns zero or more "instances" - specific tag ids the issue
 // was found on - which the report renders as clickable rows (see
 // jumpToVerifyInstance()) that select the tag, matching how clicking a row
-// in the Tag Tree itself works.
+// in the Tag Tree itself works. A check can instead (or additionally) set
+// `repair` to an action function - rendered as an inline "Repair" button
+// that runs the fix and re-renders the whole report, since there's no
+// single tag id to jump to for content the struct tree doesn't know about.
 
-el.btnVerify.addEventListener('click', () => {
+el.btnVerify.addEventListener('click', async () => {
   if (!state.docId) return;
-  renderVerifyResults();
+  document.body.classList.add('busy');
+  try {
+    await renderVerifyResults();
+  } finally {
+    document.body.classList.remove('busy');
+  }
   openScrollableDialog(el.verifyDialog, el.verifyBody); // see openScrollableDialog() for why focus goes to the body
 });
 

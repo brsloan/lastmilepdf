@@ -113,6 +113,27 @@ export interface ScopeTablesResult extends MutationResult {
   tablesScoped: number;
 }
 
+/**
+ * `repair_orphaned_marked_content()`'s result: how many marked-content
+ * regions it converted to real `/Artifact`s - see the doc comment above it
+ * in tag_worker.py for the two shapes of orphan this fixes.
+ */
+export interface RepairOrphanedContentResult extends MutationResult {
+  repairedCount: number;
+}
+
+/**
+ * `count_orphaned_marked_content()`'s result: how many marked-content
+ * regions `repair_orphaned_marked_content()` would fix right now, and how
+ * many pages they're spread across. Read-only - see
+ * RepairOrphanedContentResult for the mutating counterpart the Verify
+ * panel's "Repair" button calls when this reports anything.
+ */
+export interface OrphanedContentCount {
+  totalCount: number;
+  pageCount: number;
+}
+
 /** `insert_paragraph_after()`'s result: the tag it just created. */
 export interface InsertResult extends MutationResult {
   newNodeId: string;
@@ -281,7 +302,7 @@ export interface SplitLeafResult extends MutationResult {
  */
 export interface ScriptStep {
   id: string;
-  type: 'smartifact' | 'scope-tables' | 'flatten-all' | 'find-replace' | 'fix-actual-text-ai';
+  type: 'smartifact' | 'scope-tables' | 'flatten-all' | 'find-replace' | 'fix-actual-text-ai' | 'repair-orphaned-content';
   findRole?: string;
   replaceRole?: string;
 }

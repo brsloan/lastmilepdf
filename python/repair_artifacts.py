@@ -1,19 +1,30 @@
 """
 repair_artifacts.py
 
-One-off command-line repair pass for PDFs already damaged by the
-Smartifact/Delete content-stream bug fixed in tag_worker.py - see
-repair_orphaned_marked_content() there for the full mechanism. In short:
-older versions of delete_nodes() (which backs both the tag tree's Delete key
-and the Smartifact tool) unlinked a leaf from the struct tree without also
-rewriting its content-stream BDC operator, leaving marked content that
-still names a real struct role (typically /Figure, for a "smartified"
-full-page scan) with an MCID no structure element claims any more.
-Acrobat's accessibility Full Check reads the content stream directly and
-fails these - invisible in the Tags panel, visible in the Content panel -
-even though nothing in the struct tree still references them. Editing the
-document further in the app doesn't fix already-orphaned content; this
-script does, once, for files edited before the fix.
+Command-line equivalent of the app's "Repair Orphaned Content" toolbar
+button/script step - see repair_orphaned_marked_content() in tag_worker.py
+for the full mechanism. It fixes three kinds of marked content PDF/UA
+requires be either tagged or a real /Artifact, and that Acrobat's
+accessibility Full Check reads directly from the content stream and fails
+even though nothing in this editor's Tags panel shows a problem:
+
+  - Leftovers from the Smartifact/Delete content-stream bug: older versions
+    of delete_nodes() (which backs both the tag tree's Delete key and the
+    Smartifact tool) unlinked a leaf from the struct tree without also
+    rewriting its content-stream BDC operator, leaving marked content that
+    still names a real struct role (typically /Figure, for a "smartified"
+    full-page scan) with an MCID no structure element claims any more.
+  - Content the struct tree never claimed in the first place: formatting
+    "glue" spans some authoring tools emit outside every tag (hyphenation/
+    kerning hints, invisible joiners around wrapped URLs/DOIs), which carry
+    no MCID at all and so could never have been linked to the struct tree.
+  - Content painted with no marked-content wrapper at all - not even a
+    tagless one - such as a decorative background band drawn via an
+    unwrapped XObject invocation, or a lone invisible spacing character.
+
+This is useful for files edited by this app before the fix landed, or as a
+one-off, scriptable way to clean up a file without opening it in the app;
+the in-app button covers the same ground going forward.
 
 Usage:
     python repair_artifacts.py FILE.pdf [FILE2.pdf ...]

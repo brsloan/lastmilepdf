@@ -1,6 +1,6 @@
 // scripts.js
 //
-// Tools > Scripts…: lets the user chain the five toolbar actions below into
+// Tools > Scripts…: lets the user chain the six toolbar actions below into
 // a named, reorderable sequence, save/name several such scripts, and assign
 // one of them to the toolbar's "Run Script" button. Scripts are persisted
 // via window.api.get/setScripts() and get/setActiveScriptId() (settings.json
@@ -13,7 +13,7 @@
 // tag type to find and replace with), so a script can hold several
 // differently-configured Find/Replace steps.
 
-import { runFindReplaceAll, runFixAllActualTextAi, runFlattenAll, runScopeTables, runSmartifact } from './actions.js';
+import { runFindReplaceAll, runFixAllActualTextAi, runFlattenAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { el } from './dom.js';
 import { reportError, setStatus } from './shell.js';
@@ -22,6 +22,7 @@ import { state } from './state.js';
 /** @type {{ type: import('../types/domain').ScriptStep['type'], label: string, hint: string }[]} */
 export const ACTION_DEFS = [
   { type: 'smartifact', label: 'Smartifact', hint: 'Artifact full-page image leaves that are the same size as their page' },
+  { type: 'repair-orphaned-content', label: 'Repair Orphaned Content', hint: "Turn marked content that's neither tagged nor a real artifact into one, so Acrobat's accessibility checker stops flagging it" },
   { type: 'scope-tables', label: 'Scope Tables', hint: "Set Row/Column/Both scope on every table's TH cells based on its header shape" },
   { type: 'flatten-all', label: 'Flatten All', hint: 'Remove organizational tags (Div/Sect/Part/Span) from the whole document' },
   { type: 'find-replace', label: 'Find/Replace', hint: 'Relabel every tag of one type to another' },
@@ -309,6 +310,8 @@ async function runScriptStep(step) {
   switch (step.type) {
     case 'smartifact':
       return runSmartifact();
+    case 'repair-orphaned-content':
+      return runRepairOrphanedContent();
     case 'scope-tables':
       return runScopeTables();
     case 'flatten-all':

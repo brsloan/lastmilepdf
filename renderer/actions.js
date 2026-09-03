@@ -1,13 +1,14 @@
 // actions.js
 //
-// The operations shared between a toolbar button and a Tools > Scripts…
-// script step (see scripts.js's runActiveScript()): Smartifact, Scope
-// Tables, Flatten All, Find/Replace, and Fix All Actual Text (AI). Kept in
-// one place so a script step and its matching toolbar button always do
-// exactly the same thing - each function here applies the mutation, updates
-// `state`/the tree view/undo state, and returns a status message; the
-// caller decides where that message goes (setStatus(), a dialog's own
-// status line, or a script's step-by-step log).
+// The operations shared between a toolbar button (or, for Repair Orphaned
+// Content, the Tools menu and the Verify panel's inline "Repair" button) and
+// a Tools > Scripts… script step (see scripts.js's runActiveScript()):
+// Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
+// Find/Replace, and Fix All Actual Text (AI). Kept in one place so every
+// trigger for the same action does exactly the same thing - each function
+// here applies the mutation, updates `state`/the tree view/undo state, and
+// returns a status message; the caller decides where that message goes
+// (setStatus(), a dialog's own status line, or a script's step-by-step log).
 
 import { hideAiBatchProgress, showAiBatchProgress, updateAiBatchProgressEstimate } from './ai-batch.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
@@ -69,6 +70,28 @@ export async function runSmartifact() {
   applyUndoState(result);
   closeDetails();
   return `Artifacted ${ids.length} full-page image${ids.length === 1 ? '' : 's'}.`;
+}
+
+/**
+ * Finds marked content in the page content streams that PDF/UA requires be
+ * either tagged or a real `/Artifact` and is currently neither - leftovers
+ * from an old delete_nodes() bug, or formatting "glue" spans (hyphenation/
+ * kerning hints, invisible joiners) some authoring tools emit outside every
+ * tag - and converts it to a real `/Artifact` so Acrobat's accessibility
+ * Full Check stops flagging it as untagged content it can't even locate in
+ * the Content panel (see repair_orphaned_marked_content() in
+ * tag_worker.py). Runs from three places: Tools > Repair Orphaned Content,
+ * the Verify panel's inline "Repair" button on a failing "Orphaned marked
+ * content" check, and a script's 'repair-orphaned-content' step.
+ * @returns {Promise<string>}
+ */
+export async function runRepairOrphanedContent() {
+  const result = await window.api.repairOrphanedContent(state.docId);
+  applyFreshTree(result.tree);
+  applyUndoState(result);
+  return result.repairedCount > 0
+    ? `Repaired ${result.repairedCount} orphaned marked-content region${result.repairedCount === 1 ? '' : 's'}.`
+    : 'No orphaned marked content found.';
 }
 
 /**

@@ -123,6 +123,18 @@ const api = {
   scopeTables: (docId) => ipcRenderer.invoke('tags:scope-tables', { docId }),
   /**
    * @param {string} docId
+   * @returns {Promise<import('./types/domain').RepairOrphanedContentResult>}
+   */
+  repairOrphanedContent: (docId) =>
+    ipcRenderer.invoke('tags:repair-orphaned-content', { docId }),
+  /**
+   * @param {string} docId
+   * @returns {Promise<import('./types/domain').OrphanedContentCount>}
+   */
+  countOrphanedContent: (docId) =>
+    ipcRenderer.invoke('tags:count-orphaned-content', { docId }),
+  /**
+   * @param {string} docId
    * @param {string[]} nodeIds
    * @returns {Promise<MutationResult>}
    */
@@ -303,6 +315,8 @@ const api = {
   onMenuClose: (callback) => ipcRenderer.on('menu:close', callback),
   /** @param {() => void} callback */
   onMenuFindReplace: (callback) => ipcRenderer.on('menu:find-replace', callback),
+  /** @param {() => void} callback */
+  onMenuRepairOrphanedContent: (callback) => ipcRenderer.on('menu:repair-orphaned-content', callback),
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuShowAtChanges: (callback) => ipcRenderer.on('menu:show-at-changes', callback),
   /** @param {(event: unknown, checked: boolean) => void} callback */

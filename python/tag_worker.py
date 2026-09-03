@@ -50,13 +50,19 @@ Scope / known limitations (read this before extending):
     section for why and how); delete_nodes(), which *writes* a narrowly
     scoped edit: the opening BDC operator of each MCID it's unlinking from
     the struct tree gets rewritten to `/Artifact BMC` (see _artifact_leaves/
-    _artifact_mcids_on_page), so unlinked content reads as a real PDF
-    artifact instead of an orphaned tag when a consumer checks the content
-    stream directly, as Acrobat's accessibility Full Check does; and
+    _artifact_marked_content_on_page), so unlinked content reads as a real
+    PDF artifact instead of an orphaned tag when a consumer checks the
+    content stream directly, as Acrobat's accessibility Full Check does;
     split_leaf() (see "content-leaf text splitting" below), which divides one
-    MCID's `BDC ... EMC` span into two so each half can be tagged separately.
-    Both of those touch content streams in a narrowly scoped, mechanically
-    verified way - never a free-form rewrite.
+    MCID's `BDC ... EMC` span into two so each half can be tagged separately;
+    and repair_orphaned_marked_content(), a standalone, user-triggered sweep
+    (the "Repair Orphaned Content" button/script step) that finds marked
+    content already sitting in that same broken state - whether left there
+    by a version of delete_nodes() that predates this fix, or never linked
+    to the struct tree at all by whatever tool produced the PDF - and
+    applies the same `/Artifact BMC` rewrite. All three touch content
+    streams in a narrowly scoped, mechanically verified way - never a
+    free-form rewrite.
   - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
     bytes) before each mutation, rather than recording inverse edits. Simple
     and correct by construction, at the cost of an O(document size) copy per
@@ -2322,133 +2328,388 @@ def _artifact_leaves(doc, leaf_ids):
                         pass
 
     for page_index, mcids in mcids_by_page.items():
-        _artifact_mcids_on_page(doc, page_index, mcids)
+        _artifact_marked_content_on_page(doc, page_index, mcids)
 
     for target in objr_targets:
         if "/StructParent" in target:
             del target["/StructParent"]
 
 
-def _artifact_mcids_on_page(doc, page_index, mcids):
+# Content-stream operators that actually paint something (a glyph, a filled/
+# stroked path, a shading, or an invoked XObject) - as opposed to state-setting
+# operators (Tf, Tm, Td, cm, q/Q, rg, gs, BT/ET, ...) that never mark the page
+# on their own. Used by _artifact_marked_content_on_page/
+# _find_orphaned_marked_content to decide whether a run of instructions
+# sitting completely outside any BDC/BMC actually needs wrapping, or is just
+# inert setup with nothing for Acrobat's Full Check to flag. Deliberately
+# excludes inline images (BI/ID/EI, which pikepdf's parser doesn't expose as
+# an ordinary single-operator instruction) - a rare enough shape in practice
+# that an unwrapped one simply isn't caught here, same as before this class
+# of fix existed.
+_MARKING_OPERATORS = frozenset([
+    "Tj", "'", '"', "TJ",  # text showing
+    "S", "s", "f", "F", "f*", "B", "B*", "b", "b*",  # path painting
+    "sh",  # shading
+    "Do",  # XObject invocation (image or form)
+])
+
+
+def _artifact_marked_content_on_page(doc, page_index, mcids, fix_orphans=False):
     """Rewrites every top-level `<role> BDC <</MCID n>>` on `page_index`
     whose `n` is in `mcids` to a plain `/Artifact BMC` - same tag name every
     real artifact in a PDF/UA-conforming file uses, and the same one this
     editor's other commands leave alone (they never touch content streams -
-    this is the one deliberate, narrowly-targeted exception, only ever
-    turning a specific already-selected-for-deletion MCID into an artifact,
-    never adding, removing, or reordering any actual drawing operator).
+    this is one of the few deliberate, narrowly-targeted exceptions, only
+    ever turning specific MCIDs into artifacts, never adding, removing, or
+    reordering any actual drawing operator).
 
-    The matching EMC needs no change: it carries no operands, so the same
-    token closes a BMC block exactly as it closed the BDC block it used to.
+    When `fix_orphans` is set, also fixes two other shapes of unclaimed
+    content (see _find_orphaned_marked_content for the full reasoning
+    behind each):
+
+    - Any *other* unnested BDC/BMC - one with no enclosing BDC/BMC of its
+      own - that names a real tag but carries no `/MCID` at all, provided
+      its span contains no MCID outside of `mcids` anywhere inside it at
+      any nesting depth (a redundant wrapper around real claimed content,
+      like several nested empty-dict `/H1 BDC`s around one real
+      `/H1 <</MCID n>>`, is left alone rather than rewritten - see the
+      docstring on _find_orphaned_marked_content). Handled the same way as
+      the `mcids` case: the existing BDC/BMC token is simply rewritten to
+      `/Artifact BMC`.
+    - Any maximal run of instructions sitting completely outside every
+      BDC/BMC - not even a tagless one - that contains at least one
+      operator that actually paints something (see _MARKING_OPERATORS).
+      There's no existing marked-content token to rewrite here, so a new
+      `BMC /Artifact` / `EMC` pair is synthesized around the whole run,
+      left otherwise byte-for-byte untouched.
+
+    delete_nodes()/_artifact_leaves() never sets `fix_orphans`: it's only
+    ever turning specific already-selected-for-deletion MCIDs into
+    artifacts, and has no reason to go looking for unrelated orphans while
+    it's at it - only repair_orphaned_marked_content()'s document-wide
+    sweep does.
+
     A page whose content stream can't be parsed is left as-is - the
-    struct-tree unlink still happens, same as if this function didn't
-    exist, so this can only add a fix on top of the old behavior, never
-    remove one."""
+    struct-tree unlink (or repair pass) still happens, same as if this
+    function didn't exist, so this can only add a fix on top of the old
+    behavior, never remove one. Returns how many marked-content regions it
+    actually rewrote or newly wrapped."""
     pdf = doc["pdf"]
     if page_index < 0 or page_index >= len(pdf.pages):
-        return
+        return 0
     page = pdf.pages[page_index]
     page.contents_coalesce()
     try:
         instructions = pikepdf.parse_content_stream(page)
     except Exception:
-        return
+        return 0
+
+    def _bdc_tag_and_mcid(instr, op):
+        tag = str(instr.operands[0]) if instr.operands else None
+        props = instr.operands[1] if op == "BDC" and len(instr.operands) == 2 else None
+        mcid = None
+        if isinstance(props, pikepdf.Dictionary) and "/MCID" in props:
+            try:
+                mcid = int(props["/MCID"])
+            except (TypeError, ValueError):
+                mcid = None
+        return tag, mcid
+
+    # First pass: find which top-level candidates are actually safe to
+    # artifact - i.e. contain no MCID other than ones already in `mcids`
+    # anywhere within their span (see the docstring's /H1-wrapper example).
+    # A stack tracks every currently-open BDC/BMC so a claimed MCID found
+    # deep inside can "poison" every ancestor frame, not just its immediate
+    # parent.
+    to_artifact_top_level = set()  # instruction indices, only used if fix_orphans
+    if fix_orphans:
+        stack = []
+        for idx, instr in enumerate(instructions):
+            op = str(instr.operator)
+            if op in ("BDC", "BMC"):
+                tag, mcid = _bdc_tag_and_mcid(instr, op)
+                if mcid is not None and mcid not in mcids:
+                    for frame in stack:
+                        frame["poisoned"] = True
+                stack.append({
+                    "idx": idx,
+                    "is_candidate": tag != "/Artifact" and mcid is None,
+                    "top_level": len(stack) == 0,
+                    "poisoned": False,
+                })
+            elif op == "EMC" and stack:
+                frame = stack.pop()
+                if frame["is_candidate"] and frame["top_level"] and not frame["poisoned"]:
+                    to_artifact_top_level.add(frame["idx"])
 
     changed = False
+    fixed = 0
     rewritten = []
+    depth = 0
+    run_buffer = []  # instructions seen at depth 0 since the last BDC/BMC or EMC boundary
+    run_has_marking = False
+
+    def _flush_run():
+        nonlocal changed, fixed
+        if not run_buffer:
+            return
+        if fix_orphans and run_has_marking:
+            rewritten.append(pikepdf.ContentStreamInstruction(
+                [pikepdf.Name("/Artifact")], pikepdf.Operator("BMC")
+            ))
+            rewritten.extend(run_buffer)
+            rewritten.append(pikepdf.ContentStreamInstruction([], pikepdf.Operator("EMC")))
+            changed = True
+            fixed += 1
+        else:
+            rewritten.extend(run_buffer)
+        run_buffer.clear()
+
+    for idx, instr in enumerate(instructions):
+        op = str(instr.operator)
+        if op in ("BDC", "BMC"):
+            if depth == 0:
+                _flush_run()
+                run_has_marking = False
+            tag, mcid = _bdc_tag_and_mcid(instr, op)
+            is_orphan_mcid = tag != "/Artifact" and mcid is not None and mcid in mcids
+            is_safe_top_level = idx in to_artifact_top_level
+            if is_orphan_mcid or is_safe_top_level:
+                rewritten.append(pikepdf.ContentStreamInstruction(
+                    [pikepdf.Name("/Artifact")], pikepdf.Operator("BMC")
+                ))
+                changed = True
+                fixed += 1
+            else:
+                rewritten.append(instr)
+            depth += 1
+        elif op == "EMC":
+            depth = max(0, depth - 1)
+            rewritten.append(instr)
+            if depth == 0:
+                run_has_marking = False
+        else:
+            if depth == 0:
+                run_buffer.append(instr)
+                if op in _MARKING_OPERATORS:
+                    run_has_marking = True
+            else:
+                rewritten.append(instr)
+    _flush_run()
+
+    if changed:
+        page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
+    return fixed
+
+
+def _find_orphaned_marked_content(page, claimed_mcids):
+    """Everything in `page`'s content stream that PDF/UA requires be either
+    tagged or a real `/Artifact`, and is neither:
+
+    - An MCID-carrying, non-/Artifact BDC whose MCID isn't a key in
+      `claimed_mcids` - content the stream itself says is tagged (it names
+      a real role and carries an MCID) but that the struct tree, as it
+      stands right now, doesn't claim for this page. Usually a leaf
+      unlinked by a version of delete_nodes() that predates
+      _artifact_leaves().
+    - A *top-level* (unnested - no enclosing BDC/BMC of its own) non-/Artifact
+      BDC/BMC with no `/MCID` at all, and whose span contains no claimed
+      MCID anywhere inside it at any nesting depth. A bare MCID-less
+      marked-content span can never itself be reached from the struct
+      tree's /K (there's nothing for /ParentTree to index it by), so if it
+      isn't nested inside some other tagged or artifacted content -
+      inheriting that content's fate - and doesn't itself contain any real
+      claimed content, it can never have been anything but orphaned. This
+      is the shape formatting hints (hyphenation/kerning "glue" spans,
+      invisible joiners) from the PDF's original authoring tool tend to
+      take when they land outside every tag: this editor's struct-tree
+      model only ever sees MCID-linked content, so it never touches these,
+      for better (untouched by mistake) or worse (never cleaned up
+      either). The "contains no claimed MCID inside it" half of the check
+      exists because some authoring tools also wrap one properly-tagged
+      leaf in one or more redundant same-role, MCID-less BDCs (nested empty
+      `/H1 BDC`s around a single real `/H1 <</MCID n>>`, for one observed
+      example) - a top-level MCID-less non-/Artifact BDC by every surface
+      signal, but not orphaned: it still owns real, correctly-claimed
+      content, and treating it as an orphan would misreport well-formed
+      (if redundant) nesting as broken.
+    - A maximal run of instructions sitting completely outside every
+      BDC/BMC - not wrapped in so much as a tagless one - that contains at
+      least one operator that actually paints something (_MARKING_OPERATORS:
+      text showing, path painting, shading, or an XObject invocation).
+      Content painted with *no* marked-content wrapper at all is the most
+      basic version of "neither tagged nor artifact" there is; in one file
+      seen in practice this took two forms - a decorative background band
+      drawn via an unwrapped `Do` invoking a plain filled-rectangle Form
+      XObject, and a single invisible space character (a `TJ` run with a
+      large negative offset and nothing else) acting as the same kind of
+      hyphenation/justification "glue" as the BDC-wrapped case above, just
+      with no BDC at all.
+
+    A /Span nested *inside* an already-tagged (or already-artifacted)
+    region - e.g. an ActualText override for one run of a tagged paragraph
+    - is left alone by the second check for the same reason: it's
+    legitimate, inherits its parent's fate, and unwrapping it would
+    misreport well-formed content as broken.
+
+    Read-only: only reports what repair_orphaned_marked_content() would
+    need to fix, via a later call to _artifact_marked_content_on_page().
+    Returns (orphan_mcids: set[int], top_level_orphan_count: int,
+    unwrapped_run_count: int)."""
+    try:
+        instructions = pikepdf.parse_content_stream(page)
+    except Exception:
+        return set(), 0, 0
+
+    orphan_mcids = set()
+    top_level_orphans = 0
+    unwrapped_runs = 0
+    # Stack of open BDC/BMC frames - see _artifact_marked_content_on_page's
+    # matching pass for why a claimed MCID must poison every ancestor frame,
+    # not just its immediate parent.
+    stack = []
+    depth = 0
+    run_has_marking = False
     for instr in instructions:
-        mcid = None
-        if str(instr.operator) == "BDC" and len(instr.operands) == 2:
-            props = instr.operands[1]
+        op = str(instr.operator)
+        if op in ("BDC", "BMC"):
+            if depth == 0 and run_has_marking:
+                unwrapped_runs += 1
+            run_has_marking = False
+            tag = str(instr.operands[0]) if instr.operands else None
+            props = instr.operands[1] if op == "BDC" and len(instr.operands) == 2 else None
+            mcid = None
             if isinstance(props, pikepdf.Dictionary) and "/MCID" in props:
                 try:
                     mcid = int(props["/MCID"])
                 except (TypeError, ValueError):
                     mcid = None
-        if mcid is not None and mcid in mcids:
-            rewritten.append(pikepdf.ContentStreamInstruction(
-                [pikepdf.Name("/Artifact")], pikepdf.Operator("BMC")
-            ))
-            changed = True
+            if tag != "/Artifact" and mcid is not None and mcid not in claimed_mcids:
+                orphan_mcids.add(mcid)
+            if mcid is not None and mcid in claimed_mcids:
+                for frame in stack:
+                    frame["poisoned"] = True
+            stack.append({
+                "is_candidate": tag != "/Artifact" and mcid is None,
+                "top_level": len(stack) == 0,
+                "poisoned": False,
+            })
+            depth += 1
+        elif op == "EMC":
+            depth = max(0, depth - 1)
+            if depth == 0:
+                run_has_marking = False
+            if stack:
+                frame = stack.pop()
+                if frame["is_candidate"] and frame["top_level"] and not frame["poisoned"]:
+                    top_level_orphans += 1
         else:
-            rewritten.append(instr)
-
-    if changed:
-        page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
-
-
-def _find_orphaned_mcids(page, claimed_mcids):
-    """Every MCID `page`'s own content stream marks via a non-/Artifact BDC
-    operator that isn't a key in `claimed_mcids` - i.e. content the stream
-    itself says is tagged (it names a real role and carries an MCID) but
-    that the struct tree, as it stands right now, doesn't claim for this
-    page. Read-only: only reports what repair_orphaned_marked_content()
-    would need to fix, via a later call to _artifact_mcids_on_page."""
-    try:
-        instructions = pikepdf.parse_content_stream(page)
-    except Exception:
-        return set()
-
-    orphans = set()
-    for instr in instructions:
-        if str(instr.operator) != "BDC" or len(instr.operands) != 2:
-            continue
-        tag, props = instr.operands
-        if str(tag) == "/Artifact":
-            continue
-        if not isinstance(props, pikepdf.Dictionary) or "/MCID" not in props:
-            continue
-        try:
-            mcid = int(props["/MCID"])
-        except (TypeError, ValueError):
-            continue
-        if mcid not in claimed_mcids:
-            orphans.add(mcid)
-    return orphans
+            if depth == 0 and op in _MARKING_OPERATORS:
+                run_has_marking = True
+    if depth == 0 and run_has_marking:
+        unwrapped_runs += 1
+    return orphan_mcids, top_level_orphans, unwrapped_runs
 
 
-def repair_orphaned_marked_content(doc_id):
-    """One-off repair pass for PDFs already damaged by the bug
-    _artifact_leaves/_artifact_mcids_on_page now prevents: older versions of
-    delete_nodes() (and the Smartifact tool, which is backed by it) unlinked
-    a leaf from the struct tree without rewriting its content-stream BDC
-    operator, leaving marked content that still names a real struct role
-    (commonly /Figure, for a "smartified" full-page scan) with an MCID no
-    structure element claims any more. That reads fine in this editor and
-    in the Tags panel - nothing there ever walked the raw content stream -
-    but Acrobat's accessibility Full Check does read it directly, finds a
-    live tagged region with no owner, and fails it (the "Other elements ...
-    alternate text -- failed" report, visible in Acrobat's Content panel,
-    invisible in its Tags panel - see the module docstring's delete_nodes()
-    entry for the full mechanism).
-
-    Compares what each page's content stream actually marks against what
-    the struct tree currently claims for that page (_content_owners, the
-    same reverse index _rebuild_parent_tree uses) - anything marked but
-    unclaimed is exactly this bug's leftovers, and gets converted to a real
-    /Artifact the same way a fresh delete already does. A document with no
-    struct tree at all has nothing to compare against, so it's rejected
-    up front rather than silently doing nothing."""
-    doc = documents[doc_id]
-    if doc["elements"].get("root") is None:
-        raise ValueError("Document has no structure tree to repair")
-
+def _scan_orphaned_marked_content(doc):
+    """Scans every page of `doc` for marked content _find_orphaned_marked_content
+    would flag, without changing anything - the read-only half shared by
+    repair_orphaned_marked_content() (which acts on the result) and
+    count_orphaned_marked_content() (which just reports it, for the Verify
+    panel's "Orphaned marked content" check). Returns
+    {page_index: (mcid_orphans: set[int], extra_count: int)} for every page
+    that has at least one orphan of any kind - `extra_count` is the combined
+    count of the top-level-BDC and fully-unwrapped classes, which
+    _artifact_marked_content_on_page's `fix_orphans` flag always fixes
+    together (there's no reason to ever want only one of those two)."""
     per_page, _ = _content_owners(doc)
     orphans_by_page = {}
     for page_index, page in enumerate(doc["pdf"].pages):
         claimed = per_page.get(page_index, {})
-        orphans = _find_orphaned_mcids(page, claimed)
-        if orphans:
-            orphans_by_page[page_index] = orphans
+        mcid_orphans, top_level_orphans, unwrapped_runs = _find_orphaned_marked_content(page, claimed)
+        extra_count = top_level_orphans + unwrapped_runs
+        if mcid_orphans or extra_count:
+            orphans_by_page[page_index] = (mcid_orphans, extra_count)
+    return orphans_by_page
 
+
+def count_orphaned_marked_content(doc_id):
+    """Read-only report backing the Verify panel's "Orphaned marked
+    content" check: how many marked-content regions
+    repair_orphaned_marked_content() would fix right now, and how many
+    pages they're spread across - without changing the document (no undo
+    snapshot, nothing written, safe to call every time Verify runs).
+    Returns {"totalCount": int, "pageCount": int}. A document with no
+    structure tree has nothing to compare a content stream against (see
+    repair_orphaned_marked_content), so it's reported as zero rather than
+    raising - the renderer only asks this question for a document that has
+    one."""
+    doc = documents[doc_id]
+    if doc["elements"].get("root") is None:
+        return {"totalCount": 0, "pageCount": 0}
+
+    orphans_by_page = _scan_orphaned_marked_content(doc)
+    total_count = sum(len(mcid_orphans) + extra_count for mcid_orphans, extra_count in orphans_by_page.values())
+    return {"totalCount": total_count, "pageCount": len(orphans_by_page)}
+
+
+def repair_orphaned_marked_content(doc_id):
+    """Document-wide repair pass, backing the "Repair Orphaned Content"
+    toolbar button/script step, for marked content that PDF/UA requires be
+    either tagged or a real `/Artifact` and is currently neither (see
+    _find_orphaned_marked_content for the three shapes this takes). A few
+    origins produce it in practice:
+
+    - PDFs damaged by a bug _artifact_leaves/_artifact_marked_content_on_page
+      now prevents: older versions of delete_nodes() (and the Smartifact
+      tool, which is backed by it) unlinked a leaf from the struct tree
+      without rewriting its content-stream BDC operator, leaving marked
+      content that still names a real struct role (commonly /Figure, for a
+      "smartified" full-page scan) with an MCID no structure element claims
+      any more.
+    - Content the struct tree never claimed in the first place: formatting
+      "glue" spans (hyphenation/kerning hints, invisible joiners) some
+      authoring tools emit outside every tag, most often around long
+      hyphenated URLs/DOIs in a References list, or bare decorative marks
+      (a background band, an invisible spacing character) painted with no
+      marked-content wrapper at all. This editor's struct-tree model only
+      ever sees MCID-linked content, so nothing else in the app ever
+      notices or touches these - they pass straight through a save
+      unchanged.
+
+    Either way this reads fine in this editor and in the Tags panel -
+    nothing there ever walks the raw content stream - but Acrobat's
+    accessibility Full Check does read it directly, finds a live region
+    that's neither claimed by any structure element nor marked as an
+    artifact, and fails it: generic "Element N" names (there's no structure
+    element to name it after), invisible in the Tags panel, visible in
+    Acrobat's Content panel - and "Show in Content Panel" on the flagged
+    item in the MCID-orphan case finds nothing, since there's no structure
+    element for Acrobat to resolve the selection back to.
+
+    Compares what each page's content stream actually marks against what
+    the struct tree currently claims for that page (_content_owners, the
+    same reverse index _rebuild_parent_tree uses) - anything marked but
+    unclaimed, carrying a real tag with no MCID at the page's top level, or
+    painted with no marked-content wrapper at all, is exactly this
+    leftovers, and gets converted to (or newly wrapped in) a real /Artifact
+    the same way a fresh delete already does. A document with no struct
+    tree at all has nothing to compare against, so it's rejected up front
+    rather than silently doing nothing."""
+    doc = documents[doc_id]
+    if doc["elements"].get("root") is None:
+        raise ValueError("Document has no structure tree to repair")
+
+    orphans_by_page = _scan_orphaned_marked_content(doc)
     if not orphans_by_page:
         return {"tree": _rebuild_registry(doc_id), "repairedCount": 0, **_undo_state(doc)}
 
     _push_undo_snapshot(doc)
     repaired_count = 0
-    for page_index, mcids in orphans_by_page.items():
-        _artifact_mcids_on_page(doc, page_index, mcids)
-        repaired_count += len(mcids)
+    for page_index, (mcid_orphans, extra_count) in orphans_by_page.items():
+        repaired_count += _artifact_marked_content_on_page(
+            doc, page_index, mcid_orphans, fix_orphans=extra_count > 0,
+        )
 
     return {"tree": _rebuild_after_mutation(doc_id), "repairedCount": repaired_count, **_undo_state(doc)}
 
@@ -3831,6 +4092,8 @@ def main():
                 result = delete_nodes(request["docId"], request["nodeIds"])
             elif cmd == "repair_orphaned_artifacts":
                 result = repair_orphaned_marked_content(request["docId"])
+            elif cmd == "count_orphaned_artifacts":
+                result = count_orphaned_marked_content(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "get_leaf_text":

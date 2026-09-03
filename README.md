@@ -19,6 +19,7 @@ Features:
 - Proofread mode allows quick comparison between OCR text and original image with AI fixes highlighted in yellow
 - Show AT Changes lets you highlight any differences between Actual Text and the OCR text so review your own edits
 - Smartifact automatically artifacts full-page figures at a click (for when auto-taggers generate figures for every page of a scanned document, a common nuisance)
+- Repair Orphaned Content finds marked content that's neither tagged nor a real PDF artifact - leftover from a deleted tag, or inserted by other software (e.g. hyphenation/kerning glue around wrapped URLs) - and converts it to a real artifact, so Acrobat's accessibility checker stops flagging it as untagged content
 
 What it is not for and currently can't do:
 - It can't run OCR
@@ -148,10 +149,11 @@ Two things are worth knowing before moving code between them:
   out at the top of `renderer/tree-view.js`, and `npm run typecheck` reports
   any *other* cycle that appears.
 - **`actions.js` holds the one copy of each action a script can run**
-  (Smartifact, Scope Tables, Flatten All, Find/Replace, Fix All Actual Text
-  (AI)). Both the matching toolbar button and `scripts.js`'s Tools >
-  Scripts… runner call the same function, so a step behaves identically
-  whether it's clicked directly or run as part of a saved script.
+  (Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
+  Find/Replace, Fix All Actual Text (AI)). Every other trigger for the same
+  action - a toolbar button, a Tools menu item, the Verify panel's inline
+  "Repair" button, or `scripts.js`'s Tools > Scripts… runner - calls the
+  same function, so it behaves identically no matter which one fired it.
 
 ## Type checking
 

@@ -4,9 +4,11 @@
 // list and table nesting, alt text) and the grouped results the Verify panel
 // renders from them.
 
+import { runRepairOrphanedContent } from './actions.js';
 import { selectNode } from './tree-view.js';
 import { setActivePanel } from './details.js';
 import { el } from './dom.js';
+import { reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { walkTree } from './tree-index.js';
 import { countLabel } from './util.js';
@@ -301,10 +303,49 @@ function buildAltTextGroup() {
   };
 }
 
-function computeAccessibilityChecks() {
+// Unlike every other check here, this one can't be computed from data
+// already loaded into the renderer - it needs tag_worker.py to parse the raw
+// page content streams (see count_orphaned_marked_content() there and
+// repair_orphaned_marked_content()'s doc comment for the three shapes of
+// orphan it looks for), so it's the one async check in the report. A check
+// that fails gets `repair` set to the same runRepairOrphanedContent() Tools >
+// Repair Orphaned Content and a script's 'repair-orphaned-content' step use
+// - renderVerifyResults() renders that as an inline "Repair" button that
+// re-runs this whole report on success.
+async function buildOrphanedContentGroup() {
+  const name = 'Content Stream';
+  try {
+    const { totalCount, pageCount } = await window.api.countOrphanedContent(state.docId);
+    return {
+      name,
+      checks: [{
+        title: 'Orphaned marked content',
+        status: totalCount ? 'fail' : 'pass',
+        detail: totalCount
+          ? `${countLabel(totalCount, 'marked-content region')} across ${countLabel(pageCount, 'page')} ${totalCount === 1 ? 'is' : 'are'} neither tagged nor a real PDF artifact - Acrobat's accessibility checker will flag ${totalCount === 1 ? 'it' : 'them'} as untagged content.`
+          : 'Every marked-content region in the page content streams is either tagged or a real artifact.',
+        instances: [],
+        repair: totalCount > 0 ? runRepairOrphanedContent : null,
+      }],
+    };
+  } catch (err) {
+    return {
+      name,
+      checks: [{
+        title: 'Orphaned marked content',
+        status: 'na',
+        detail: `Could not check the content stream: ${err.message || err}`,
+        instances: [],
+      }],
+    };
+  }
+}
+
+async function computeAccessibilityChecks() {
   const groups = [buildDocumentGroup(), buildBookmarksGroup()];
   if (state.hasStructTree) {
     groups.push(buildHeadingsGroup(), buildListsGroup(), buildTablesGroup(), buildAltTextGroup());
+    groups.push(await buildOrphanedContentGroup());
   } else {
     groups.push({
       name: 'Structure',
@@ -327,8 +368,8 @@ function computeAccessibilityChecks() {
 // trailing row rather than dropped silently.
 const MAX_LISTED_INSTANCES = 100;
 
-export function renderVerifyResults() {
-  const groups = computeAccessibilityChecks();
+export async function renderVerifyResults() {
+  const groups = await computeAccessibilityChecks();
   const allChecks = groups.flatMap((g) => g.checks);
   const failCount = allChecks.filter((c) => c.status === 'fail').length;
   const warnCount = allChecks.filter((c) => c.status === 'warn').length;
@@ -369,6 +410,11 @@ export function renderVerifyResults() {
       detail.className = 'verify-check-detail';
       detail.textContent = check.detail;
       header.append(dot, title, detail);
+
+      if (check.repair && check.status === 'fail') {
+        header.appendChild(buildRepairButton(check.repair));
+      }
+
       row.appendChild(header);
 
       if (check.instances.length > 0) {
@@ -401,6 +447,34 @@ export function renderVerifyResults() {
 
     el.verifyBody.appendChild(section);
   }
+}
+
+// A failing check can offer a one-click fix (so far, only "Orphaned marked
+// content" via `repair`, but any future check could set it) - runs the same
+// actions.js function its other trigger(s) use, then re-renders the whole
+// report in place so the dialog shows the fix having actually taken effect
+// rather than leaving a stale "fail" row up next to a status message the
+// user has to go read separately.
+function buildRepairButton(repairAction) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-ghost verify-check-fix-btn';
+  button.textContent = 'Repair';
+  button.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    button.disabled = true;
+    button.textContent = 'Repairing…';
+    try {
+      const message = await repairAction();
+      setStatus(message);
+      await renderVerifyResults();
+    } catch (err) {
+      reportError('Could not repair', err);
+      button.disabled = false;
+      button.textContent = 'Repair';
+    }
+  });
+  return button;
 }
 
 function jumpToVerifyInstance(nodeId) {

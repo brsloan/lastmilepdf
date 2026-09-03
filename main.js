@@ -485,9 +485,10 @@ function setAutoCheckForUpdates(value) {
 }
 
 // Tools > Scripts… - user-defined sequences of the existing toolbar actions
-// (Smartifact, Scope Tables, Flatten All, Find/Replace, Fix All Actual Text
-// (AI)), built and reordered in the renderer's Scripts dialog and run in
-// order by the toolbar's "Run Script" button. Persisted the same way as the
+// (Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
+// Find/Replace, Fix All Actual Text (AI)), built and reordered in the
+// renderer's Scripts dialog and run in order by the toolbar's "Run Script"
+// button. Persisted the same way as the
 // settings above; the shape of a script/step is the renderer's concern (see
 // types/domain.d.ts's Script/ScriptStep), main.js just stores whatever it's
 // handed. `activeScriptId` is which saved script (by id) the Run Script
@@ -811,6 +812,8 @@ function buildAppMenu() {
       submenu: [
         { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => sendToWindow(win, 'menu:find-replace') },
         { type: 'separator' },
+        { label: 'Repair Orphaned Content', click: (_item, win) => sendToWindow(win, 'menu:repair-orphaned-content') },
+        { type: 'separator' },
         { label: 'Scripts…', click: (_item, win) => sendToWindow(win, 'menu:scripts') },
       ],
     },
@@ -1096,6 +1099,14 @@ ipcMain.handle('tags:flatten-tags', async (_event, { docId, nodeIds }) => {
 
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
   return callWorker('scope_tables', { docId });
+});
+
+ipcMain.handle('tags:repair-orphaned-content', async (_event, { docId }) => {
+  return callWorker('repair_orphaned_artifacts', { docId });
+});
+
+ipcMain.handle('tags:count-orphaned-content', async (_event, { docId }) => {
+  return callWorker('count_orphaned_artifacts', { docId });
 });
 
 ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
