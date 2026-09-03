@@ -83,6 +83,18 @@ body.busy * {
   outline-offset: 2px;
 }
 
+/* The Shortcuts/Help/Verify dialogs hand focus to their scrolling body on
+   open, so arrow/Page/Home/End keys have something to scroll (see
+   openScrollableDialog() in renderer.js). The ring above is worth keeping -
+   it's what says "this region has focus, the arrow keys act here" - but its
+   positive offset would be clipped by the dialog's own overflow:hidden on
+   all four sides, so pull it inside the region instead. */
+.shortcuts-body:focus-visible,
+.help-body:focus-visible,
+.verify-body:focus-visible {
+  outline-offset: -2px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
@@ -1995,4 +2007,16 @@ body.busy-cursor * {
 .verify-instance:hover {
   background: var(--panel-alt);
   color: var(--text);
+}
+
+/* The "…and N more issues not listed." row closing a capped instance list
+   (see MAX_LISTED_INSTANCES in verify.js). It summarizes rather than naming
+   one tag, so there's nothing to jump to - opt back out of the clickable
+   affordance the rows above it carry. */
+.verify-instance-more,
+.verify-instance-more:hover {
+  cursor: default;
+  font-style: italic;
+  background: none;
+  color: var(--text-dim);
 }

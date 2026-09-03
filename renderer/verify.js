@@ -319,6 +319,14 @@ function computeAccessibilityChecks() {
   return groups;
 }
 
+// How many of a check's failing tags get their own clickable row. A document
+// that fails a check tends to fail it in bulk (every Figure missing alt
+// text), and past this many rows the list stops being something you read and
+// starts being something you scroll - the count in the check's detail line is
+// the useful number by then. Anything beyond the cap is summarized in one
+// trailing row rather than dropped silently.
+const MAX_LISTED_INSTANCES = 100;
+
 export function renderVerifyResults() {
   const groups = computeAccessibilityChecks();
   const allChecks = groups.flatMap((g) => g.checks);
@@ -366,11 +374,23 @@ export function renderVerifyResults() {
       if (check.instances.length > 0) {
         const list = document.createElement('ul');
         list.className = 'verify-instances';
-        for (const instance of check.instances.slice(0, 100)) {
+        for (const instance of check.instances.slice(0, MAX_LISTED_INSTANCES)) {
           const li = document.createElement('li');
           li.className = 'verify-instance';
           li.textContent = instance.detail;
           li.addEventListener('click', () => jumpToVerifyInstance(instance.nodeId));
+          list.appendChild(li);
+        }
+        // The check's own detail line above still counts every instance, so
+        // without this the list just stops at the cap and the two silently
+        // disagree - "142 tags missing alternate text" over a list of 100.
+        // Not clickable (there's no single tag to jump to) and styled as
+        // such - see .verify-instance-more in styles.css.
+        const undisplayed = check.instances.length - MAX_LISTED_INSTANCES;
+        if (undisplayed > 0) {
+          const li = document.createElement('li');
+          li.className = 'verify-instance verify-instance-more';
+          li.textContent = `…and ${countLabel(undisplayed, 'more issue')} not listed.`;
           list.appendChild(li);
         }
         row.appendChild(list);

@@ -716,6 +716,25 @@ function buildRecentFilesSubmenu() {
   ];
 }
 
+// --- Live menu state ----------------------------------------------------
+//
+// buildAppMenu() throws away every MenuItem and builds new ones from the
+// template below, so anything toggled *after* startup has to be read back
+// out of here rather than hardcoded into that template. This used not to
+// matter - the menu was built exactly once - but File > Open Recent made
+// rebuilding routine (every open, every Save As, every Clear Recent Files,
+// see the Menu.setApplicationMenu calls elsewhere in this file), and a
+// template with `enabled: false`/`checked: false` baked in reset all four
+// of these on each one: Undo/Redo greyed out despite a live undo stack
+// (nothing re-sends menu:undo-state-changed after a Save As), and the two
+// View checkboxes cleared while the renderer stayed in that mode - which
+// also cost a click to get back out of it, since the next click on a
+// wrongly-unchecked item sends `true` and just re-enters the mode.
+let menuUndoEnabled = false;
+let menuRedoEnabled = false;
+let menuProofreadChecked = false;
+let menuShowAtChangesChecked = false;
+
 function buildAppMenu() {
   const isMac = process.platform === 'darwin';
   /** @type {import('electron').MenuItemConstructorOptions[]} */
@@ -749,8 +768,8 @@ function buildAppMenu() {
     {
       label: 'Edit',
       submenu: [
-        { id: 'menu-undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, enabled: false, click: (_item, win) => sendToWindow(win, 'menu:undo') },
-        { id: 'menu-redo', label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, enabled: false, click: (_item, win) => sendToWindow(win, 'menu:redo') },
+        { id: 'menu-undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, enabled: menuUndoEnabled, click: (_item, win) => sendToWindow(win, 'menu:undo') },
+        { id: 'menu-redo', label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', registerAccelerator: false, enabled: menuRedoEnabled, click: (_item, win) => sendToWindow(win, 'menu:redo') },
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },
@@ -770,14 +789,20 @@ function buildAppMenu() {
         {
           label: 'Proofread Mode',
           type: 'checkbox',
-          checked: false,
-          click: (item, win) => sendToWindow(win, 'menu:proofread', item.checked),
+          checked: menuProofreadChecked,
+          click: (item, win) => {
+            menuProofreadChecked = item.checked;
+            sendToWindow(win, 'menu:proofread', item.checked);
+          },
         },
         {
           label: 'Show AT Changes',
           type: 'checkbox',
-          checked: false,
-          click: (item, win) => sendToWindow(win, 'menu:show-at-changes', item.checked),
+          checked: menuShowAtChangesChecked,
+          click: (item, win) => {
+            menuShowAtChangesChecked = item.checked;
+            sendToWindow(win, 'menu:show-at-changes', item.checked);
+          },
         },
       ],
     },
@@ -988,12 +1013,18 @@ ipcMain.on('doc:dirty-changed', (_event, dirty) => {
 // Keeps the Edit menu's Undo/Redo items in sync with the renderer's undo
 // stack - see the comment above buildAppMenu() for why there's no toolbar
 // button doing this instead.
+// Recorded as well as applied, so a later buildAppMenu() (File > Open, Save
+// As, Clear Recent Files) rebuilds these items enabled the same way rather
+// than back to the template's startup default - see the live menu state
+// above buildAppMenu().
 ipcMain.on('menu:undo-state-changed', (_event, { canUndo, canRedo }) => {
+  menuUndoEnabled = !!canUndo;
+  menuRedoEnabled = !!canRedo;
   const menu = Menu.getApplicationMenu();
   const undoItem = menu?.getMenuItemById('menu-undo');
   const redoItem = menu?.getMenuItemById('menu-redo');
-  if (undoItem) undoItem.enabled = !!canUndo;
-  if (redoItem) redoItem.enabled = !!canRedo;
+  if (undoItem) undoItem.enabled = menuUndoEnabled;
+  if (redoItem) redoItem.enabled = menuRedoEnabled;
 });
 
 ipcMain.handle('dialog:confirm-discard', async (event, { detail }) => {

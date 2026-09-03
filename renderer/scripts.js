@@ -14,6 +14,7 @@
 // differently-configured Find/Replace steps.
 
 import { runFindReplaceAll, runFixAllActualTextAi, runFlattenAll, runScopeTables, runSmartifact } from './actions.js';
+import { notifyAiBatchComplete } from './ai-batch.js';
 import { el } from './dom.js';
 import { reportError, setStatus } from './shell.js';
 import { state } from './state.js';
@@ -342,6 +343,15 @@ export async function runActiveScript() {
     return;
   }
 
+  // runFixAllActualTextAi() leaves the finish notification to its caller (see
+  // its doc comment), which the toolbar's own Fix All Actual Text (AI) button
+  // does but this didn't - so a script built around that step, the one case
+  // where the run is long enough to walk away from, was the one case that
+  // finished silently. Only scripts that actually contain the AI step notify:
+  // the other four actions are worker round-trips that finish in well under a
+  // second, and a chime for those is noise, not news.
+  const isLongRunning = script.steps.some((step) => step.type === 'fix-actual-text-ai');
+
   el.btnRunScript.disabled = true;
   document.body.classList.add('busy');
   try {
@@ -357,5 +367,8 @@ export async function runActiveScript() {
   } finally {
     document.body.classList.remove('busy');
     updateRunScriptButtonState();
+    // Success and failure alike, same as the toolbar button - a script that
+    // stopped on its third step is exactly as worth being told about.
+    if (isLongRunning) notifyAiBatchComplete(el.statusBar.textContent);
   }
 }

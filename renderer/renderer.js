@@ -434,29 +434,46 @@ el.btnTableEditorAddRow.addEventListener('click', () => addTableEditorRow());
 
 el.btnTableEditorAddColumn.addEventListener('click', () => addTableEditorColumn());
 
-// The Table Editor is a modal dialog, but none of the app's *keyboard*
-// shortcuts know that - they all live on window/document (role shortcuts,
-// arrow-key tree nav, Ctrl+Z/Y, Ctrl+P, Delete...) and only check whether
-// document.activeElement is an INPUT/TEXTAREA/SELECT before acting, not
-// whether a modal dialog is open over everything. Since this dialog's own
-// UI has plenty of keydown targets that AREN'T text fields - the row/column
-// arrows, the cells themselves between edits - any stray keystroke while
-// one of those (or nothing) has focus falls straight through to those
-// global handlers and acts on whatever's still selected in the tree behind
-// the modal, e.g. the very Table tag this dialog has open: a role-shortcut
-// letter ('t'/'d'/'h'/'p'/...) silently relabels it, an arrow key moves the
-// tree selection, Ctrl+Z undoes something unrelated - all invisibly, since
-// this dialog is on top. Stopping propagation here, unconditionally, for
-// every key (not just the Delete case below) is what actually isolates it.
-// Native behavior *inside* the dialog - typing in the inline cell editor or
-// the Scope/Span fields, Escape-to-close, Tab focus-trapping - is
-// unaffected: stopPropagation() only blocks the event from reaching
-// ancestors further out, never the target's own listeners or the browser's
-// own default handling. isDeleteShortcut() isn't defined yet at module-eval
-// time when this listener is registered, but it only needs to exist by the
-// time a keydown actually happens, so that's fine.
+// None of the app's *keyboard* shortcuts know that a dialog can be open over
+// everything - they all live on window/document (role shortcuts, arrow-key
+// tree nav, Ctrl+Z/Y, Ctrl+P, Delete...) and only check whether
+// document.activeElement is an INPUT/TEXTAREA/SELECT before acting. Every
+// dialog here has plenty of keydown targets that AREN'T text fields - close
+// buttons, the Table Editor's row/column arrows and its cells between edits,
+// Verify's clickable issue rows, a Scripts step's reorder buttons, or just
+// the dialog element itself when nothing inside it has been focused yet - so
+// any stray keystroke while one of those has focus falls straight through to
+// those global handlers and acts on whatever's still selected in the tree
+// behind the dialog: a role-shortcut letter ('t'/'d'/'h'/'p'/'f'/1-6)
+// silently relabels the selected tag, Delete deletes it, an arrow key moves
+// the tree selection (and, having called preventDefault(), stops the dialog
+// scrolling - which is why Help and Shortcuts couldn't be read with the
+// arrow keys) - all invisibly, since the dialog is on top.
+//
+// Stopping propagation at each dialog, unconditionally, for every key, is
+// what actually isolates them. Native behavior *inside* a dialog - typing in
+// a field, Escape-to-close, Tab focus-trapping - is unaffected:
+// stopPropagation() only blocks the event from reaching ancestors further
+// out, never the target's own listeners or the browser's own default
+// handling. Nor does it touch the deliberately capture-phase window
+// listeners further down this file (Walk's stop-on-any-key, Add Figure's
+// Escape), which run ahead of this by design. Applied by query rather than
+// naming each dialog so a dialog added later is covered without having to
+// remember this.
+//
+// Find/Replace is in scope too even though it's the one non-modal dialog
+// (see positionFindReplaceDialog()) - a key pressed while focus is inside it
+// still means "type/act here", not "act on the tree behind me"; keys pressed
+// with the tree itself focused never reach this listener at all.
+for (const dialog of document.querySelectorAll('dialog')) {
+  dialog.addEventListener('keydown', (e) => e.stopPropagation());
+}
+
+// The Table Editor's own Delete, which the guard above now shields from the
+// global tag-tree Delete handler. isDeleteShortcut() isn't defined yet at
+// module-eval time when this listener is registered, but it only needs to
+// exist by the time a keydown actually happens, so that's fine.
 el.tablePreviewDialog.addEventListener('keydown', (e) => {
-  e.stopPropagation();
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (!isDeleteShortcut(e)) return;
@@ -797,7 +814,23 @@ el.tablePreviewDialog.addEventListener('close', () => {
   state.tableEditorSelectedColIndex = null;
 });
 
-window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());
+// The read-only reference dialogs (Shortcuts, Help, Verify) put their only
+// focusable control - the × button - in a header that sits OUTSIDE the
+// scrolling region (.shortcuts-body/.help-body/.verify-body each own the
+// overflow; the dialog itself is overflow:hidden). showModal() focuses that
+// button, and arrow/Page/Home/End keys scroll the nearest scrollable
+// ancestor of whatever has focus - which, from the header, is nothing. So
+// these dialogs could not be scrolled from the keyboard at all: not because
+// something was swallowing the keys, but because the browser had nothing to
+// scroll at the focus point. Each body carries tabindex="-1" (see
+// index.html) purely so it can be given focus here, which is also what lets
+// a keyboard or screen-reader user reach the content at all.
+function openScrollableDialog(dialog, body) {
+  dialog.showModal();
+  body.focus();
+}
+
+window.api.onMenuShortcuts(() => openScrollableDialog(el.shortcutsDialog, el.shortcutsBody));
 
 el.btnCloseShortcuts.addEventListener('click', () => el.shortcutsDialog.close());
 
@@ -805,7 +838,7 @@ el.shortcutsDialog.addEventListener('click', (e) => {
   if (e.target === el.shortcutsDialog) el.shortcutsDialog.close();
 });
 
-window.api.onMenuHelpDoc(() => el.helpDialog.showModal());
+window.api.onMenuHelpDoc(() => openScrollableDialog(el.helpDialog, el.helpBody));
 
 el.btnCloseHelp.addEventListener('click', () => el.helpDialog.close());
 
@@ -1516,7 +1549,7 @@ window.addEventListener('keydown', (e) => {
 el.btnVerify.addEventListener('click', () => {
   if (!state.docId) return;
   renderVerifyResults();
-  el.verifyDialog.showModal();
+  openScrollableDialog(el.verifyDialog, el.verifyBody); // see openScrollableDialog() for why focus goes to the body
 });
 
 el.btnCloseVerify.addEventListener('click', () => el.verifyDialog.close());

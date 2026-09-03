@@ -293,7 +293,7 @@
       <h2>Keyboard Shortcuts</h2>
       <button type="button" id="btn-close-shortcuts" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
-    <div class="shortcuts-body">
+    <div id="shortcuts-body" class="shortcuts-body" tabindex="-1">
       <section class="shortcuts-group">
         <h3>File</h3>
         <dl>
@@ -396,7 +396,7 @@
       <h2>Help</h2>
       <button type="button" id="btn-close-help" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
-    <div class="help-body">
+    <div id="help-body" class="help-body" tabindex="-1">
       <section class="help-section">
         <h3>Overview</h3>
         <p>LastMilePDF edits the accessibility tag tree (the PDF's logical structure tree) of a PDF, plus its outline (bookmarks) and document metadata. Open a PDF, and if it already has a tag tree, the <strong>Page Preview</strong> pane shows the current page, the <strong>Tag Tree</strong> pane shows its structure, and the <strong>Tag Properties</strong> pane lets you edit whatever tag is selected. A PDF with no tag tree can still be viewed, but there is nothing to edit until it has been tagged elsewhere.</p>
@@ -675,7 +675,7 @@
       <button type="button" id="btn-close-verify" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
     <p class="verify-notice">This is a convenience checker for common issues, not a full WCAG/PDF-UA conformance test. Passing here does not guarantee the document is fully accessible.</p>
-    <div id="verify-body" class="verify-body"></div>
+    <div id="verify-body" class="verify-body" tabindex="-1"></div>
   </dialog>
 
   <script type="module" src="renderer.js"></script>
