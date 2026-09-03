@@ -1301,36 +1301,21 @@ window.addEventListener('keydown', (e) => {
   renderTree();
 });
 
-// Ctrl/Cmd+Right/Left steps a heading tag (H1-H6) down/up a level. No-op on
-// anything else, including the bare "H" role, which has no numbered level -
-// in which case Ctrl/Cmd+Left instead collapses every tag except whatever
-// is effectively top-level (the structure root's direct children, or - when
-// a hidden /Document wrapper sits between them - its own direct children
-// instead, since those are what actually render at the top of the tree),
-// so that top-level list stays visible.
+// Ctrl/Cmd+Left collapses every tag in the tree, including top-level ones -
+// each still gets its own row (a collapsed tag's row stays put; only its
+// children are hidden), so the tree just folds down to one line per
+// top-level tag.
 window.addEventListener('keydown', (e) => {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (e.key !== 'ArrowLeft') return;
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
 
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-  if (state.selectedNodeId && attemptHeadingLevelChange(e.key === 'ArrowRight' ? 1 : -1)) {
-    e.preventDefault();
-    return;
-  }
-  if (e.key !== 'ArrowLeft') return;
   if (!state.tree) return;
 
   e.preventDefault();
   walkTree(state.tree, (node) => {
     if (node.type !== 'element') return;
-    // Keep whatever's effectively top-level expanded, so it stays visible
-    // as a list - only collapse what's nested inside it. The hidden
-    // /Document wrapper itself (see findHiddenDocumentWrapperId()) is
-    // skipped too, though harmlessly - it never gets a row to collapse.
-    const parentId = state.nodesById.get(node.id)?.parentId;
-    if (node.id === state.hiddenDocumentId || parentId === state.tree.id || parentId === state.hiddenDocumentId) return;
     state.collapseOverrides.set(node.id, true);
   });
   renderTree();
