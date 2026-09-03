@@ -3,7 +3,16 @@
   "version": "0.1.0",
   "description": "Standalone Electron app for viewing and editing PDF accessibility (tag) structure trees.",
   "main": "main.js",
-  "author": "Ben Sloan",
+  "author": "Benjamin Sloan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brsloan/lastmilepdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/brsloan/lastmilepdf/issues"
+  },
+  "homepage": "https://github.com/brsloan/lastmilepdf#readme",
   "private": true,
   "scripts": {
     "start": "electron .",

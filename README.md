@@ -254,3 +254,12 @@ Things this scaffold deliberately does not solve yet:
 - **Worker seems to hang** - check the terminal running `npm start`;
   `main.js` forwards the Python process's stderr there, including
   tracebacks.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
+
+This app bundles two open-source dependencies with their own licenses:
+[pikepdf](https://github.com/pikepdf/pikepdf) (MPL-2.0), compiled into the
+packaged `tag_worker.exe`, and [pdf.js](https://github.com/mozilla/pdf.js)
+(Apache-2.0), which renders the page preview.
