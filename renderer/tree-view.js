@@ -71,7 +71,39 @@ function computeDescendantAiProposalIds() {
   return ids;
 }
 
+// The <ul> each render path builds its rows into - role="tree" plus the
+// three inline layout styles are identical across all three, so this is the
+// one place that has to be right rather than three copies drifting apart.
+function createTreeRootUl() {
+  const ul = document.createElement('ul');
+  ul.className = 'tree-node';
+  ul.style.listStyle = 'none';
+  ul.style.padding = '0';
+  ul.style.margin = '0';
+  ul.setAttribute('role', 'tree');
+  ul.setAttribute('aria-label', 'Tag tree');
+  return ul;
+}
+
+// Roving tabindex for the tree's ARIA treeitem rows: exactly one is ever in
+// the Tab order (the active selection, or the first rendered row as a
+// fallback so Tab has somewhere to land before anything is selected).
+// renderTree() tears down and rebuilds the whole tree DOM on every
+// selection change, which would otherwise silently drop keyboard focus out
+// of the tree on every arrow-key press, since the previously-focused row no
+// longer exists - `hadFocus` (captured by the caller before that teardown;
+// by now document.activeElement has already reverted to <body>) says
+// whether to reclaim it on the new row that replaced it.
+function applyRovingTabIndex(hadFocus) {
+  const rows = /** @type {HTMLElement[]} */ (Array.from(el.tagTreeContent.querySelectorAll('[role="treeitem"]')));
+  if (rows.length === 0) return;
+  const active = rows.find((row) => row.dataset.nodeId === state.selectedNodeId) || rows[0];
+  for (const row of rows) row.tabIndex = row === active ? 0 : -1;
+  if (hadFocus) active.focus({ preventScroll: true });
+}
+
 export function renderTree() {
+  const hadFocus = el.tagTree.contains(document.activeElement);
   el.tagTreeContent.innerHTML = '';
   descendantAtChangeIds = computeDescendantAtChangeIds();
   descendantAiProposalIds = computeDescendantAiProposalIds();
@@ -88,20 +120,17 @@ export function renderTree() {
   // just falls back to whatever it was already set to the moment
   // proofreading turns back off (see setProofreadMode() in proofread.js).
   if (state.proofreadMode) {
-    renderProofreadTree();
+    renderProofreadTree(hadFocus);
     return;
   }
   if (state.filter !== 'all') {
-    renderFilteredTree();
+    renderFilteredTree(hadFocus);
     return;
   }
-  const ul = document.createElement('ul');
-  ul.className = 'tree-node';
-  ul.style.listStyle = 'none';
-  ul.style.padding = '0';
-  ul.style.margin = '0';
+  const ul = createTreeRootUl();
   ul.appendChild(renderTreeNode(state.tree));
   el.tagTreeContent.appendChild(ul);
+  applyRovingTabIndex(hadFocus);
 }
 
 function nodeMatchesFilter(node) {
@@ -121,7 +150,7 @@ function collectFilteredNodes(node, matches, stopAtMatch) {
   for (const child of node.children || []) collectFilteredNodes(child, matches, stopAtMatch);
 }
 
-function renderFilteredTree() {
+function renderFilteredTree(hadFocus) {
   const nested = state.filter === 'figures' || state.filter === 'table';
   const matches = [];
   collectFilteredNodes(state.tree, matches, nested);
@@ -134,15 +163,12 @@ function renderFilteredTree() {
     return;
   }
 
-  const ul = document.createElement('ul');
-  ul.className = 'tree-node';
-  ul.style.listStyle = 'none';
-  ul.style.padding = '0';
-  ul.style.margin = '0';
+  const ul = createTreeRootUl();
   for (const node of matches) {
     ul.appendChild(nested ? renderTreeNode(node) : renderFilteredRow(node));
   }
   el.tagTreeContent.appendChild(ul);
+  applyRovingTabIndex(hadFocus);
 }
 
 function renderFilteredRow(node) {
@@ -208,7 +234,7 @@ function collectProofreadNodes(node, matches) {
 // reflecting only document order, since Proofread Mode's own Page Up/Down
 // and edge-of-line Up/Down stepping (see proofread.js) is the only way
 // through it and has no use for expand/collapse or nesting.
-function renderProofreadTree() {
+function renderProofreadTree(hadFocus) {
   const matches = [];
   collectProofreadNodes(state.tree, matches);
 
@@ -220,13 +246,10 @@ function renderProofreadTree() {
     return;
   }
 
-  const ul = document.createElement('ul');
-  ul.className = 'tree-node';
-  ul.style.listStyle = 'none';
-  ul.style.padding = '0';
-  ul.style.margin = '0';
+  const ul = createTreeRootUl();
   for (const node of matches) ul.appendChild(renderFilteredRow(node));
   el.tagTreeContent.appendChild(ul);
+  applyRovingTabIndex(hadFocus);
 }
 
 // Proofread Mode (View > Proofread) needs to scroll the tag tree so the
@@ -264,11 +287,18 @@ export function alignSelectedTagTreeRow(row) {
   el.tagTree.scrollTop += rowTop - fieldTop;
 }
 
-// Shared by both tree-render paths: 'selected' marks the active/focused tag
-// (the one the details panel, highlight, and scroll follow); 'multi-selected'
-// marks every OTHER member of a >1-tag selection with a lighter tint, so the
-// active tag still reads as visually distinct from the rest of the block.
+// Shared by every row across both tree-render paths: sets the ARIA
+// treeitem role/selection state alongside the same-purpose CSS classes.
+// 'selected' marks the active/focused tag (the one the details panel,
+// highlight, and scroll follow); 'multi-selected' marks every OTHER member
+// of a >1-tag selection with a lighter tint, so the active tag still reads
+// as visually distinct from the rest of the block. aria-selected mirrors
+// state.selectedNodeIds (every selected tag, not just the active one),
+// since that's what a multi-select tree's "selected" means to a screen
+// reader.
 function applySelectionClasses(row, nodeId) {
+  row.setAttribute('role', 'treeitem');
+  row.setAttribute('aria-selected', String(state.selectedNodeIds.has(nodeId)));
   if (state.selectedNodeIds.size > 1 && state.selectedNodeIds.has(nodeId)) row.classList.add('multi-selected');
   if (nodeId === state.selectedNodeId) row.classList.add('selected');
 }
@@ -375,6 +405,10 @@ function renderTreeNode(node) {
 
     const hasChildren = !!(node.children && node.children.length > 0);
     const collapsed = hasChildren && isNodeCollapsed(node);
+    // aria-expanded only belongs on a treeitem the user can actually expand/
+    // collapse - omitted entirely (not "false") on a childless element, per
+    // the ARIA tree pattern.
+    if (hasChildren) row.setAttribute('aria-expanded', String(!collapsed));
     if (hasChildren) {
       const toggle = document.createElement('span');
       toggle.className = 'tree-toggle';
@@ -465,6 +499,7 @@ function renderTreeNode(node) {
   if (node.children && node.children.length > 0 && !isCollapsedElement) {
     const ul = document.createElement('ul');
     ul.className = 'tree-children';
+    ul.setAttribute('role', 'group');
     appendChildRows(ul, node.children);
     li.appendChild(ul);
   }

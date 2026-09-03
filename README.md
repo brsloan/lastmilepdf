@@ -246,6 +246,13 @@ Things this scaffold deliberately does not solve yet:
   documents; a very large PDF would benefit from streaming instead.
 - **Single document at a time.** No tabs/multi-document support.
 
+## Contributing
+
+Bug reports and PRs are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md)
+for how to get set up and what to check before opening a PR. This project
+follows a [Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue?
+See [SECURITY.md](SECURITY.md) rather than opening a public issue.
+
 ## Troubleshooting
 
 - **"pikepdf is not installed"** - the interpreter `main.js` spawned
