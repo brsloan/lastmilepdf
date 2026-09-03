@@ -13,7 +13,7 @@
 // reachable here through a relative import of its bundle, and modelling its
 // API is a separate job from modelling ours.
 
-import type { TagNode, BookmarkNode, DocInfo, IndexedNode } from './domain';
+import type { TagNode, BookmarkNode, DocInfo, IndexedNode, UpdateInfo, UpdateState } from './domain';
 
 /** A point in canvas-pixel space. */
 export interface Point {
@@ -210,6 +210,14 @@ export interface AppState {
   // --- Auto-Save ----------------------------------------------------------
   /** File > Settings > Preferences > Auto-Save - periodically save to disk. */
   autoSaveEnabled: boolean;
+
+  // --- Auto-update (Help > About) ------------------------------------------
+  /** File > Settings > Preferences > Automatically check for updates - only gates the launch-time check; Help > About's own check always works. */
+  autoCheckUpdates: boolean;
+  /** Static snapshot from window.api.getUpdateInfo(), refetched each time About opens. */
+  updateInfo: UpdateInfo;
+  /** Live status kept current by window.api.onUpdateState(), regardless of whether About is open. */
+  updateState: UpdateState;
 
   // --- Split Content (see split-content.js) ------------------------------
   /** The content leaf the Split Content panel currently shows, or null. */

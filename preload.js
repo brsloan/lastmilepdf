@@ -31,6 +31,8 @@ const { contextBridge, ipcRenderer } = require('electron');
  * @typedef {import('./types/domain').LeafTextResult} LeafTextResult
  * @typedef {import('./types/domain').SplitLeafResult} SplitLeafResult
  * @typedef {import('./types/domain').Script} Script
+ * @typedef {import('./types/domain').UpdateState} UpdateState
+ * @typedef {import('./types/domain').UpdateInfo} UpdateInfo
  */
 
 const api = {
@@ -422,6 +424,35 @@ const api = {
   getAutoSaveEnabled: () => ipcRenderer.invoke('settings:get-auto-save-enabled'),
   /** @param {boolean} value @returns {Promise<void>} */
   setAutoSaveEnabled: (value) => ipcRenderer.invoke('settings:set-auto-save-enabled', { value }),
+
+  // File > Settings > Preferences - whether to silently check GitHub for a
+  // newer release on launch. Persisted the same way as the settings above.
+  // Doesn't affect Help > About's own "Check for Updates" button, which
+  // always works regardless of this setting.
+  /** @returns {Promise<boolean>} */
+  getAutoCheckUpdates: () => ipcRenderer.invoke('settings:get-auto-check-updates'),
+  /** @param {boolean} value @returns {Promise<void>} */
+  setAutoCheckUpdates: (value) => ipcRenderer.invoke('settings:set-auto-check-updates', { value }),
+
+  // Help > About's update UI. getUpdateInfo() is what the dialog reads on
+  // open (whether checking is even possible, portable vs. installed build,
+  // and whatever the most recent check already found); the four calls
+  // below drive the actual flow, whose results arrive via onUpdateState
+  // rather than these calls' own return values - see main.js's Auto-update
+  // section for why (checkForUpdates() resolves once the request is sent,
+  // not once the answer is known).
+  /** @returns {Promise<UpdateInfo>} */
+  getUpdateInfo: () => ipcRenderer.invoke('updates:get-info'),
+  /** @returns {Promise<void>} */
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  /** @returns {Promise<void>} */
+  downloadUpdate: () => ipcRenderer.invoke('updates:download'),
+  /** Quits and installs the already-downloaded update. @returns {Promise<void>} */
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
+  /** Portable build only - opens the release page instead of downloading in place. @returns {Promise<void>} */
+  openReleasePage: () => ipcRenderer.invoke('updates:open-release-page'),
+  /** @param {(event: unknown, state: UpdateState) => void} callback */
+  onUpdateState: (callback) => ipcRenderer.on('update:state', callback),
 
   /** @param {() => void} callback */
   onMenuScripts: (callback) => ipcRenderer.on('menu:scripts', callback),

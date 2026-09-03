@@ -201,8 +201,12 @@ come back quietly.
 ## Packaging
 
 For distribution to users who don't have Node or Python installed, the app
-ships with the tag worker compiled into a standalone exe (via PyInstaller)
-rather than spawning a system Python:
+ships with the tag worker compiled into a standalone executable (via
+PyInstaller) rather than spawning a system Python. Windows and Linux are
+both built and CI-tested (`.github/workflows/release.yml` builds both on
+every version tag); see "Platform support" below for macOS.
+
+**Windows:**
 
 ```
 pip install pyinstaller   # into .venv, alongside pikepdf
@@ -221,13 +225,64 @@ This runs two steps:
    - `LastMilePDF-<version>-portable.exe` - a single portable exe, no
      install step at all.
 
-`main.js` picks between the dev path (`.venv` + `tag_worker.py`) and the
-packaged exe automatically via `app.isPackaged` - see `packagedWorkerPath()`.
-
 Neither build is code-signed, so first launch on another machine will show
 a SmartScreen "Windows protected your PC" warning (unrelated to admin
 rights - dismiss via "More info" -> "Run anyway"). Getting rid of that
 warning requires a paid code-signing certificate.
+
+**Linux:**
+
+```
+pip install pyinstaller   # into .venv, alongside pikepdf
+npm run dist:linux
+```
+
+Same two steps as Windows, using the venv's own `bin/python` instead of
+`Scripts\python.exe`, producing a single `LastMilePDF-<version>.AppImage` -
+no install step, just `chmod +x` and run. Running it needs `libfuse2` on
+distros that dropped it by default (Ubuntu 22.04+, for one) - see
+[AppImage's FUSE requirement](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+if it won't launch.
+
+`main.js` picks between the dev path (`.venv` + `tag_worker.py`) and the
+packaged executable automatically via `app.isPackaged`, and between the
+`.exe`/no-extension executable name via `process.platform` - see
+`packagedWorkerPath()`.
+
+### Platform support
+
+Windows and Linux are both packaged, CI-built on every release tag, and
+covered by `npm test`/`npm run typecheck` in CI (see
+`.github/workflows/ci.yml`, which runs on `windows-latest` and
+`ubuntu-latest`). **macOS is not currently packaged.** `main.js` already
+resolves a `.venv`/Python path for `darwin` the same way it does for
+Windows and Linux, so running from source (`npm start`) should work, but
+nobody builds, signs, or tests an actual `.app`/`.dmg` - treat that path as
+unverified. Unsigned macOS builds are also blocked hard by Gatekeeper
+(worse than Windows SmartScreen) without a paid Apple Developer account to
+sign and notarize, which is the main reason this isn't done yet. A
+`mac` block in package.json's `build` config plus a
+`build-macos`/`macos-latest` job in the release workflow (mirroring the
+Linux one added here) is what adding it would take, PRs welcome.
+
+### Auto-update
+
+The installed Windows build (NSIS) and the Linux AppImage both check
+GitHub Releases for a newer version on launch via
+[electron-updater](https://www.electron.build/auto-update), unless turned
+off in Preferences - electron-updater supports both formats' self-replace
+natively. Finding one only ever shows a native alert - actually
+downloading and installing always needs an explicit click, from Help >
+About. The Windows *portable* exe can't replace its own running file in
+place, so it skips downloading/installing and just opens the release page
+instead (see `isPortableBuild` in main.js).
+
+This relies on `.github/workflows/release.yml` uploading each platform's
+`latest.yml`/`latest-linux.yml` and `.blockmap` files alongside the
+installers - `dist:win`/`dist:linux` build with `--publish never` (see
+`build.publish` in package.json), so electron-builder writes those locally
+without trying to upload anywhere itself; the workflow's own GitHub
+Release step does the actual upload.
 
 ## Known limitations
 

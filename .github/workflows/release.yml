@@ -32,8 +32,64 @@ jobs:
 
       - run: npm run dist:win
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.blockmap
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Create the Python venv the worker build expects
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r python/requirements.txt pyinstaller
+
+      - run: npm ci
+
+      - run: npm run dist:linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: |
+            dist/*.AppImage
+            dist/latest-linux.yml
+            dist/*.blockmap
+
+  # A single release step combining both platforms' artifacts, rather than
+  # each build job creating its own release, avoids two parallel
+  # action-gh-release runs racing to create the same tag's release.
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.AppImage
+            dist/latest-linux.yml
+            dist/*.blockmap
           generate_release_notes: true

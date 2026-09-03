@@ -19,10 +19,13 @@
     "typecheck": "node scripts/typecheck.js",
     "test": "node scripts/smoke-test.js",
     "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
-    "dist:win": "npm run build:worker && electron-builder --win"
+    "build:worker:linux": ".venv/bin/python -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
+    "dist:win": "npm run build:worker && electron-builder --win --publish never",
+    "dist:linux": "npm run build:worker:linux && electron-builder --linux --publish never"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
+    "electron-updater": "^6.8.9",
     "pdfjs-dist": "^4.6.82",
     "zod": "^4.5.4"
   },
@@ -38,6 +41,11 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "brsloan",
+      "repo": "lastmilepdf"
+    },
     "files": [
       "main.js",
       "preload.js",
@@ -48,14 +56,14 @@
       "!python-dist/**",
       "!.venv/**"
     ],
-    "extraResources": [
-      {
-        "from": "python-dist/tag_worker.exe",
-        "to": "python/tag_worker.exe"
-      }
-    ],
     "win": {
       "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "python-dist/tag_worker.exe",
+          "to": "python/tag_worker.exe"
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -79,6 +87,24 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Office",
+      "extraResources": [
+        {
+          "from": "python-dist/tag_worker",
+          "to": "python/tag_worker"
+        }
+      ],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     }
   }
 }

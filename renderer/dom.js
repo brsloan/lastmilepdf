@@ -30,6 +30,7 @@ const asCanvas = (id) => /** @type {HTMLCanvasElement} */ (document.getElementBy
 
 /** @param {string} id @returns {HTMLFormElement} */
 const asForm = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
+const asProgress = (id) => /** @type {HTMLProgressElement} */ (document.getElementById(id));
 
 export const el = {
   btnOpen: asButton('btn-open'),
@@ -134,6 +135,7 @@ export const el = {
   preferencesDeleteKeyDisplay: asElement('preferences-delete-key-display'),
   btnClearDeleteKey: asButton('btn-clear-delete-key'),
   preferencesAutoSave: asInput('preferences-auto-save'),
+  preferencesAutoCheckUpdates: asInput('preferences-auto-check-updates'),
   btnSaveApiKey: asButton('btn-save-api-key'),
   btnClearApiKey: asButton('btn-clear-api-key'),
   shortcutsDialog: asDialog('shortcuts-dialog'),
@@ -143,6 +145,10 @@ export const el = {
   aboutDialog: asDialog('about-dialog'),
   btnCloseAbout: asButton('btn-close-about'),
   aboutVersion: asElement('about-version'),
+  aboutUpdateStatus: asElement('about-update-status'),
+  aboutUpdateProgress: asProgress('about-update-progress'),
+  btnCheckUpdates: asButton('btn-check-updates'),
+  btnUpdateAction: asButton('btn-update-action'),
   verifyDialog: asDialog('verify-dialog'),
   btnCloseVerify: asButton('btn-close-verify'),
   verifyBody: asElement('verify-body'),

@@ -17,6 +17,7 @@ const readline = require('readline');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 const { z } = require('zod');
+const { autoUpdater } = require('electron-updater');
 
 // --- Diagnostic log ---------------------------------------------------------
 //
@@ -467,6 +468,22 @@ function setAutoSaveEnabled(value) {
   writeSettingsFile(settings);
 }
 
+// Whether to silently check GitHub for a newer release on launch (File >
+// Settings > Preferences). Persisted the same way as showTagTypeLabel
+// above, but defaults ON, unlike autoSaveEnabled - this only ever reads a
+// public release feed and reports back through Help > About; it never
+// writes anything or changes behavior on its own, so there's nothing here
+// that needs opting into. See the Auto-update section below.
+function getAutoCheckForUpdates() {
+  return readSettingsFile().autoCheckForUpdates !== false; // default on
+}
+
+function setAutoCheckForUpdates(value) {
+  const settings = readSettingsFile();
+  settings.autoCheckForUpdates = value;
+  writeSettingsFile(settings);
+}
+
 // Tools > Scripts… - user-defined sequences of the existing toolbar actions
 // (Smartifact, Scope Tables, Flatten All, Find/Replace, Fix All Actual Text
 // (AI)), built and reordered in the renderer's Scripts dialog and run in
@@ -787,10 +804,109 @@ function buildAppMenu() {
   return Menu.buildFromTemplate(template);
 }
 
+// --- Auto-update -------------------------------------------------------
+//
+// Checks GitHub Releases (see the "publish" block in package.json's build
+// config and .github/workflows/release.yml, which uploads the latest.yml
+// electron-updater reads) for a newer tagged version. Deliberately two-step
+// and never automatic past checking: autoDownload stays false, so finding
+// an update never starts a download by itself, and even a finished
+// download still needs an explicit "Restart & Install" click from the
+// About dialog (see updates:download/updates:install below and their
+// renderer.js handlers). The portable build can't replace itself in place
+// the way the NSIS installer can, so it skips downloading/installing
+// entirely and just opens the Releases page instead - see isPortableBuild.
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+
+// Set by electron-builder's portable launcher (only) when running the
+// portable .exe - a reliable way to tell it apart from an NSIS install
+// without hardcoding a path.
+const isPortableBuild = !!process.env.PORTABLE_EXECUTABLE_FILE;
+
+// Whether the check currently in flight is the automatic launch-time one,
+// which pops a one-time native alert if it finds something - a manual
+// check from Help > About > Check for Updates doesn't, since the dialog
+// the user is already looking at *is* the result.
+let isAutomaticUpdateCheck = false;
+
+/**
+ * @typedef {{
+ *   status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error',
+ *   version?: string,
+ *   percent?: number,
+ *   message?: string,
+ * }} UpdateState
+ */
+/** @type {UpdateState} */
+let updateState = { status: 'idle' };
+
+function pushUpdateState() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('update:state', updateState);
+  }
+}
+
+autoUpdater.on('checking-for-update', () => {
+  updateState = { status: 'checking' };
+  pushUpdateState();
+});
+
+autoUpdater.on('update-available', (info) => {
+  updateState = { status: 'available', version: info.version };
+  pushUpdateState();
+  if (!isAutomaticUpdateCheck) return;
+  const win = BrowserWindow.getAllWindows()[0];
+  dialog.showMessageBox(win, {
+    type: 'info',
+    buttons: ['Show Details', 'Not Now'],
+    defaultId: 0,
+    title: 'Update available',
+    message: `LastMilePDF ${info.version} is available (you're on ${app.getVersion()}).`,
+    detail: 'See Help > About to download and install it.',
+  }).then(({ response }) => {
+    if (response === 0) sendToWindow(win, 'menu:about', { version: app.getVersion() });
+  });
+});
+
+autoUpdater.on('update-not-available', () => {
+  updateState = { status: 'not-available' };
+  pushUpdateState();
+});
+
+autoUpdater.on('error', (err) => {
+  console.error('[autoUpdater]', err);
+  updateState = { status: 'error', message: err.message };
+  pushUpdateState();
+});
+
+autoUpdater.on('download-progress', (progress) => {
+  updateState = { status: 'downloading', percent: Math.round(progress.percent) };
+  pushUpdateState();
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  updateState = { status: 'downloaded', version: info.version };
+  pushUpdateState();
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(buildAppMenu());
   startWorker();
   createWindow();
+
+  // Packaged builds only - there's no published feed to check against
+  // when running from source, and electron-updater logs a noisy warning
+  // if asked to try. Delayed so it doesn't compete with the app's own
+  // startup work (worker spawn, first PDF load if one was passed in).
+  if (app.isPackaged && getAutoCheckForUpdates()) {
+    setTimeout(() => {
+      isAutomaticUpdateCheck = true;
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.error('[autoUpdater] startup check failed:', err);
+      });
+    }, 3000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1123,6 +1239,63 @@ ipcMain.handle('settings:get-auto-save-enabled', async () => getAutoSaveEnabled(
 ipcMain.handle('settings:set-auto-save-enabled', async (_event, { value }) => {
   setAutoSaveEnabled(value);
   return true;
+});
+
+ipcMain.handle('settings:get-auto-check-updates', async () => getAutoCheckForUpdates());
+ipcMain.handle('settings:set-auto-check-updates', async (_event, { value }) => {
+  setAutoCheckForUpdates(value);
+  return true;
+});
+
+// --- Updates (Help > About) --------------------------------------------
+//
+// See the "Auto-update" section above for the autoUpdater event wiring
+// that keeps `updateState` current and pushes it to every window.
+
+// What the About dialog needs to draw its initial state without having to
+// trigger a check itself - whether checking is even possible here (a dev
+// build has no published feed), whether this is the portable build (which
+// can't download-and-install itself), the running version, and whatever
+// the most recent check (automatic or manual) already found.
+ipcMain.handle('updates:get-info', async () => ({
+  supported: app.isPackaged,
+  isPortable: isPortableBuild,
+  currentVersion: app.getVersion(),
+  state: updateState,
+}));
+
+// Help > About > Check for Updates. Result arrives via the update:state
+// push events above, not this call's return value - checkForUpdates()
+// resolves once the request is sent, not once the answer is known.
+ipcMain.handle('updates:check', async () => {
+  if (!app.isPackaged) return;
+  isAutomaticUpdateCheck = false;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (err) {
+    console.error('[autoUpdater] manual check failed:', err);
+  }
+});
+
+// "Update Now" in the About dialog, once an update has been found.
+ipcMain.handle('updates:download', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (err) {
+    console.error('[autoUpdater] download failed:', err);
+  }
+});
+
+// "Restart & Install" in the About dialog, once the download has finished.
+ipcMain.handle('updates:install', () => {
+  autoUpdater.quitAndInstall();
+});
+
+// The portable build's stand-in for Update Now/Restart & Install - it
+// can't replace its own running .exe the way the NSIS installer can, so
+// finding an update just opens the release in a browser instead.
+ipcMain.handle('updates:open-release-page', async () => {
+  await shell.openExternal('https://github.com/brsloan/lastmilepdf/releases/latest');
 });
 
 // --- Tools > Scripts… --------------------------------------------------------

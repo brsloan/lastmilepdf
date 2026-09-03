@@ -484,6 +484,14 @@
       <img src="icon.svg" alt="LastMilePDF icon" class="about-icon" />
       <div class="about-name">LastMilePDF</div>
       <div class="about-version">Version <span id="about-version">&mdash;</span></div>
+      <div id="about-update-section" class="about-update-section">
+        <p id="about-update-status" class="settings-hint">&nbsp;</p>
+        <progress id="about-update-progress" class="about-update-progress" value="0" max="100" hidden></progress>
+        <div class="about-update-actions">
+          <button type="button" id="btn-check-updates" class="btn btn-ghost">Check for Updates</button>
+          <button type="button" id="btn-update-action" class="btn btn-primary" hidden></button>
+        </div>
+      </div>
     </div>
   </dialog>
 
@@ -548,6 +556,12 @@
       <label class="field field-checkbox">
         <input type="checkbox" id="preferences-auto-save" />
         <span>Auto-save every 2 minutes</span>
+      </label>
+
+      <p class="settings-hint">Updates</p>
+      <label class="field field-checkbox">
+        <input type="checkbox" id="preferences-auto-check-updates" />
+        <span>Automatically check for updates on launch</span>
       </label>
 
       <p class="settings-hint">Notifications</p>

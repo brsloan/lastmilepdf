@@ -297,3 +297,27 @@ export interface Script {
   name: string;
   steps: ScriptStep[];
 }
+
+/**
+ * The auto-updater's current status, pushed from main.js to every window
+ * (window.api.onUpdateState) whenever it changes, and returned as part of
+ * getUpdateInfo()'s snapshot when the About dialog opens. `version` is set
+ * for 'available'/'downloading'/'downloaded'; `percent` only for
+ * 'downloading'; `message` only for 'error'.
+ */
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  version?: string;
+  percent?: number;
+  message?: string;
+}
+
+/** What getUpdateInfo() returns - everything the About dialog needs to draw its initial state without triggering a check of its own. */
+export interface UpdateInfo {
+  /** False in a dev build - there's no published feed to check against. */
+  supported: boolean;
+  /** True for the portable .exe, which can't download-and-install itself - see updates:open-release-page in main.js. */
+  isPortable: boolean;
+  currentVersion: string;
+  state: UpdateState;
+}

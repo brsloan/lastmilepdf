@@ -244,6 +244,8 @@ window.api.getExtraDeleteKeyCode().then((value) => { state.extraDeleteKeyCode = 
 
 window.api.getAutoSaveEnabled().then((value) => { state.autoSaveEnabled = value; });
 
+window.api.getAutoCheckUpdates().then((value) => { state.autoCheckUpdates = value; });
+
 // Tools > Scripts… - which saved script (if any) is assigned to the Run
 // Script button, so its enabled state/tooltip are correct even before the
 // Scripts dialog has been opened this session.
@@ -290,6 +292,7 @@ function isDeleteShortcut(e) {
 window.api.onMenuPreferences(() => {
   el.preferencesShowTagTypeLabel.checked = state.showTagTypeLabel;
   el.preferencesAutoSave.checked = state.autoSaveEnabled;
+  el.preferencesAutoCheckUpdates.checked = state.autoCheckUpdates;
   el.preferencesNotifyDesktop.checked = state.notifyDesktop;
   el.preferencesNotifyChime.checked = state.notifyChime;
   updateDeleteKeyDisplay();
@@ -312,6 +315,11 @@ el.preferencesShowTagTypeLabel.addEventListener('change', () => {
 el.preferencesAutoSave.addEventListener('change', () => {
   state.autoSaveEnabled = el.preferencesAutoSave.checked;
   window.api.setAutoSaveEnabled(state.autoSaveEnabled);
+});
+
+el.preferencesAutoCheckUpdates.addEventListener('change', () => {
+  state.autoCheckUpdates = el.preferencesAutoCheckUpdates.checked;
+  window.api.setAutoCheckUpdates(state.autoCheckUpdates);
 });
 
 el.preferencesNotifyDesktop.addEventListener('change', () => {
@@ -805,8 +813,11 @@ el.helpDialog.addEventListener('click', (e) => {
   if (e.target === el.helpDialog) el.helpDialog.close();
 });
 
-window.api.onMenuAbout((_event, data) => {
+window.api.onMenuAbout(async (_event, data) => {
   el.aboutVersion.textContent = data?.version || '';
+  state.updateInfo = await window.api.getUpdateInfo();
+  state.updateState = state.updateInfo.state;
+  renderUpdateSection();
   el.aboutDialog.showModal();
 });
 
@@ -814,6 +825,82 @@ el.btnCloseAbout.addEventListener('click', () => el.aboutDialog.close());
 
 el.aboutDialog.addEventListener('click', (e) => {
   if (e.target === el.aboutDialog) el.aboutDialog.close();
+});
+
+// Help > About's update UI. main.js owns the actual check/download/install
+// (see its Auto-update section) and pushes live status here via
+// onUpdateState; this just renders whatever the latest status is and wires
+// the two buttons to the calls that drive it forward. state.updateInfo is
+// the static snapshot (supported/isPortable/currentVersion) refetched each
+// time the dialog opens above; state.updateState is the changing part,
+// kept current below regardless of whether the dialog is open, so a
+// background result from the launch-time check is already there the next
+// time it opens.
+function renderUpdateSection() {
+  const { supported, isPortable, currentVersion } = state.updateInfo;
+  const s = state.updateState;
+
+  if (!supported) {
+    el.aboutUpdateStatus.textContent = 'Update checking is unavailable in a dev build.';
+    el.aboutUpdateProgress.hidden = true;
+    el.btnCheckUpdates.hidden = true;
+    el.btnUpdateAction.hidden = true;
+    return;
+  }
+
+  el.aboutUpdateProgress.hidden = s.status !== 'downloading';
+  if (s.status === 'downloading' && typeof s.percent === 'number') {
+    el.aboutUpdateProgress.value = s.percent;
+  }
+  el.btnCheckUpdates.hidden = s.status === 'downloading' || s.status === 'downloaded';
+  el.btnCheckUpdates.disabled = s.status === 'checking';
+
+  if (s.status === 'checking') {
+    el.aboutUpdateStatus.textContent = 'Checking for updates…';
+    el.btnUpdateAction.hidden = true;
+  } else if (s.status === 'not-available') {
+    el.aboutUpdateStatus.textContent = `You're up to date (${currentVersion}).`;
+    el.btnUpdateAction.hidden = true;
+  } else if (s.status === 'available') {
+    el.aboutUpdateStatus.textContent = `Update available: ${s.version}`;
+    el.btnUpdateAction.hidden = false;
+    el.btnUpdateAction.disabled = false;
+    el.btnUpdateAction.textContent = isPortable ? 'View Release' : 'Update Now';
+  } else if (s.status === 'downloading') {
+    el.aboutUpdateStatus.textContent = `Downloading update… ${s.percent ?? 0}%`;
+    el.btnUpdateAction.hidden = true;
+  } else if (s.status === 'downloaded') {
+    el.aboutUpdateStatus.textContent = `Update ${s.version} downloaded.`;
+    el.btnUpdateAction.hidden = false;
+    el.btnUpdateAction.disabled = false;
+    el.btnUpdateAction.textContent = 'Restart & Install';
+  } else if (s.status === 'error') {
+    el.aboutUpdateStatus.textContent = `Could not check for updates: ${s.message || 'unknown error'}`;
+    el.btnUpdateAction.hidden = true;
+  } else {
+    el.aboutUpdateStatus.textContent = '';
+    el.btnUpdateAction.hidden = true;
+  }
+}
+
+window.api.onUpdateState((_event, s) => {
+  state.updateState = s;
+  if (el.aboutDialog.open) renderUpdateSection();
+});
+
+el.btnCheckUpdates.addEventListener('click', () => window.api.checkForUpdates());
+
+el.btnUpdateAction.addEventListener('click', () => {
+  if (state.updateInfo.isPortable) {
+    window.api.openReleasePage();
+    return;
+  }
+  if (state.updateState.status === 'downloaded') {
+    window.api.installUpdate();
+  } else if (state.updateState.status === 'available') {
+    el.btnUpdateAction.disabled = true;
+    window.api.downloadUpdate();
+  }
 });
 
 // Settings dialog: holds the BYOK key(s) "Fix with AI" uses (see the
