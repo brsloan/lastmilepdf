@@ -338,6 +338,7 @@
 
       <section class="shortcuts-group">
         <h3>Tagging</h3>
+        <p class="settings-hint">Keys below are the defaults - configurable in File &gt; Settings &gt; Preferences.</p>
         <dl>
           <div class="shortcut-row"><dt><kbd>1</kbd>&ndash;<kbd>6</kbd></dt><dd>Set role to H1&ndash;H6</dd></div>
           <div class="shortcut-row"><dt><kbd>P</kbd></dt><dd>Convert to Paragraph</dd></div>
@@ -383,6 +384,7 @@
 
       <section class="shortcuts-group">
         <h3>Proofread Mode</h3>
+        <p class="settings-hint">Page Up/Page Down are the defaults - configurable in File &gt; Settings &gt; Preferences.</p>
         <dl>
           <div class="shortcut-row"><dt><kbd>Page Up</kbd>/<kbd>Page Down</kbd></dt><dd>Jump to the previous/next tag's Actual Text</dd></div>
           <div class="shortcut-row"><dt><kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>From the Actual Text field's first/last line, jump to the previous/next tag (otherwise moves the caret a line, as usual)</dd></div>
@@ -597,16 +599,13 @@
         <span>Play chime when AI batch finishes</span>
       </label>
 
-      <p class="settings-hint">Tag Tree</p>
-      <div class="field field-shortcut-row">
-        <span class="field-label">Extra Delete/Artifact key</span>
-        <div class="field-shortcut-controls">
-          <button type="button" id="btn-record-delete-key" class="btn btn-ghost">Set…</button>
-          <span id="preferences-delete-key-display" class="settings-hint">Not set</span>
-          <button type="button" id="btn-clear-delete-key" class="btn btn-ghost" hidden>Clear</button>
-        </div>
-      </div>
-      <p class="settings-hint">Also triggers Delete/Artifact in the Tag Tree and Bookmarks panel - handy for deleting with one hand while the other steps through tags with the arrow keys. Try Caps Lock. Some keys may still perform their normal function too.</p>
+      <p class="settings-hint">Tagging Shortcuts</p>
+      <div id="preferences-tag-shortcuts-list" class="shortcut-list"></div>
+      <p class="settings-hint">Apply while one or more tags are selected in the Tag Tree, unless a text field has focus. Clear a shortcut to disable it.</p>
+
+      <p class="settings-hint">Proofread Mode Shortcuts</p>
+      <div id="preferences-proofread-shortcuts-list" class="shortcut-list"></div>
+      <p class="settings-hint">Jump to the previous/next tag's Actual Text while Proofread Mode is on.</p>
     </div>
   </dialog>
 

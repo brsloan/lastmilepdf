@@ -11,7 +11,7 @@ import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
-import { state } from './state.js';
+import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
 import { walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
@@ -242,6 +242,12 @@ window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
 
 window.api.getExtraDeleteKeyCode().then((value) => { state.extraDeleteKeyCode = value; });
 
+// Merged over the defaults rather than replacing them outright, so an
+// action added since the user last saved their settings.json still has a
+// working shortcut instead of coming back undefined.
+window.api.getTagShortcuts().then((value) => { state.tagShortcuts = { ...defaultTagShortcuts(), ...value }; });
+window.api.getProofreadShortcuts().then((value) => { state.proofreadShortcuts = { ...defaultProofreadShortcuts(), ...value }; });
+
 window.api.getAutoSaveEnabled().then((value) => { state.autoSaveEnabled = value; });
 
 window.api.getAutoCheckUpdates().then((value) => { state.autoCheckUpdates = value; });
@@ -278,15 +284,268 @@ function formatKeyCode(code) {
   return code.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
-function updateDeleteKeyDisplay() {
-  el.preferencesDeleteKeyDisplay.textContent = formatKeyCode(state.extraDeleteKeyCode);
-  el.btnClearDeleteKey.hidden = !state.extraDeleteKeyCode;
-}
-
 // Delete also fires on this extra key, if the user has set one - see the
 // two Delete keydown handlers below (bookmarks panel, tag tree).
 function isDeleteShortcut(e) {
   return e.key === 'Delete' || (!!state.extraDeleteKeyCode && e.code === state.extraDeleteKeyCode);
+}
+
+// Friendly label for a configurable tagging/proofread shortcut's
+// KeyboardEvent.key (e.g. "PageUp" -> "Page Up", "p" -> "P") - unlike
+// formatKeyCode() above, these are recorded as .key rather than .code (see
+// findTagShortcutAction()/the proofread handler below, which compare
+// case-insensitively), so single-character keys are just uppercased rather
+// than looked up in a code table.
+function formatShortcutKey(key) {
+  if (!key) return 'Not set';
+  if (key === ' ') return 'Space';
+  if (key.length === 1) return key.toUpperCase();
+  return key.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+// Human-readable reason a KeyboardEvent can't be recorded as a tagging/
+// proofread shortcut, or null if it's free to use. Checked against the
+// fixed "Delete" key (always removes the selection - see the Delete keydown
+// handler below), every OTHER configured tagging/proofread shortcut
+// (case-insensitively, since that's how they're matched at dispatch time -
+// see findTagShortcutAction()/the Proofread keydown handler), and the Extra
+// Delete/Artifact key's physical key (compared via .code rather than .key,
+// since a shortcut and the Extra Delete key can be triggered by the same
+// physical key even when their .key strings differ, e.g. Shift+1 vs 1).
+// `exclude` is the { shortcutsKey, actionId } of the row being recorded, so
+// it doesn't conflict with its own current value.
+/** @param {string} shortcutsKey @param {{id: string, label: string}[]} actions @param {string} key @param {{shortcutsKey: string, actionId: string}} exclude */
+function findConflictInPool(shortcutsKey, actions, key, exclude) {
+  for (const action of actions) {
+    if (shortcutsKey === exclude.shortcutsKey && action.id === exclude.actionId) continue;
+    const value = state[shortcutsKey][action.id];
+    if (value && value.toLowerCase() === key) return `Already used by "${action.label}"`;
+  }
+  return null;
+}
+
+function findKeyShortcutConflict(e, exclude) {
+  const key = e.key.toLowerCase();
+  if (key === 'delete') return '"Delete" is reserved';
+  if (state.extraDeleteKeyCode && e.code === state.extraDeleteKeyCode) {
+    return 'Already used by Extra Delete/Artifact key';
+  }
+  return (
+    findConflictInPool('tagShortcuts', TAG_SHORTCUT_ACTIONS, key, exclude) ||
+    findConflictInPool('proofreadShortcuts', PROOFREAD_SHORTCUT_ACTIONS, key, exclude)
+  );
+}
+
+// Same idea as findKeyShortcutConflict() above, for the Extra Delete/
+// Artifact key recorder (findExtraDeleteKeyConflict() below), which records
+// a .code rather than a .key. The reserved-Delete-key check compares .code
+// directly (recording the physical Delete key itself would just duplicate
+// the built-in Delete shortcut); the check against tagging/proofread
+// shortcuts falls back to .key, since that's the only form they're stored
+// in - it still catches the common case (and is exact for non-printable
+// keys like PageUp/CapsLock/Tab, whose .key and .code strings match).
+function findExtraDeleteKeyConflict(e) {
+  if (e.code === 'Delete') return '"Delete" is reserved';
+  const key = e.key.toLowerCase();
+  const noExclusion = { shortcutsKey: '', actionId: '' };
+  return (
+    findConflictInPool('tagShortcuts', TAG_SHORTCUT_ACTIONS, key, noExclusion) ||
+    findConflictInPool('proofreadShortcuts', PROOFREAD_SHORTCUT_ACTIONS, key, noExclusion)
+  );
+}
+
+// Builds the Tagging Shortcuts / Proofread Shortcuts rows inside the
+// Preferences dialog from TAG_SHORTCUT_ACTIONS/PROOFREAD_SHORTCUT_ACTIONS
+// (state.js): one compact line per action - label, the current key in a
+// small read-only field, then Set…/Clear (see .shortcut-item in
+// styles.css). Rebuilt each time the dialog opens rather than kept in sync
+// incrementally, since it's cheap and the dialog isn't opened often.
+// `shortcutsKey` is 'tagShortcuts' or 'proofreadShortcuts' - the state field
+// (and matching window.api setter) the rows read from/write to.
+function renderShortcutRows(container, actions, shortcutsKey) {
+  const setter = shortcutsKey === 'tagShortcuts' ? window.api.setTagShortcuts : window.api.setProofreadShortcuts;
+  container.replaceChildren();
+  for (const action of actions) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'shortcut-item-wrapper';
+
+    // Shows a conflict reason above this row while recording - see
+    // findKeyShortcutConflict() - instead of inside the compact key-display
+    // box, which stays a fixed width.
+    const warning = document.createElement('p');
+    warning.className = 'shortcut-item-warning';
+    warning.hidden = true;
+
+    const row = document.createElement('div');
+    row.className = 'shortcut-item';
+
+    const label = document.createElement('span');
+    label.className = 'shortcut-item-label';
+    label.textContent = `${action.label}:`;
+
+    const display = document.createElement('input');
+    display.type = 'text';
+    display.className = 'shortcut-item-value';
+    display.readOnly = true;
+    display.tabIndex = -1;
+
+    const setBtn = document.createElement('button');
+    setBtn.type = 'button';
+    setBtn.className = 'btn btn-ghost btn-compact';
+    setBtn.textContent = 'Set…';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn btn-ghost btn-compact';
+    clearBtn.textContent = 'Clear';
+
+    const refresh = () => {
+      const value = state[shortcutsKey][action.id];
+      display.value = formatShortcutKey(value);
+      display.title = display.value;
+      clearBtn.disabled = !value;
+      warning.hidden = true;
+      warning.textContent = '';
+    };
+    refresh();
+
+    // Recorded in the capture phase and stopped from propagating further,
+    // same as the Extra Delete Key recorder above, so the keypress that
+    // sets/replaces a shortcut can't also fall through to the app's other
+    // keydown handlers. A conflicting key (see findKeyShortcutConflict())
+    // shows the reason above the row and keeps listening, rather than
+    // committing, so the user can just try another key without reopening
+    // the recorder.
+    setBtn.addEventListener('click', () => {
+      display.value = 'Press a key…';
+      display.title = '';
+      warning.hidden = true;
+      warning.textContent = '';
+      setBtn.disabled = true;
+      const onKeydown = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+          window.removeEventListener('keydown', onKeydown, true);
+          setBtn.disabled = false;
+          refresh();
+          return;
+        }
+        const conflict = findKeyShortcutConflict(e, { shortcutsKey, actionId: action.id });
+        if (conflict) {
+          warning.textContent = `${conflict} - press another key, or Esc to cancel.`;
+          warning.hidden = false;
+          return;
+        }
+        window.removeEventListener('keydown', onKeydown, true);
+        setBtn.disabled = false;
+        state[shortcutsKey][action.id] = e.key;
+        setter(state[shortcutsKey]);
+        refresh();
+      };
+      window.addEventListener('keydown', onKeydown, true);
+    });
+
+    clearBtn.addEventListener('click', () => {
+      state[shortcutsKey][action.id] = null;
+      setter(state[shortcutsKey]);
+      refresh();
+    });
+
+    row.append(label, display, setBtn, clearBtn);
+    wrapper.append(warning, row);
+    container.appendChild(wrapper);
+  }
+}
+
+// Extra Delete/Artifact key - also triggers the Tag Tree/Bookmarks Delete
+// shortcut (see isDeleteShortcut() above), handy for deleting with one hand
+// while the other steps through tags with the arrow keys (e.g. Caps Lock).
+// Appended after the mapped tagging shortcuts, in the same list/style,
+// though it records a KeyboardEvent.code (physical key, via formatKeyCode()
+// above) rather than .key, since isDeleteShortcut() compares .code - see
+// its own comment for why. Appends to `container` rather than replacing its
+// contents, so it must run after renderShortcutRows() has (re)built the
+// mapped rows there.
+function renderExtraDeleteKeyRow(container) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'shortcut-item-wrapper';
+
+  const warning = document.createElement('p');
+  warning.className = 'shortcut-item-warning';
+  warning.hidden = true;
+
+  const row = document.createElement('div');
+  row.className = 'shortcut-item';
+
+  const label = document.createElement('span');
+  label.className = 'shortcut-item-label';
+  label.textContent = 'Extra Delete/Artifact key:';
+
+  const display = document.createElement('input');
+  display.type = 'text';
+  display.className = 'shortcut-item-value';
+  display.readOnly = true;
+  display.tabIndex = -1;
+
+  const setBtn = document.createElement('button');
+  setBtn.type = 'button';
+  setBtn.className = 'btn btn-ghost btn-compact';
+  setBtn.textContent = 'Set…';
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn-ghost btn-compact';
+  clearBtn.textContent = 'Clear';
+
+  const refresh = () => {
+    display.value = formatKeyCode(state.extraDeleteKeyCode);
+    display.title = display.value;
+    clearBtn.disabled = !state.extraDeleteKeyCode;
+    warning.hidden = true;
+    warning.textContent = '';
+  };
+  refresh();
+
+  setBtn.addEventListener('click', () => {
+    display.value = 'Press a key…';
+    display.title = '';
+    warning.hidden = true;
+    warning.textContent = '';
+    setBtn.disabled = true;
+    const onKeydown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        window.removeEventListener('keydown', onKeydown, true);
+        setBtn.disabled = false;
+        refresh();
+        return;
+      }
+      const conflict = findExtraDeleteKeyConflict(e);
+      if (conflict) {
+        warning.textContent = `${conflict} - press another key, or Esc to cancel.`;
+        warning.hidden = false;
+        return;
+      }
+      window.removeEventListener('keydown', onKeydown, true);
+      setBtn.disabled = false;
+      state.extraDeleteKeyCode = e.code;
+      window.api.setExtraDeleteKeyCode(e.code);
+      refresh();
+    };
+    window.addEventListener('keydown', onKeydown, true);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    state.extraDeleteKeyCode = null;
+    window.api.setExtraDeleteKeyCode(null);
+    refresh();
+  });
+
+  row.append(label, display, setBtn, clearBtn);
+  wrapper.append(warning, row);
+  container.appendChild(wrapper);
 }
 
 window.api.onMenuPreferences(() => {
@@ -295,7 +554,9 @@ window.api.onMenuPreferences(() => {
   el.preferencesAutoCheckUpdates.checked = state.autoCheckUpdates;
   el.preferencesNotifyDesktop.checked = state.notifyDesktop;
   el.preferencesNotifyChime.checked = state.notifyChime;
-  updateDeleteKeyDisplay();
+  renderShortcutRows(el.preferencesTagShortcutsList, TAG_SHORTCUT_ACTIONS, 'tagShortcuts');
+  renderExtraDeleteKeyRow(el.preferencesTagShortcutsList);
+  renderShortcutRows(el.preferencesProofreadShortcutsList, PROOFREAD_SHORTCUT_ACTIONS, 'proofreadShortcuts');
   el.preferencesDialog.showModal();
 });
 
@@ -330,35 +591,6 @@ el.preferencesNotifyDesktop.addEventListener('change', () => {
 el.preferencesNotifyChime.addEventListener('change', () => {
   state.notifyChime = el.preferencesNotifyChime.checked;
   window.api.setNotifyChime(state.notifyChime);
-});
-
-// Recorded in the capture phase and stopped from propagating further, so
-// the keypress that sets/replaces the extra Delete key can't also fall
-// through to the app's other keydown handlers (Delete itself, the P/L/I/T/…
-// role shortcuts, etc.) further down this file.
-el.btnRecordDeleteKey.addEventListener('click', () => {
-  el.preferencesDeleteKeyDisplay.textContent = 'Press a key…';
-  el.btnRecordDeleteKey.disabled = true;
-  const onKeydown = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    window.removeEventListener('keydown', onKeydown, true);
-    el.btnRecordDeleteKey.disabled = false;
-    if (e.key === 'Escape') {
-      updateDeleteKeyDisplay();
-      return;
-    }
-    state.extraDeleteKeyCode = e.code;
-    window.api.setExtraDeleteKeyCode(e.code);
-    updateDeleteKeyDisplay();
-  };
-  window.addEventListener('keydown', onKeydown, true);
-});
-
-el.btnClearDeleteKey.addEventListener('click', () => {
-  state.extraDeleteKeyCode = null;
-  window.api.setExtraDeleteKeyCode(null);
-  updateDeleteKeyDisplay();
 });
 
 window.api.onMenuShowAtChanges(async (_event, checked) => {
@@ -1292,24 +1524,32 @@ window.addEventListener('keydown', (e) => {
   insertParagraphAfterSelection();
 });
 
-// Proofread Mode (View > Proofread): Page Down/Up step to the next/previous
-// tag the same way the Actual Text field's own edge-of-line Up/Down does
-// (see stepProofreadTag() in proofread.js) - but from anywhere, including
-// while the Actual Text field itself is focused, since that's exactly where
-// this is meant to be used from. A textarea has no native use for Page Up/
-// Down (unlike Up/Down, which moves the caret a line), so this doesn't need
-// to check what's focused the way the plain arrow-key tree nav below does -
-// except for bailing out while a modal dialog (Settings, Table Editor,
-// Find/Replace...) has focus, so it doesn't hijack Page Up/Down from an
-// unrelated field there.
+// Proofread Mode (View > Proofread): the configured Previous/Next Tag keys
+// (File > Settings > Preferences > Proofread Shortcuts - Page Up/Page Down
+// by default) step to the next/previous tag the same way the Actual Text
+// field's own edge-of-line Up/Down does (see stepProofreadTag() in
+// proofread.js) - but from anywhere, including while the Actual Text field
+// itself is focused, since that's exactly where this is meant to be used
+// from. A textarea has no native use for Page Up/Down (unlike Up/Down,
+// which moves the caret a line), so this doesn't need to check what's
+// focused the way the plain arrow-key tree nav below does - except for
+// bailing out while a modal dialog (Settings, Table Editor, Find/Replace...)
+// has focus, so it doesn't hijack the shortcut from an unrelated field there.
 window.addEventListener('keydown', (e) => {
   if (!state.proofreadMode) return;
-  if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
+
+  const key = e.key.toLowerCase();
+  const prevKey = state.proofreadShortcuts.prevTag?.toLowerCase();
+  const nextKey = state.proofreadShortcuts.nextTag?.toLowerCase();
+  const isPrev = !!prevKey && key === prevKey;
+  const isNext = !!nextKey && key === nextKey;
+  if (!isPrev && !isNext) return;
+
   if (!state.selectedNodeId) return;
   if (document.activeElement?.closest('dialog[open]')) return;
 
   e.preventDefault();
-  stepProofreadTag(e.key === 'PageUp' ? -1 : 1, e.key === 'PageUp' ? 'end' : 'start');
+  stepProofreadTag(isPrev ? -1 : 1, isPrev ? 'end' : 'start');
 });
 
 // Up/Down arrows step the current selection through the tree in visible
@@ -1501,12 +1741,18 @@ window.addEventListener('keydown', (e) => {
   deleteSelection();
 });
 
-// 1-6/P/L/I/T/R/D/H/F/C convert the current selection's role, each via a
-// dedicated backend op (set_role_or_wrap/convert_to_paragraph/make_list/
-// make_table/make_tr/convert_to_figure/convert_to_list_item in tag_worker.py)
-// rather than a plain Role edit, since a content/object-ref leaf has no role
-// of its own to set - these wrap it in a brand-new struct element instead.
-// See each handler below for what its shortcut actually does structurally.
+// The configured tagging shortcuts (File > Settings > Preferences > Tagging
+// Shortcuts - 1-6/P/L/I/T/R/D/H/F/C/J by default, see TAG_SHORTCUT_ACTIONS in
+// state.js) convert the current selection's role, each via a dedicated
+// backend op (set_role_or_wrap/convert_to_paragraph/make_list/make_table/
+// make_tr/convert_to_figure/convert_to_list_item in tag_worker.py) rather
+// than a plain Role edit, since a content/object-ref leaf has no role of its
+// own to set - these wrap it in a brand-new struct element instead. See each
+// case below for what it actually does structurally.
+function findTagShortcutAction(key) {
+  return TAG_SHORTCUT_ACTIONS.find((a) => state.tagShortcuts[a.id]?.toLowerCase() === key)?.id ?? null;
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (state.selectedNodeIds.size === 0) return;
@@ -1514,43 +1760,44 @@ window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-  if (/^[1-6]$/.test(e.key)) {
-    e.preventDefault();
-    applyRoleShortcut(`H${e.key}`);
-    return;
-  }
+  const action = findTagShortcutAction(e.key.toLowerCase());
+  if (!action) return;
 
-  const key = e.key.toLowerCase();
-  if (key === 'p') {
-    e.preventDefault();
-    convertSelectionToParagraph();
-  } else if (key === 'l') {
-    e.preventDefault();
-    groupSelectionIntoList();
-  } else if (key === 'i') {
-    e.preventDefault();
-    convertSelectionToListItem();
-  } else if (key === 't') {
-    e.preventDefault();
-    groupSelectionIntoTable();
-  } else if (key === 'r') {
-    e.preventDefault();
-    groupSelectionIntoTr();
-  } else if (key === 'd') {
-    e.preventDefault();
-    applyRoleShortcut('TD');
-  } else if (key === 'h') {
-    e.preventDefault();
-    applyRoleShortcut('TH');
-  } else if (key === 'f') {
-    e.preventDefault();
-    convertSelectionToFigure();
-  } else if (key === 'c') {
-    e.preventDefault();
-    applyRoleShortcut('Caption');
-  } else if (key === 'j') {
-    e.preventDefault();
-    joinSelection();
+  e.preventDefault();
+  switch (action) {
+    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+      applyRoleShortcut(`H${action.slice(1)}`);
+      break;
+    case 'paragraph':
+      convertSelectionToParagraph();
+      break;
+    case 'list':
+      groupSelectionIntoList();
+      break;
+    case 'listItem':
+      convertSelectionToListItem();
+      break;
+    case 'table':
+      groupSelectionIntoTable();
+      break;
+    case 'tr':
+      groupSelectionIntoTr();
+      break;
+    case 'td':
+      applyRoleShortcut('TD');
+      break;
+    case 'th':
+      applyRoleShortcut('TH');
+      break;
+    case 'figure':
+      convertSelectionToFigure();
+      break;
+    case 'caption':
+      applyRoleShortcut('Caption');
+      break;
+    case 'join':
+      joinSelection();
+      break;
   }
 });
 

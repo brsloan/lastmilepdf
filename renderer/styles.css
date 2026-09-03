@@ -1691,6 +1691,70 @@ body.busy-cursor * {
   gap: 8px;
 }
 
+/* Tagging Shortcuts / Proofread Shortcuts lists (renderShortcutRows() in
+   renderer.js) - many rows, so each is one compact line: label, the current
+   key in a small read-only field, then Set…/Clear. Distinct from
+   .field-shortcut-row above (the single Extra Delete Key row, which has
+   room to stack its label above a looser Set…/Clear/name group). */
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-item-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.shortcut-item-value {
+  flex: none;
+  width: 60px;
+  text-align: center;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  padding: 3px 4px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wraps a .shortcut-item row together with its (normally hidden)
+   .shortcut-item-warning line, so a key conflict (see
+   findKeyShortcutConflict()/findExtraDeleteKeyConflict() in renderer.js)
+   shows just above the specific row being recorded rather than inside its
+   compact key-display box. */
+.shortcut-item-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcut-item-warning {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--warn-text);
+}
+
+.btn-compact {
+  flex: none;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
 /* --- find/replace dialog ---
    Reuses .shortcuts-header for the title bar and .settings-body/
    .settings-actions/.settings-hint from the settings dialog above - it's

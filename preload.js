@@ -431,6 +431,21 @@ const api = {
   /** @param {string | null} value @returns {Promise<void>} */
   setExtraDeleteKeyCode: (value) => ipcRenderer.invoke('settings:set-extra-delete-key-code', { value }),
 
+  // File > Settings > Preferences - per-action keyboard shortcuts for the Tag
+  // Tree's role-conversion shortcuts (1-6/P/L/I/T/R/D/H/F/C/J) and for
+  // Proofread Mode's previous/next-tag step (Page Up/Page Down). Each is a
+  // plain { actionId: KeyboardEvent.key | null } map, keyed by the action ids
+  // in TAG_SHORTCUT_ACTIONS/PROOFREAD_SHORTCUT_ACTIONS (state.js). Persisted
+  // the same way as the settings above.
+  /** @returns {Promise<Record<string, string>>} */
+  getTagShortcuts: () => ipcRenderer.invoke('settings:get-tag-shortcuts'),
+  /** @param {Record<string, string | null>} value @returns {Promise<void>} */
+  setTagShortcuts: (value) => ipcRenderer.invoke('settings:set-tag-shortcuts', { value }),
+  /** @returns {Promise<Record<string, string>>} */
+  getProofreadShortcuts: () => ipcRenderer.invoke('settings:get-proofread-shortcuts'),
+  /** @param {Record<string, string | null>} value @returns {Promise<void>} */
+  setProofreadShortcuts: (value) => ipcRenderer.invoke('settings:set-proofread-shortcuts', { value }),
+
   // File > Settings > Preferences - periodically save the open document to
   // disk automatically, in addition to an explicit Save. Persisted the same
   // way as the settings above.

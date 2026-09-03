@@ -453,6 +453,36 @@ function setExtraDeleteKeyCode(value) {
   writeSettingsFile(settings);
 }
 
+// Per-action keyboard shortcuts for the Tag Tree's role-conversion shortcuts
+// (1-6/P/L/I/T/R/D/H/F/C/J) and for Proofread Mode's previous/next-tag step
+// (Page Up/Page Down), each a plain { actionId: KeyboardEvent.key } map
+// (File > Settings > Preferences). main.js stores whatever object it's
+// given as-is - it doesn't know the current set of action ids or their
+// default keys, since that list lives with the renderer code that actually
+// dispatches on it (see TAG_SHORTCUT_ACTIONS/PROOFREAD_SHORTCUT_ACTIONS in
+// state.js) - the renderer merges this over its own defaults after loading.
+function getTagShortcuts() {
+  const value = readSettingsFile().tagShortcuts;
+  return value && typeof value === 'object' ? value : {};
+}
+
+function setTagShortcuts(value) {
+  const settings = readSettingsFile();
+  settings.tagShortcuts = value;
+  writeSettingsFile(settings);
+}
+
+function getProofreadShortcuts() {
+  const value = readSettingsFile().proofreadShortcuts;
+  return value && typeof value === 'object' ? value : {};
+}
+
+function setProofreadShortcuts(value) {
+  const settings = readSettingsFile();
+  settings.proofreadShortcuts = value;
+  writeSettingsFile(settings);
+}
+
 // Whether the renderer periodically saves the open document to disk on its
 // own, in addition to an explicit Save (File > Settings > Preferences).
 // Persisted the same way as showTagTypeLabel above, but defaults off - unlike
@@ -1274,6 +1304,18 @@ ipcMain.handle('settings:set-notify-chime', async (_event, { value }) => {
 ipcMain.handle('settings:get-extra-delete-key-code', async () => getExtraDeleteKeyCode());
 ipcMain.handle('settings:set-extra-delete-key-code', async (_event, { value }) => {
   setExtraDeleteKeyCode(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-tag-shortcuts', async () => getTagShortcuts());
+ipcMain.handle('settings:set-tag-shortcuts', async (_event, { value }) => {
+  setTagShortcuts(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-proofread-shortcuts', async () => getProofreadShortcuts());
+ipcMain.handle('settings:set-proofread-shortcuts', async (_event, { value }) => {
+  setProofreadShortcuts(value);
   return true;
 });
 

@@ -207,6 +207,11 @@ export interface AppState {
   /** KeyboardEvent.code (e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete shortcut, or null when unset. */
   extraDeleteKeyCode: string | null;
 
+  /** { actionId: KeyboardEvent.key | null }, one entry per TAG_SHORTCUT_ACTIONS in state.js. */
+  tagShortcuts: Record<string, string | null>;
+  /** { actionId: KeyboardEvent.key | null }, one entry per PROOFREAD_SHORTCUT_ACTIONS in state.js. */
+  proofreadShortcuts: Record<string, string | null>;
+
   // --- Auto-Save ----------------------------------------------------------
   /** File > Settings > Preferences > Auto-Save - periodically save to disk. */
   autoSaveEnabled: boolean;

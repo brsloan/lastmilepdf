@@ -23,6 +23,46 @@ export const WALK_SPEED_STEP = 0.5;
 
 export const APP_NAME = 'LastMilePDF';
 
+// Configurable keyboard shortcuts (File > Settings > Preferences). Each
+// entry's `id` is the key used in state.tagShortcuts/proofreadShortcuts and
+// in the persisted settings.json map (see window.api.get/setTagShortcuts()
+// and get/setProofreadShortcuts() in preload.js); `defaultKey` is a
+// KeyboardEvent.key value (compared case-insensitively - see
+// findTagShortcutAction() in renderer.js). Dispatch to the actual editing.js
+// functions lives in renderer.js, not here, since this module stays a leaf
+// with no imports.
+export const TAG_SHORTCUT_ACTIONS = [
+  { id: 'h1', label: 'Heading 1', defaultKey: '1' },
+  { id: 'h2', label: 'Heading 2', defaultKey: '2' },
+  { id: 'h3', label: 'Heading 3', defaultKey: '3' },
+  { id: 'h4', label: 'Heading 4', defaultKey: '4' },
+  { id: 'h5', label: 'Heading 5', defaultKey: '5' },
+  { id: 'h6', label: 'Heading 6', defaultKey: '6' },
+  { id: 'paragraph', label: 'Convert to Paragraph', defaultKey: 'p' },
+  { id: 'list', label: 'Group into List', defaultKey: 'l' },
+  { id: 'listItem', label: 'Convert to List Item', defaultKey: 'i' },
+  { id: 'table', label: 'Group into Table', defaultKey: 't' },
+  { id: 'tr', label: 'Group into Table Row', defaultKey: 'r' },
+  { id: 'td', label: 'Set role to Table Cell (TD)', defaultKey: 'd' },
+  { id: 'th', label: 'Set role to Table Header Cell (TH)', defaultKey: 'h' },
+  { id: 'figure', label: 'Convert to Figure', defaultKey: 'f' },
+  { id: 'caption', label: 'Set role to Caption', defaultKey: 'c' },
+  { id: 'join', label: 'Join into previous tag', defaultKey: 'j' },
+];
+
+export const PROOFREAD_SHORTCUT_ACTIONS = [
+  { id: 'prevTag', label: 'Previous tag', defaultKey: 'PageUp' },
+  { id: 'nextTag', label: 'Next tag', defaultKey: 'PageDown' },
+];
+
+export function defaultTagShortcuts() {
+  return Object.fromEntries(TAG_SHORTCUT_ACTIONS.map((a) => [a.id, a.defaultKey]));
+}
+
+export function defaultProofreadShortcuts() {
+  return Object.fromEntries(PROOFREAD_SHORTCUT_ACTIONS.map((a) => [a.id, a.defaultKey]));
+}
+
 /** @type {import('../types/app-state').AppState} */
 export const state = {
   docId: null,
@@ -84,6 +124,8 @@ export const state = {
   notifyDesktop: true, // File > Settings > Preferences > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
   notifyChime: true, // File > Settings > Preferences > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below
   extraDeleteKeyCode: null, // File > Settings > Preferences > Extra Delete/Artifact key - a KeyboardEvent.code (e.g. "CapsLock") that also triggers the Tag Tree/Bookmarks Delete shortcut, or null when unset - overwritten from the persisted value shortly after startup, see the window.api.getExtraDeleteKeyCode() call below
+  tagShortcuts: defaultTagShortcuts(), // File > Settings > Preferences > Tagging Shortcuts - { actionId: KeyboardEvent.key | null }, one entry per TAG_SHORTCUT_ACTIONS id above - overwritten (merged over these defaults) from the persisted value shortly after startup, see the window.api.getTagShortcuts() call below
+  proofreadShortcuts: defaultProofreadShortcuts(), // File > Settings > Preferences > Proofread Shortcuts - same shape as tagShortcuts, for PROOFREAD_SHORTCUT_ACTIONS above - overwritten from the persisted value shortly after startup, see the window.api.getProofreadShortcuts() call below
   autoSaveEnabled: false, // File > Settings > Preferences > Auto-Save - overwritten from the persisted value shortly after startup, see the window.api.getAutoSaveEnabled() call below; consumed by the autosave timer in doc-io.js
   autoCheckUpdates: true, // File > Settings > Preferences > Automatically check for updates - overwritten from the persisted value shortly after startup, see the window.api.getAutoCheckUpdates() call below. Only gates the launch-time check main.js does on its own; Help > About's own "Check for Updates" button always works.
   updateInfo: { supported: false, isPortable: false, currentVersion: '', state: { status: 'idle' } }, // Help > About's static snapshot from window.api.getUpdateInfo() (fetched each time the dialog opens) - whether checking is even possible (false in a dev build) and which build variant this is
