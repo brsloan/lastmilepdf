@@ -1451,6 +1451,8 @@ el.btnOpen.addEventListener('click', () => performOpen());
 
 window.api.onMenuOpen(() => performOpen());
 
+window.api.onMenuOpenRecent((_event, filePath) => performOpen(filePath));
+
 window.api.onMenuSave(() => performSave());
 
 window.api.onMenuSaveAs(() => performSaveAs());

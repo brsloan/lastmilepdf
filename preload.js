@@ -39,6 +39,13 @@ const api = {
    * @returns {Promise<OpenResult | null>} null if the user cancelled.
    */
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
+  /**
+   * Opens a known path directly (File > Open Recent) - no picker. Rejects
+   * (most commonly ENOENT) if the file has since been moved or deleted.
+   * @param {string} filePath
+   * @returns {Promise<OpenResult>}
+   */
+  openPdfPath: (filePath) => ipcRenderer.invoke('doc:open-path', filePath),
 
   /**
    * @param {string} docId
@@ -279,6 +286,9 @@ const api = {
   // Fired when the user picks Open/Undo/Redo/Save/Save As/Close/Find-Replace/Shortcuts/Help Doc/About from the app menu - see main.js.
   /** @param {() => void} callback */
   onMenuOpen: (callback) => ipcRenderer.on('menu:open', callback),
+  /** Fired when a File > Open Recent entry is clicked, with its path.
+   * @param {(event: unknown, filePath: string) => void} callback */
+  onMenuOpenRecent: (callback) => ipcRenderer.on('menu:open-recent', callback),
   /** @param {() => void} callback */
   onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),
   /** @param {() => void} callback */

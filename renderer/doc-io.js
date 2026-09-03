@@ -40,14 +40,18 @@ function resetPerDocumentNodeState() {
   state.pendingPulledActualTextNodeId = null;
 }
 
-export async function performOpen() {
+/**
+ * @param {string} [filePath] When given (File > Open Recent), opens that
+ * path directly instead of showing the picker.
+ */
+export async function performOpen(filePath) {
   if (!(await confirmDiscardChanges('Save them before opening another PDF?'))) {
     setStatus('Ready.');
     return;
   }
   try {
     setStatus('Opening\u2026');
-    const opened = await window.api.openPdf();
+    const opened = filePath ? await window.api.openPdfPath(filePath) : await window.api.openPdf();
     if (!opened) {
       setStatus('Ready.');
       return;

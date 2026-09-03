@@ -9,7 +9,7 @@
 //   3. Expose a small set of IPC handlers that the preload script forwards
 //      to the renderer as `window.api.*`.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -17,6 +17,49 @@ const readline = require('readline');
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 const { z } = require('zod');
+
+// --- Diagnostic log ---------------------------------------------------------
+//
+// A packaged build has no terminal a user can see, so the console.error
+// calls scattered through this file (worker stderr, spawn failures, decrypt
+// failures...) go nowhere useful outside a dev shell - see the
+// Troubleshooting section in the README. Mirroring them to a plain-text file
+// in userData gives a packaged user something to open (Help > Open Log
+// Folder) or attach to a bug report. Truncated fresh on every launch - this
+// is "what happened this session", not a persistent history, so it can't
+// grow unbounded over months of use.
+const LOG_PATH = path.join(app.getPath('userData'), 'main.log');
+try {
+  fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+  fs.writeFileSync(LOG_PATH, `LastMilePDF ${app.getVersion()} started ${new Date().toISOString()}\n`);
+} catch {
+  // Logging must never be the thing that crashes the app.
+}
+
+function formatLogArg(value) {
+  if (value instanceof Error) return value.stack || String(value);
+  if (typeof value === 'object' && value !== null) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+// Wrapping console.error once here (rather than editing every call site)
+// mirrors every existing and future console.error call into the log file
+// for free.
+const originalConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  originalConsoleError(...args);
+  try {
+    fs.appendFileSync(LOG_PATH, `[${new Date().toISOString()}] ${args.map(formatLogArg).join(' ')}\n`);
+  } catch {
+    // best-effort
+  }
+};
 
 // --- Python sidecar -------------------------------------------------------
 
@@ -196,6 +239,42 @@ function readSettingsFile() {
 function writeSettingsFile(settings) {
   fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+// --- Recent files ------------------------------------------------------
+//
+// File > Open Recent. Stored in the same settings.json as everything else
+// here, capped so it can't grow without bound. Newest first; re-opening an
+// already-listed path just moves it back to the top rather than
+// duplicating it.
+const RECENT_FILES_MAX = 10;
+
+function getRecentFiles() {
+  const list = readSettingsFile().recentFiles;
+  return Array.isArray(list) ? list : [];
+}
+
+function addRecentFile(filePath) {
+  const settings = readSettingsFile();
+  const existing = Array.isArray(settings.recentFiles) ? settings.recentFiles : [];
+  settings.recentFiles = [filePath, ...existing.filter((p) => p !== filePath)].slice(0, RECENT_FILES_MAX);
+  writeSettingsFile(settings);
+}
+
+// Drops one path without touching the rest - used when File > Open Recent
+// points at a file that's since been moved or deleted, so it stops showing
+// up (and failing) on every future launch.
+function removeRecentFile(filePath) {
+  const settings = readSettingsFile();
+  const existing = Array.isArray(settings.recentFiles) ? settings.recentFiles : [];
+  settings.recentFiles = existing.filter((p) => p !== filePath);
+  writeSettingsFile(settings);
+}
+
+function clearRecentFiles() {
+  const settings = readSettingsFile();
+  settings.recentFiles = [];
+  writeSettingsFile(settings);
 }
 
 function hasStoredApiKey() {
@@ -585,6 +664,41 @@ function sendToWindow(win, channel, ...args) {
   browserWin?.webContents.send(channel, ...args);
 }
 
+// Truncates a long path to its trailing MAX characters (keeping the file
+// name, the most identifying part, intact) rather than showing the whole
+// thing - a menu item's label has no room for a full path once it's a few
+// directories deep.
+function labelForRecentFile(filePath) {
+  const MAX = 60;
+  return filePath.length > MAX ? `…${filePath.slice(-(MAX - 1))}` : filePath;
+}
+
+// File > Open Recent's contents. Rebuilt (via a full buildAppMenu() call -
+// there's no API to patch a single live submenu's items) every time the
+// list changes: after a successful open/save-as (see openPdfAtPath() and
+// the dialog:save-pdf handler below) and after Clear Recent Files here.
+/** @returns {import('electron').MenuItemConstructorOptions[]} */
+function buildRecentFilesSubmenu() {
+  const recent = getRecentFiles();
+  if (recent.length === 0) {
+    return [{ label: 'No Recent Files', enabled: false }];
+  }
+  return [
+    ...recent.map((filePath) => ({
+      label: labelForRecentFile(filePath),
+      click: (_item, win) => sendToWindow(win, 'menu:open-recent', filePath),
+    })),
+    { type: 'separator' },
+    {
+      label: 'Clear Recent Files',
+      click: () => {
+        clearRecentFiles();
+        Menu.setApplicationMenu(buildAppMenu());
+      },
+    },
+  ];
+}
+
 function buildAppMenu() {
   const isMac = process.platform === 'darwin';
   /** @type {import('electron').MenuItemConstructorOptions[]} */
@@ -596,6 +710,7 @@ function buildAppMenu() {
       label: 'File',
       submenu: [
         { label: 'Open PDF…', accelerator: 'CmdOrCtrl+O', click: (_item, win) => sendToWindow(win, 'menu:open') },
+        { label: 'Open Recent', submenu: buildRecentFilesSubmenu() },
         { type: 'separator' },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => sendToWindow(win, 'menu:save') },
         { label: 'Save As…', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => sendToWindow(win, 'menu:save-as') },
@@ -663,6 +778,8 @@ function buildAppMenu() {
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => sendToWindow(win, 'menu:shortcuts') },
         { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => sendToWindow(win, 'menu:help-doc') },
         { type: 'separator' },
+        { label: 'Open Log Folder', click: () => shell.showItemInFolder(LOG_PATH) },
+        { type: 'separator' },
         { label: 'About LastMilePDF', click: (_item, win) => sendToWindow(win, 'menu:about', { version: app.getVersion() }) },
       ],
     },
@@ -687,23 +804,19 @@ app.on('window-all-closed', () => {
 
 // --- IPC handlers -------------------------------------------------------
 
-// Opens a native file picker, reads the chosen PDF off disk, and asks the
-// Python sidecar to parse its structure tree. Returns everything the
-// renderer needs to render page 1 and the tag tree in one round trip.
-ipcMain.handle('dialog:open-pdf', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: 'Open PDF',
-    properties: ['openFile'],
-    filters: [{ name: 'PDF Documents', extensions: ['pdf'] }],
-  });
-  if (canceled || filePaths.length === 0) return null;
-
-  const filePath = filePaths[0];
+// Reads `filePath` off disk and asks the Python sidecar to parse its
+// structure tree, returning everything the renderer needs to render page 1
+// and the tag tree in one round trip. Shared by the Open dialog and File >
+// Open Recent below - they differ only in how filePath was chosen.
+async function openPdfAtPath(filePath) {
   const fileBuffer = fs.readFileSync(filePath);
 
   // pikepdf needs to open the file itself (it works against the file/object
   // graph, not raw bytes we already have), so we pass the path, not the buffer.
   const openResult = await callWorker('open', { path: filePath });
+
+  addRecentFile(filePath);
+  Menu.setApplicationMenu(buildAppMenu());
 
   return {
     filePath,
@@ -716,6 +829,32 @@ ipcMain.handle('dialog:open-pdf', async () => {
     // for very large PDFs you'd want to stream this instead.
     pdfBase64: fileBuffer.toString('base64'),
   };
+}
+
+// Opens a native file picker, then hands off to openPdfAtPath().
+ipcMain.handle('dialog:open-pdf', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Open PDF',
+    properties: ['openFile'],
+    filters: [{ name: 'PDF Documents', extensions: ['pdf'] }],
+  });
+  if (canceled || filePaths.length === 0) return null;
+  return openPdfAtPath(filePaths[0]);
+});
+
+// File > Open Recent - same as the dialog above, minus the picker. A
+// thrown error (most commonly ENOENT: the file was moved or deleted since
+// it was last opened) surfaces through the renderer's normal reportError()
+// path; the entry is also dropped from the recent list here so it doesn't
+// keep failing on every future launch.
+ipcMain.handle('doc:open-path', async (_event, filePath) => {
+  try {
+    return await openPdfAtPath(filePath);
+  } catch (err) {
+    removeRecentFile(filePath);
+    Menu.setApplicationMenu(buildAppMenu());
+    throw err;
+  }
 });
 
 // --- unsaved-changes tracking ---------------------------------------
@@ -905,6 +1044,8 @@ ipcMain.handle('dialog:save-pdf', async (_event, { docId, suggestedName }) => {
   if (canceled || !filePath) return null;
 
   await callWorker('save', { docId, path: filePath });
+  addRecentFile(filePath);
+  Menu.setApplicationMenu(buildAppMenu());
   return filePath;
 });
 

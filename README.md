@@ -258,9 +258,12 @@ See [SECURITY.md](SECURITY.md) rather than opening a public issue.
 - **"pikepdf is not installed"** - the interpreter `main.js` spawned
   doesn't have pikepdf. Confirm which interpreter that is (see
   `PYTHON_BIN` above) and `pip install -r python/requirements.txt` into it.
-- **Worker seems to hang** - check the terminal running `npm start`;
-  `main.js` forwards the Python process's stderr there, including
-  tracebacks.
+- **Worker seems to hang, or something else goes wrong** - check the log
+  file (Help > Open Log Folder), which mirrors every diagnostic message
+  main.js logs for the current session, including the Python worker's
+  stderr/tracebacks. Running from source, the same output also goes to the
+  terminal running `npm start`. The log is truncated fresh on every
+  launch, so reproduce the problem before checking it.
 
 ## License
 
