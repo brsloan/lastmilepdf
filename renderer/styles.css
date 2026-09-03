@@ -839,6 +839,10 @@ body.proofread-mode .tree-pane {
   caret-color: var(--text);
 }
 
+.actual-text-box textarea::placeholder {
+  color: var(--text);
+}
+
 .actual-text-highlight {
   pointer-events: none;
   overflow: hidden;
