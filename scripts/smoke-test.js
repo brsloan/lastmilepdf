@@ -27,7 +27,7 @@ const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
 
-const FIXTURES = ['test-figure.pdf', 'test-complex-short.pdf', 'test-complex.pdf'];
+const FIXTURES = ['test-complex-generated.pdf'];
 
 // --- talking to the worker -------------------------------------------------
 

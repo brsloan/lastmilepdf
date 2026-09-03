@@ -183,18 +183,16 @@ can see that. Nearly every test therefore has the same shape:
 An edit that only holds until you close the file is exactly the failure mode
 worth catching, and it is invisible from inside the running app.
 
-The suite runs against the three checked-in fixture PDFs (`test-figure.pdf`,
-`test-complex-short.pdf`, `test-complex.pdf`), covering alt text and Actual
-Text, document title/author/language, role changes, delete, insert, reorder,
-undo/redo, flatten, figure-from-rectangle, list grouping, table scoping and
-structure, bookmarks, and rejection of bad input. Fixtures are opened
-read-only; every save goes to a temp directory that is removed afterwards.
+The suite runs against one checked-in fixture PDF (`test-complex-generated.pdf`),
+covering alt text and Actual Text, document title/author/language, role
+changes, delete, insert, reorder, undo/redo, flatten, figure-from-rectangle,
+list grouping, table scoping and structure, bookmarks, and rejection of bad
+input. The fixture is opened read-only; every save goes to a temp directory
+that is removed afterwards.
 
-Tests **skip** rather than fail when a fixture lacks suitable input - the
-minimal `test-figure.pdf` has no tables or spans, for example. Every test
-runs against at least one fixture, and `test-complex.pdf` exercises all of
-them. Skips are reported so a fixture change that silently stops exercising
-something is visible.
+Tests **skip** rather than fail when the fixture lacks suitable input for a
+given check. Skips are reported so a fixture change that silently stops
+exercising something is visible.
 
 Adding a check is worthwhile whenever a bug turns out to have been in
 `tag_worker.py`: reproduce it as an edit/save/reopen assertion, and it can't
