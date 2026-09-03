@@ -1133,6 +1133,29 @@ window.addEventListener('keydown', (e) => {
   else performRedo();
 });
 
+// Ctrl/Cmd+A selects every visible tag in the tree - the root isn't
+// included, matching selectableRows()/shift+click/arrow-nav's notion of
+// "selectable".
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key.toLowerCase() !== 'a') return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  const rows = selectableRows();
+  if (rows.length === 0) return;
+
+  e.preventDefault();
+  state.selectedNodeIds = new Set(rows.map((row) => row.dataset.nodeId));
+  if (!state.selectedNodeId || !state.selectedNodeIds.has(state.selectedNodeId)) {
+    state.selectedNodeId = rows[0].dataset.nodeId;
+  }
+  state.selectionAnchorId = rows[0].dataset.nodeId;
+  renderTree();
+  refreshDetailsForSelection();
+});
+
 // Ctrl/Cmd+P inserts a new Paragraph tag after the selection - see
 // insertParagraphAfterSelection(). Distinct from the bare 'P' shortcut
 // handled further below, which converts the selection instead of inserting
