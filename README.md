@@ -1,8 +1,40 @@
 # LastMilePDF
 
+![screenshot](images/screenshot.png)
+
+LastMilePDF is for cleaning up auto-tagged PDFs, especially those made from scanned images. Its purpose is to have the best possible user-interface for manual tag changes, with optional built-in AI assistance for proofreading OCR errors.
+
+For small organizations that can only afford Adobe Acrobat for tagging PDFs, this tool is a companion, since its strengths are in Acrobat's weakness (their terrible UI with no keyboard shortcuts, etc.).
+
+Features:
+- Quick, easy tag editing, reordering, conversion, etc. with convenient shortcuts
+- Table editor with auto-scope options
+- Find/Replace for tag types
+- Visual script builder for sequencing/automating repeated actions
+- Flatten button for removing extraneous span/div tags
+- Use AI to clean up OCR errors in Actual Text fields, highlighting changes for approval (configurable to use any AI provider)
+- Tag figures on scanned pages that were missed by auto-tagger
+- Easily filter to just figures for quick alt-text adding, tables for reviewing, etc.
+- Walk feature walks the tree automatically at the pace you set so you don't have to keep pressing the down key to walk the whole tree
+- Proofread mode allows quick comparison between OCR text and original image with AI fixes highlighted in yellow
+- Show AT Changes lets you highlight any differences between Actual Text and the OCR text so review your own edits
+- Smartifact automatically artifacts full-page figures at a click (for when auto-taggers generate figures for every page of a scanned document, a common nuisance)
+
+What it is not for and currently can't do:
+- It can't run OCR
+- It can't auto-tag
+- It does not currently support full manual tagging
+
+These are all things we may add for the future, but as said above the idea for now is to compliment the technologies people are most likely to already have: Adobe Acrobat, etc.
+
+## Info For Developers
+
+This is pretty much entirely vibe-coded using Claude. The rest of the readme is info written by Claude.
+
 A standalone Electron app for viewing a PDF and editing its accessibility
-structure tree (the tag tree behind PDF/UA compliance). Vanilla JavaScript,
-no framework, no bundler, no TypeScript.
+structure tree (the tag tree behind PDF/UA compliance). 
+
+Vanilla JavaScript, no framework, no bundler, no TypeScript.
 
 ## Architecture
 
