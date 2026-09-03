@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LastMilePDF — Free PDF Accessibility Tag Editor</title>
+  <meta name="description" content="LastMilePDF is a free, open-source desktop app for cleaning up auto-tagged PDFs and fixing accessibility structure — built for universities and nonprofits who need PDF/UA and Section 508 compliance without a stack of Acrobat licenses." />
+  <link rel="icon" href="assets/icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <meta property="og:title" content="LastMilePDF — Free PDF Accessibility Tag Editor" />
+  <meta property="og:description" content="Clean up auto-tagged PDFs fast. Built for universities and nonprofits doing accessibility remediation on a real budget." />
+  <meta property="og:image" content="assets/screenshot.png" />
+  <meta property="og:type" content="website" />
+</head>
+<body>
+
+  <header class="site-nav">
+    <div class="wrap">
+      <a class="brand" href="#">
+        <img src="assets/icon.png" alt="" />
+        LastMilePDF
+      </a>
+      <nav class="nav-links">
+        <a href="#why">Why It Exists</a>
+        <a href="#features">Features</a>
+        <a href="#screenshot">See It</a>
+        <a href="#scope">Scope</a>
+        <a href="https://github.com/brsloan/lastmilepdf">GitHub</a>
+      </nav>
+      <a class="nav-cta" href="#download">Download</a>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow">Free &amp; open source · MIT license</span>
+      <h1>The <span class="accent">last mile</span> of PDF accessibility,<br />without the enterprise price tag</h1>
+      <p class="lede">
+        LastMilePDF is a free desktop app for cleaning up the tag structure behind PDF/UA
+        and WCAG compliance — built for the accessibility work that auto-taggers leave half-finished,
+        and priced for the institutions that can't put Acrobat Pro on every desk.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#download">Download LastMilePDF</a>
+        <a class="btn btn-secondary" href="https://github.com/brsloan/lastmilepdf">View on GitHub</a>
+      </div>
+      <div class="screenshot-frame">
+        <img src="assets/screenshot.png" alt="LastMilePDF main window showing a PDF page preview next to its accessibility tag tree and tag properties panel" />
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Why it exists</span>
+        <h2>Accessibility remediation is a mandate. Full Acrobat seats aren't always a budget line.</h2>
+        <p>
+          Universities and nonprofits are under real, growing pressure to make PDFs
+          accessible — course materials, grant reports, public filings, scanned archives.
+          Most of that work is manual tag cleanup, and most institutions doing it are
+          stretched thin on both staff and software budget.
+        </p>
+      </div>
+      <div class="why-grid">
+        <div class="why-card">
+          <div class="icon">🎓</div>
+          <h3>Built for the compliance reality</h3>
+          <p>
+            Title II ADA rules, Section 508, and WCAG 2.1 AA obligations apply to campus
+            course content, public-facing documents, and grant deliverables alike. The
+            gap is almost always in the tag tree, not the visible page.
+          </p>
+        </div>
+        <div class="why-card">
+          <div class="icon">💸</div>
+          <h3>Not another per-seat license</h3>
+          <p>
+            LastMilePDF is free and open source under the MIT license. Use it on as many
+            machines as you need — a disability services office, a library digitization
+            lab, a one-person communications team — without a procurement cycle.
+          </p>
+        </div>
+        <div class="why-card">
+          <div class="icon">🤝</div>
+          <h3>A companion, not a replacement</h3>
+          <p>
+            It doesn't OCR or auto-tag — it makes the manual review and cleanup pass fast.
+            Keep using whatever auto-tagger or Acrobat license you already have; LastMilePDF
+            covers the editing experience Acrobat's UI makes painful.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Features</span>
+        <h2>Everything the last mile of tagging actually needs</h2>
+        <p>Keyboard-first tag editing, built specifically around the repetitive cleanup work that scanned and auto-tagged PDFs generate.</p>
+      </div>
+      <div class="feature-grid">
+        <div class="feature">
+          <h3><span class="tag-pill">/Tag</span>Fast structural editing</h3>
+          <p>Reorder, retype, merge, and delete tags with keyboard shortcuts built for doing it hundreds of times in a row — not for occasional use.</p>
+        </div>
+        <div class="feature">
+          <h3><span class="tag-pill">/Table</span>Table editor with auto-scope</h3>
+          <p>Fix table headers and scope automatically instead of hand-tagging every &lt;TH&gt;/&lt;TD&gt; relationship.</p>
+        </div>
+        <div class="feature">
+          <h3>🔍 Find/Replace for tag types</h3>
+          <p>Bulk-correct a mis-tagged role across the whole document in one pass.</p>
+        </div>
+        <div class="feature">
+          <h3>🧩 Visual script builder</h3>
+          <p>Sequence repeated cleanup actions into a saved script, then run the same fix across every document in a batch of scans.</p>
+        </div>
+        <div class="feature">
+          <h3>🪄 One-click flatten</h3>
+          <p>Strip extraneous span/div tags that auto-taggers leave behind, without touching the content that matters.</p>
+        </div>
+        <div class="feature">
+          <h3>🤖 Optional AI-assisted OCR proofing</h3>
+          <p>Clean up OCR errors in Actual Text fields with any AI provider you configure, with every change highlighted for your approval before it's applied.</p>
+        </div>
+        <div class="feature">
+          <h3>🖼️ Catch missed figures</h3>
+          <p>Tag figures on scanned pages that the auto-tagger skipped, and filter straight to figures when it's time to add alt text.</p>
+        </div>
+        <div class="feature">
+          <h3>🚶 Guided walk mode</h3>
+          <p>Walk the tree automatically at the pace you set — no more holding down the arrow key through a 40-page document.</p>
+        </div>
+        <div class="feature">
+          <h3>👁️ Proofread &amp; AT-diff views</h3>
+          <p>Compare OCR text against the source image side by side, and highlight any difference between Actual Text and OCR so you can review your own edits.</p>
+        </div>
+        <div class="feature">
+          <h3>✨ Smartifact</h3>
+          <p>Artifact full-page decorative figures in one click — the fix for auto-taggers that generate a spurious figure tag on every scanned page.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screenshot">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">See it</span>
+        <h2>Page preview, tag tree, and properties — all in one view</h2>
+        <p>Select a tag and its content highlights on the page. Click content on the page and its tag is selected. No mode switching, no dialogs to hunt through.</p>
+      </div>
+      <div class="screenshot-frame">
+        <img src="assets/screenshot.png" alt="LastMilePDF editing a scanned book PDF: page preview on the left, tag tree in the middle with a list selected, and tag properties with a live list preview on the right" />
+      </div>
+      <p class="gallery-note">Dark, high-contrast interface designed for long remediation sessions.</p>
+    </div>
+  </section>
+
+  <section id="scope">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Honest scope</span>
+        <h2>What it's for, and what it's deliberately not</h2>
+      </div>
+      <div class="scope-columns">
+        <div class="scope-box good">
+          <h3>✅ What LastMilePDF is for</h3>
+          <ul>
+            <li>Cleaning up and correcting tag structure that a tagger already produced</li>
+            <li>Fast manual editing of roles, reading order, alt text, and Actual Text</li>
+            <li>Table structure and scope review</li>
+            <li>Bulk fixes via find/replace and saved scripts</li>
+            <li>OCR proofreading with optional AI assistance you control</li>
+          </ul>
+        </div>
+        <div class="scope-box limit">
+          <h3>⚠️ What it doesn't do (yet)</h3>
+          <ul>
+            <li>It can't run OCR</li>
+            <li>It can't auto-tag an untagged PDF from scratch</li>
+            <li>It doesn't currently support full manual tagging of a document with no structure at all</li>
+          </ul>
+          <p style="margin-top:14px; color: var(--text-dim); font-size: 0.9rem;">
+            It's meant to complement the tools you likely already have — an auto-tagger and/or
+            Adobe Acrobat — by making the manual review and correction pass fast.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Download</span>
+        <h2>Get LastMilePDF</h2>
+        <p>Free, MIT-licensed, no account required.</p>
+      </div>
+      <div class="download-panel">
+        <strong>Windows &amp; Linux</strong>
+        <div class="download-buttons">
+          <a id="dl-windows" class="btn btn-primary" href="https://github.com/brsloan/lastmilepdf/releases/latest">
+            Windows Installer <small>.exe</small>
+          </a>
+          <a id="dl-windows-portable" class="btn btn-secondary" href="https://github.com/brsloan/lastmilepdf/releases/latest">
+            Windows Portable <small>.exe</small>
+          </a>
+          <a id="dl-linux" class="btn btn-secondary" href="https://github.com/brsloan/lastmilepdf/releases/latest">
+            Linux <small>.AppImage</small>
+          </a>
+        </div>
+        <div id="release-status">Checking the latest release…</div>
+        <p class="download-meta">
+          Installers are unsigned, so Windows SmartScreen will show a warning on first
+          launch — click "More info" → "Run anyway." Linux AppImages need
+          <code>chmod +x</code> and, on some distros, <code>libfuse2</code>.
+          macOS isn't packaged yet; running from source works, see the
+          <a href="https://github.com/brsloan/lastmilepdf#readme">README</a>.
+          All releases are visible on the
+          <a href="https://github.com/brsloan/lastmilepdf/releases">GitHub releases page</a>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 Benjamin Sloan. MIT licensed.</span>
+      <div class="footer-links">
+        <a href="https://github.com/brsloan/lastmilepdf">GitHub</a>
+        <a href="https://github.com/brsloan/lastmilepdf/issues">Report an issue</a>
+        <a href="https://github.com/brsloan/lastmilepdf#readme">Documentation</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
