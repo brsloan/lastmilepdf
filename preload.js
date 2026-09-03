@@ -30,6 +30,7 @@ const { contextBridge, ipcRenderer } = require('electron');
  * @typedef {import('./types/domain').DiscardChoice} DiscardChoice
  * @typedef {import('./types/domain').LeafTextResult} LeafTextResult
  * @typedef {import('./types/domain').SplitLeafResult} SplitLeafResult
+ * @typedef {import('./types/domain').Script} Script
  */
 
 const api = {
@@ -411,6 +412,21 @@ const api = {
   getAutoSaveEnabled: () => ipcRenderer.invoke('settings:get-auto-save-enabled'),
   /** @param {boolean} value @returns {Promise<void>} */
   setAutoSaveEnabled: (value) => ipcRenderer.invoke('settings:set-auto-save-enabled', { value }),
+
+  /** @param {() => void} callback */
+  onMenuScripts: (callback) => ipcRenderer.on('menu:scripts', callback),
+
+  // Tools > Scripts… - saved scripts and which one (if any) the toolbar's
+  // "Run Script" button currently triggers. Persisted in settings.json the
+  // same way as the settings above.
+  /** @returns {Promise<Script[]>} */
+  getScripts: () => ipcRenderer.invoke('scripts:get'),
+  /** @param {Script[]} scripts @returns {Promise<void>} */
+  setScripts: (scripts) => ipcRenderer.invoke('scripts:set', { scripts }),
+  /** @returns {Promise<string | null>} */
+  getActiveScriptId: () => ipcRenderer.invoke('scripts:get-active'),
+  /** @param {string | null} id @returns {Promise<void>} */
+  setActiveScriptId: (id) => ipcRenderer.invoke('scripts:set-active', { id }),
 
   /**
    * @param {string} text

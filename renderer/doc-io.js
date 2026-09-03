@@ -8,6 +8,7 @@ import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails } from './details.js';
 import { el } from './dom.js';
 import { clearPageCaches } from './page-content.js';
+import { updateRunScriptButtonState } from './scripts.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
@@ -75,6 +76,7 @@ export async function performOpen() {
     el.btnWalk.disabled = !opened.hasStructTree;
     el.btnFixAllActualText.disabled = !opened.hasStructTree;
     state.hasStructTree = !!opened.hasStructTree;
+    updateRunScriptButtonState();
     el.btnVerify.disabled = false; // Verify's Document-level checks apply even to an untagged PDF
     stopWalking();
     state.aiProposals = new Map(); // ids from the outgoing document don't carry over
@@ -271,6 +273,7 @@ export async function performClose() {
   el.btnVerify.disabled = true;
   el.btnAddBookmark.disabled = true;
   el.btnGenerateBookmarks.disabled = true;
+  updateRunScriptButtonState();
   state.canUndo = false;
   state.canRedo = false;
   window.api.setUndoState({ canUndo: false, canRedo: false });

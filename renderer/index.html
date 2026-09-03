@@ -22,6 +22,7 @@
 
     <div class="toolbar-actions">
       <button id="btn-open" class="btn btn-primary">Open PDF&hellip;</button>
+      <button id="btn-run-script" class="btn btn-ghost" disabled title="Run the script assigned via Tools &gt; Scripts&hellip;">Run Script</button>
       <button id="btn-smartifact" class="btn btn-ghost" disabled title="Artifact image leaves that are the same size as their page (e.g. full-page scan backgrounds)">Smartifact</button>
       <button id="btn-scope-tables" class="btn btn-ghost" disabled title="Set Row/Column/Both scope on every table's TH cells based on its header shape">Scope Tables</button>
       <button id="btn-flatten" class="btn btn-ghost" disabled title="Remove organizational tags (Div/Sect/Part/Span and Span-like custom types) within the selected tags, keeping their contents - or the whole document if nothing is selected">Flatten</button>
@@ -585,6 +586,50 @@
         <button type="button" id="btn-find-replace-all" class="btn btn-ghost">Replace All</button>
         <button type="button" id="btn-find-replace-one" class="btn btn-ghost">Replace</button>
         <button type="button" id="btn-find-next" class="btn btn-primary">Find</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="scripts-dialog" class="scripts-dialog">
+    <div class="shortcuts-header">
+      <h2>Scripts</h2>
+      <button type="button" id="btn-close-scripts" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <div class="scripts-body">
+      <div class="scripts-select-row">
+        <label class="field scripts-select-field">
+          <span class="field-label">Script</span>
+          <select id="scripts-select"></select>
+        </label>
+        <button type="button" id="btn-new-script" class="btn btn-ghost">New</button>
+        <button type="button" id="btn-delete-script" class="btn btn-ghost">Delete</button>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input id="scripts-name" type="text" placeholder="e.g. Standard Cleanup" autocomplete="off" spellcheck="false" />
+      </label>
+
+      <div class="scripts-builder">
+        <div class="scripts-palette">
+          <p class="settings-hint">Available actions</p>
+          <ul id="scripts-palette-list" class="scripts-palette-list"></ul>
+        </div>
+        <div class="scripts-steps">
+          <p class="settings-hint">Script steps (runs top to bottom)</p>
+          <ol id="scripts-step-list" class="scripts-step-list"></ol>
+          <p id="scripts-steps-empty" class="settings-hint">No steps yet &ndash; add actions from the left.</p>
+        </div>
+      </div>
+
+      <p id="scripts-status" class="settings-hint">&nbsp;</p>
+
+      <div class="settings-actions scripts-actions">
+        <label class="field field-checkbox scripts-set-active-field">
+          <input type="checkbox" id="scripts-set-active" />
+          <span>Assign to Run Script button</span>
+        </label>
+        <button type="button" id="btn-save-script" class="btn btn-primary">Save Script</button>
       </div>
     </div>
   </dialog>

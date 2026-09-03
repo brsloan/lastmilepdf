@@ -1685,6 +1685,163 @@ body.busy-cursor * {
   flex-direction: column;
 }
 
+/* --- scripts dialog (Tools > Scripts…) ---
+   Reuses .shortcuts-header for the title bar and .settings-body/
+   .settings-actions/.settings-hint/.field-checkbox from the settings dialog
+   above for the name field and "Assign to Run Script button" row. The
+   two-column .scripts-builder is its own layout: a static palette of the
+   five available actions on the left, the current script's ordered step
+   list (reordered with the ↑/↓ buttons on each row, since this app has no
+   drag-and-drop elsewhere either) on the right - see scripts.js. */
+
+.scripts-dialog {
+  width: min(720px, 92vw);
+  max-height: 84vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.scripts-dialog[open] {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.scripts-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.scripts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.scripts-select-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.scripts-select-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.scripts-builder {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px;
+  min-height: 240px;
+}
+
+.scripts-palette-list,
+.scripts-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scripts-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-alt);
+}
+
+.scripts-palette-item span {
+  font-size: 12.5px;
+}
+
+.scripts-steps {
+  min-width: 0;
+}
+
+.scripts-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-alt);
+}
+
+.scripts-step-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.scripts-step-index {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.scripts-step-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.scripts-step-config {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scripts-step-config input {
+  width: 120px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.scripts-step-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.scripts-step-controls .btn,
+.scripts-palette-item .btn {
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.scripts-set-active-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.scripts-actions {
+  align-items: center;
+}
+
 /* --- verify (accessibility check) dialog ---
    Reuses .shortcuts-header for the title bar. Body is its own single-column
    list of check groups, each holding one or more named checks; a failing/

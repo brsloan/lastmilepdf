@@ -33,6 +33,7 @@ const asForm = (id) => /** @type {HTMLFormElement} */ (document.getElementById(i
 
 export const el = {
   btnOpen: asButton('btn-open'),
+  btnRunScript: asButton('btn-run-script'),
   btnFlatten: asButton('btn-flatten'),
   btnScopeTables: asButton('btn-scope-tables'),
   btnSmartifact: asButton('btn-smartifact'),
@@ -161,6 +162,18 @@ export const el = {
   btnGenerateBookmarks: asButton('btn-generate-bookmarks'),
   bookmarksEmpty: asElement('bookmarks-empty'),
   bookmarkTree: asElement('bookmark-tree'),
+  scriptsDialog: asDialog('scripts-dialog'),
+  btnCloseScripts: asButton('btn-close-scripts'),
+  scriptsSelect: asSelect('scripts-select'),
+  btnNewScript: asButton('btn-new-script'),
+  btnDeleteScript: asButton('btn-delete-script'),
+  scriptsName: asInput('scripts-name'),
+  scriptsPaletteList: asElement('scripts-palette-list'),
+  scriptsStepList: asElement('scripts-step-list'),
+  scriptsStepsEmpty: asElement('scripts-steps-empty'),
+  scriptsStatus: asElement('scripts-status'),
+  scriptsSetActive: asInput('scripts-set-active'),
+  btnSaveScript: asButton('btn-save-script'),
 };
 
 /**

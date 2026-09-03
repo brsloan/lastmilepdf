@@ -1,19 +1,21 @@
+import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runScopeTables, runSmartifact } from './actions.js';
 import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
-import { hideAiBatchProgress, notifyAiBatchComplete, showAiBatchProgress, updateAiBatchProgressEstimate } from './ai-batch.js';
+import { notifyAiBatchComplete } from './ai-batch.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
 import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels } from './editing.js';
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
-import { doFindNext, findReplaceMatches, positionFindReplaceDialog } from './find-replace.js';
-import { findFullPageImageLeafIds, getPageTextContent, hasDirectContentLeaf, pullContentText, pullDirectContentText } from './page-content.js';
+import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
+import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
-import { isDescendant, walkTree } from './tree-index.js';
+import { walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
+import { deleteCurrentScript, loadScripts, newScript, openScriptsDialog, runActiveScript, saveCurrentScript, selectScriptForEditing, updateRunScriptButtonState } from './scripts.js';
 import { renderVerifyResults } from './verify.js';
 import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
@@ -235,6 +237,11 @@ window.api.getNotifyChime().then((value) => { state.notifyChime = value; });
 window.api.getExtraDeleteKeyCode().then((value) => { state.extraDeleteKeyCode = value; });
 
 window.api.getAutoSaveEnabled().then((value) => { state.autoSaveEnabled = value; });
+
+// Tools > Scripts… - which saved script (if any) is assigned to the Run
+// Script button, so its enabled state/tooltip are correct even before the
+// Scripts dialog has been opened this session.
+loadScripts().then(() => updateRunScriptButtonState());
 
 // Friendly names for the KeyboardEvent.code values a user is likely to pick
 // as their extra Delete key (see the recorder below) - falls back to
@@ -628,87 +635,14 @@ el.btnFixAllActualText.addEventListener('click', async () => {
   if (!state.tree) return;
 
   el.btnFixAllActualText.disabled = true;
-  showAiBatchProgress();
   try {
-    // A tag that already has Actual Text is sent as-is. A tag with none,
-    // but a content leaf directly inside it, has that leaf's raw text
-    // pulled first - scoped to just its own directly-nested leaves
-    // (pullDirectContentText(), not the whole-subtree pullContentText() the
-    // single-tag "Pull Content" button uses) - so the model sees the whole
-    // document's text, giving it the full context for cross-tag consistency
-    // instead of just the fields someone already filled in by hand, without
-    // resending a nested element's text twice under both its own id and an
-    // ancestor's. Table/Document tags are skipped - their Actual Text field
-    // is swapped out for a table preview / doc-info fields respectively (see
-    // refreshDetailsForSelection()), so a highlight for one could never be
-    // shown.
-    const candidates = [];
-    walkTree(state.tree, (node) => {
-      if (node.type !== 'element' || node.role === 'Table' || node.role === 'Document') return;
-      if (node.actualText && node.actualText.trim()) {
-        candidates.push({ id: node.id, text: node.actualText });
-      } else if (state.pdfDoc && hasDirectContentLeaf(node)) {
-        candidates.push({ id: node.id, text: null }); // text pulled below
-      }
-    });
-
-    const toPull = candidates.filter((candidate) => candidate.text === null);
-    if (toPull.length > 0) {
-      setStatus(`Pulling content text from ${toPull.length} tag${toPull.length === 1 ? '' : 's'} with no Actual Text yet…`);
-      for (const candidate of toPull) {
-        candidate.text = (await pullDirectContentText(candidate.id)) || '';
-      }
-    }
-
-    const items = candidates.filter((candidate) => candidate.text && candidate.text.trim());
-    if (items.length === 0) {
-      setStatus('No tags have Actual Text (or pullable content) to fix.');
-      return;
-    }
-
-    setStatus(`Fixing Actual Text across ${items.length} tag${items.length === 1 ? '' : 's'} with AI…`);
-    const requestItems = items.map(({ id, text }) => ({ id, text }));
-    // Same size main.js's estimateAiBatchMs() keys its average on (it charges
-    // the char count of the JSON it actually sends - see JSON.stringify(items)
-    // in the ai:fix-actual-text-batch handler) - so the estimate lines up with
-    // what recordAiBatchTiming() will log for this run.
-    updateAiBatchProgressEstimate(await window.api.estimateAiBatchTime(JSON.stringify(requestItems).length));
-    const results = await window.api.fixActualTextBatch(requestItems);
-    const byId = new Map(items.map((item) => [item.id, item]));
-    /** @type {Record<string, string>} */
-    const updates = {};
-    const proposals = new Map();
-    for (const result of results) {
-      const candidate = byId.get(result.id);
-      // Ignore any id the model returned that wasn't in the request, and
-      // skip anything it says needs no change - no point writing/flagging a
-      // "fix" that changes nothing (and, for a pulled-content tag, no point
-      // filling in Actual Text with a pull the AI found nothing to correct
-      // in - that's a separate feature from fixing transcription errors).
-      if (!candidate || result.text === candidate.text) continue;
-      updates[result.id] = result.text;
-      proposals.set(result.id, { original: candidate.text, suggested: result.text });
-    }
-
-    if (Object.keys(updates).length === 0) {
-      setStatus('AI found no changes to make.');
-      return;
-    }
-
-    const result = await window.api.updateActualTexts(state.docId, updates);
-    state.aiProposals = proposals; // set before applyFreshTree() so pruneStaleAiProposals() sees the fixes it just wrote
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    refreshDetailsForSelection();
-    const pulledCount = toPull.filter((candidate) => candidate.text && candidate.text.trim()).length;
-    setStatus(
-      `AI fixed ${proposals.size} of ${items.length} tags (${pulledCount} pulled from content with no prior Actual Text) - step through the tag tree to review (flagged rows) or Revert any of them.`,
-    );
+    setStatus('Fixing Actual Text across the document with AI…');
+    const message = await runFixAllActualTextAi();
+    setStatus(message.startsWith('AI fixed') ? `${message} Step through the tag tree to review (flagged rows) or Revert any of them.` : message);
   } catch (err) {
     reportError('Could not fix Actual Text with AI', err);
   } finally {
     el.btnFixAllActualText.disabled = false;
-    hideAiBatchProgress();
     notifyAiBatchComplete(el.statusBar.textContent);
   }
 });
@@ -1059,19 +993,10 @@ el.btnFindReplaceAll.addEventListener('click', async () => {
     el.findReplaceStatus.textContent = 'No document loaded.';
     return;
   }
-  const matches = findReplaceMatches(findRole);
-  if (matches.length === 0) {
-    el.findReplaceStatus.textContent = `No /${findRole} tags found.`;
-    return;
-  }
   try {
-    const result = await window.api.updateNodes(state.docId, matches, { role: replaceRole });
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    state.findReplaceLastMatchId = null;
-    const count = matches.length;
-    el.findReplaceStatus.textContent = `Replaced ${count} tag${count === 1 ? '' : 's'}.`;
-    setStatus(`Replaced ${count} /${findRole} tag${count === 1 ? '' : 's'} with /${replaceRole}.`);
+    const { count, message } = await runFindReplaceAll(findRole, replaceRole);
+    el.findReplaceStatus.textContent = message;
+    if (count > 0) setStatus(message);
   } catch (err) {
     reportError('Could not replace tags', err);
   }
@@ -1115,6 +1040,22 @@ el.findReplaceReplace.addEventListener('keydown', (e) => {
     el.btnFindReplaceOne.click();
   }
 });
+
+// --- scripts (Tools > Scripts…) ------------------------------------------
+
+window.api.onMenuScripts(() => openScriptsDialog());
+
+el.btnCloseScripts.addEventListener('click', () => el.scriptsDialog.close());
+
+el.btnNewScript.addEventListener('click', () => newScript());
+
+el.scriptsSelect.addEventListener('change', () => selectScriptForEditing(el.scriptsSelect.value));
+
+el.btnSaveScript.addEventListener('click', () => saveCurrentScript());
+
+el.btnDeleteScript.addEventListener('click', () => deleteCurrentScript());
+
+el.btnRunScript.addEventListener('click', () => runActiveScript());
 
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;
@@ -1529,16 +1470,9 @@ window.api.onMenuSaveAndClose(async () => {
 // Kill Divs did.
 el.btnFlatten.addEventListener('click', async () => {
   if (!state.docId) return;
-  const ids = Array.from(state.selectedNodeIds);
-  const targetIds = ids.length > 0
-    ? ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)))
-    : ['root'];
   try {
     setStatus('Flattening tags…');
-    const result = await window.api.flattenTags(state.docId, targetIds);
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    setStatus(result.removed > 0 ? `Flattened ${result.removed} tag${result.removed === 1 ? '' : 's'}.` : 'No organizational tags found.');
+    setStatus(await runFlattenSelectionOrAll());
   } catch (err) {
     reportError('Could not flatten tags', err);
   }
@@ -1548,10 +1482,7 @@ el.btnScopeTables.addEventListener('click', async () => {
   if (!state.docId) return;
   try {
     setStatus('Scoping tables…');
-    const result = await window.api.scopeTables(state.docId);
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    setStatus(result.tablesScoped > 0 ? `Scoped ${result.tablesScoped} table${result.tablesScoped === 1 ? '' : 's'}.` : 'No tables matched a recognized header shape.');
+    setStatus(await runScopeTables());
   } catch (err) {
     reportError('Could not scope tables', err);
   }
@@ -1562,16 +1493,7 @@ el.btnSmartifact.addEventListener('click', async () => {
   document.body.classList.add('busy');
   try {
     setStatus('Scanning for full-page images…');
-    const ids = await findFullPageImageLeafIds();
-    if (ids.length === 0) {
-      setStatus('No full-page image leaves found.');
-      return;
-    }
-    const result = await window.api.deleteNodes(state.docId, ids);
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    closeDetails();
-    setStatus(`Artifacted ${ids.length} full-page image${ids.length === 1 ? '' : 's'}.`);
+    setStatus(await runSmartifact());
   } catch (err) {
     reportError('Could not smartify', err);
   } finally {

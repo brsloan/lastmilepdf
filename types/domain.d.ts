@@ -271,3 +271,29 @@ export interface SplitLeafResult extends MutationResult {
   newNodeIds: [string | null, string | null];
   pdfBase64: string;
 }
+
+/**
+ * One step in a Tools > Scripts… script (see renderer/scripts.js). `type`
+ * picks which of the five toolbar actions this step runs; `findRole`/
+ * `replaceRole` are only meaningful (and only shown in the builder) for a
+ * `'find-replace'` step, since it's the only action with per-step
+ * configuration - a script can hold several, each configured differently.
+ */
+export interface ScriptStep {
+  id: string;
+  type: 'smartifact' | 'scope-tables' | 'flatten-all' | 'find-replace' | 'fix-actual-text-ai';
+  findRole?: string;
+  replaceRole?: string;
+}
+
+/**
+ * A user-defined, named sequence of ScriptSteps, built in the Scripts
+ * dialog and persisted via window.api.getScripts()/setScripts(). Run in
+ * order by the toolbar's "Run Script" button when its id matches
+ * window.api.getActiveScriptId().
+ */
+export interface Script {
+  id: string;
+  name: string;
+  steps: ScriptStep[];
+}

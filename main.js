@@ -388,6 +388,36 @@ function setAutoSaveEnabled(value) {
   writeSettingsFile(settings);
 }
 
+// Tools > Scripts… - user-defined sequences of the existing toolbar actions
+// (Smartifact, Scope Tables, Flatten All, Find/Replace, Fix All Actual Text
+// (AI)), built and reordered in the renderer's Scripts dialog and run in
+// order by the toolbar's "Run Script" button. Persisted the same way as the
+// settings above; the shape of a script/step is the renderer's concern (see
+// types/domain.d.ts's Script/ScriptStep), main.js just stores whatever it's
+// handed. `activeScriptId` is which saved script (by id) the Run Script
+// button currently triggers, or null if none has been assigned yet.
+function getScripts() {
+  const scripts = readSettingsFile().scripts;
+  return Array.isArray(scripts) ? scripts : [];
+}
+
+function setScripts(scripts) {
+  const settings = readSettingsFile();
+  settings.scripts = scripts;
+  writeSettingsFile(settings);
+}
+
+function getActiveScriptId() {
+  const value = readSettingsFile().activeScriptId;
+  return typeof value === 'string' ? value : null;
+}
+
+function setActiveScriptId(id) {
+  const settings = readSettingsFile();
+  settings.activeScriptId = id;
+  writeSettingsFile(settings);
+}
+
 // --- AI batch timing log ----------------------------------------------------
 //
 // Lets the "Fix All Actual Text" progress dialog (see showAiBatchProgress()
@@ -624,6 +654,7 @@ function buildAppMenu() {
       submenu: [
         { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => sendToWindow(win, 'menu:find-replace') },
         { type: 'separator' },
+        { label: 'Scripts…', click: (_item, win) => sendToWindow(win, 'menu:scripts') },
       ],
     },
     {
@@ -950,6 +981,19 @@ ipcMain.handle('settings:set-extra-delete-key-code', async (_event, { value }) =
 ipcMain.handle('settings:get-auto-save-enabled', async () => getAutoSaveEnabled());
 ipcMain.handle('settings:set-auto-save-enabled', async (_event, { value }) => {
   setAutoSaveEnabled(value);
+  return true;
+});
+
+// --- Tools > Scripts… --------------------------------------------------------
+
+ipcMain.handle('scripts:get', async () => getScripts());
+ipcMain.handle('scripts:set', async (_event, { scripts }) => {
+  setScripts(scripts);
+  return true;
+});
+ipcMain.handle('scripts:get-active', async () => getActiveScriptId());
+ipcMain.handle('scripts:set-active', async (_event, { id }) => {
+  setActiveScriptId(id);
   return true;
 });
 
