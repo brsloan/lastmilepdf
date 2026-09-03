@@ -119,6 +119,8 @@ export const el = {
   btnCloseSettings: asButton('btn-close-settings'),
   settingsProvider: asSelect('settings-provider'),
   settingsAnthropicFields: asElement('settings-anthropic-fields'),
+  settingsAnthropicBaseUrl: asInput('settings-anthropic-base-url'),
+  settingsAnthropicModel: asInput('settings-anthropic-model'),
   settingsApiKey: asInput('settings-api-key'),
   settingsApiKeyStatus: asElement('settings-api-key-status'),
   settingsCustomFields: asElement('settings-custom-fields'),

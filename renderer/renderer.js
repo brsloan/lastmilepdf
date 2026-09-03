@@ -910,19 +910,26 @@ el.btnUpdateAction.addEventListener('click', () => {
 // a named preset (which - the first time it's picked - fills in Base URL +
 // Model as a starting point, still editable, e.g. to pick a different model
 // from the same provider), and "Custom" for anything else not listed - a
-// university-hosted service, a local model server, etc. Every provider
-// keeps its own saved key and config (see main.js's per-provider settings
-// storage), so switching the selector and back always shows what you saved
-// for THAT specific provider, not whatever was saved last for a different
-// one. main.js also remembers the exact provider id last selected here
-// (not just "anthropic vs. something else"), so it's what's used again next
-// time the app opens. A raw key never round-trips back from main.js - only
-// whether one is currently saved - so the status lines are the only
-// feedback on save/remove.
+// university-hosted service, a local model server, etc. Every provider,
+// Anthropic included, shows its own Base URL + Model fields (autofilled
+// with that provider's defaults the first time it's picked) and keeps its
+// own saved key and config (see main.js's per-provider settings storage),
+// so switching the selector and back always shows what you saved for THAT
+// specific provider, not whatever was saved last for a different one.
+// Anthropic's fields render in a separate div (settings-anthropic-fields)
+// from the rest (settings-custom-fields) only because its API key stays on
+// its own dedicated, longer-lived storage slot (hasApiKey/setApiKey) rather
+// than the generic per-provider key store the other presets share - Base
+// URL/Model themselves live in that same generic per-provider config store
+// as everyone else's, keyed 'anthropic'. main.js also remembers the exact
+// provider id last selected here (not just "anthropic vs. something else"),
+// so it's what's used again next time the app opens. A raw key never
+// round-trips back from main.js - only whether one is currently saved - so
+// the status lines are the only feedback on save/remove.
 //
 // Alphabetical by label, since that's how they're listed in the dropdown.
 const AI_PROVIDER_OPTIONS = [
-  { id: 'anthropic', label: 'Anthropic', kind: 'anthropic' },
+  { id: 'anthropic', label: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-opus-5' },
   { id: 'custom', label: 'Custom (OpenAI-compatible)', kind: 'custom' },
   { id: 'gemini', label: 'Google Gemini', kind: 'preset', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-2.5-pro' },
   { id: 'groq', label: 'Groq', kind: 'preset', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile' },
@@ -975,10 +982,26 @@ async function loadCustomProviderFields(providerId) {
   el.settingsCustomApiKeyStatus.textContent = hasKey ? 'A key is saved on this device.' : 'No key set.';
 }
 
+// Same idea as loadCustomProviderFields() above, but for the built-in
+// Anthropic slot: Base URL/Model are stored in the same generic
+// per-provider config store (keyed 'anthropic'), falling back to
+// Anthropic's own defaults - what main.js used to hardcode - the first time
+// nothing's been saved yet. The API key itself stays on the separate,
+// dedicated Anthropic key slot (hasApiKey/setApiKey/clearApiKey), not the
+// generic per-provider key store, so keys saved before this field split
+// still round-trip correctly.
+async function loadAnthropicProviderFields() {
+  const config = await window.api.getCustomProviderConfig('anthropic');
+  const preset = AI_PROVIDER_OPTIONS.find((o) => o.id === 'anthropic');
+  el.settingsAnthropicBaseUrl.value = config.baseUrl || preset?.baseUrl || '';
+  el.settingsAnthropicModel.value = config.model || preset?.model || '';
+}
+
 el.settingsProvider.addEventListener('change', async () => {
   updateSettingsProviderVisibility();
   const providerId = el.settingsProvider.value;
-  if (providerId !== 'anthropic') await loadCustomProviderFields(providerId);
+  if (providerId === 'anthropic') await loadAnthropicProviderFields();
+  else await loadCustomProviderFields(providerId);
 });
 
 window.api.onMenuSettings(async () => {
@@ -988,7 +1011,7 @@ window.api.onMenuSettings(async () => {
   updateSettingsProviderVisibility();
   await Promise.all([
     refreshSettingsApiKeyStatus(),
-    el.settingsProvider.value === 'anthropic' ? Promise.resolve() : loadCustomProviderFields(el.settingsProvider.value),
+    el.settingsProvider.value === 'anthropic' ? loadAnthropicProviderFields() : loadCustomProviderFields(el.settingsProvider.value),
   ]);
   el.settingsDialog.showModal();
 });
@@ -1006,6 +1029,11 @@ el.settingsForm.addEventListener('submit', async (e) => {
   try {
     await window.api.setAiProvider(providerId);
     if (isAnthropic) {
+      await window.api.setCustomProviderConfig(
+        'anthropic',
+        el.settingsAnthropicBaseUrl.value.trim(),
+        el.settingsAnthropicModel.value.trim(),
+      );
       const key = el.settingsApiKey.value.trim();
       if (key) {
         await window.api.setApiKey(key);

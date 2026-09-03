@@ -1330,6 +1330,26 @@ function requireAnthropicKey() {
   return apiKey;
 }
 
+// Anthropic's Base URL and Model fields (see settings-anthropic-fields in
+// index.html) live in the same generic per-provider config store as every
+// other provider's (getCustomProviderConfig/setCustomProviderConfig, keyed
+// 'anthropic'), but unlike a custom endpoint - where an empty Base
+// URL/Model means "not configured yet, refuse the request" - Anthropic has
+// sane defaults, so an empty field here just means "use them," same as
+// before these fields existed.
+const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com';
+const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5';
+
+function getAnthropicClientConfig() {
+  const apiKey = requireAnthropicKey();
+  const { baseUrl, model } = getCustomProviderConfig('anthropic');
+  return {
+    apiKey,
+    baseUrl: baseUrl || ANTHROPIC_DEFAULT_BASE_URL,
+    model: model || ANTHROPIC_DEFAULT_MODEL,
+  };
+}
+
 function requireCustomProviderConfig(providerId) {
   const apiKey = getStoredCustomApiKey(providerId);
   const { baseUrl, model } = getCustomProviderConfig(providerId);
@@ -1489,11 +1509,11 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
     return content;
   }
 
-  const apiKey = requireAnthropicKey();
-  const client = new Anthropic({ apiKey });
+  const { apiKey, baseUrl, model } = getAnthropicClientConfig();
+  const client = new Anthropic({ apiKey, baseURL: baseUrl });
   try {
     const response = await client.messages.create({
-      model: 'claude-opus-5',
+      model,
       max_tokens: 4096,
       output_config: { effort: 'low' },
       system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
@@ -1681,14 +1701,14 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
     const { apiKey, baseUrl, model } = requireCustomProviderConfig(provider);
     resultItems = await customBatchFixWithSplit(apiKey, baseUrl, model, items);
   } else {
-    const apiKey = requireAnthropicKey();
-    const client = new Anthropic({ apiKey });
+    const { apiKey, baseUrl, model } = getAnthropicClientConfig();
+    const client = new Anthropic({ apiKey, baseURL: baseUrl });
     try {
       // Streamed rather than a plain .parse() call - a full-document batch
       // can need well beyond the ~16K non-streaming ceiling, and large
       // max_tokens requires streaming to avoid an HTTP timeout.
       const stream = client.messages.stream({
-        model: 'claude-opus-5',
+        model,
         max_tokens: 64000,
         output_config: { effort: 'medium', format: zodOutputFormat(BatchFixResultSchema) },
         system: FIX_ACTUAL_TEXT_BATCH_SYSTEM_PROMPT,
