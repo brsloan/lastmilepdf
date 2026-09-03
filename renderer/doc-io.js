@@ -197,8 +197,8 @@ export async function performSaveAs() {
 // rather than a per-edit debounce: performSave() re-serializes the whole PDF
 // through the Python worker (see save_document() in tag_worker.py), which
 // isn't cheap enough to run on every keystroke, and the atomic write plus
-// .bak backup it does (see the same function) bounds how much a periodic
-// save can lose to at most one interval's worth of edits.
+// temp-folder backup it does (see the same function) bounds how much a
+// periodic save can lose to at most one interval's worth of edits.
 const AUTOSAVE_INTERVAL_MS = 2 * 60 * 1000;
 
 // File > Settings > Preferences > Auto-Save. Runs unconditionally on a

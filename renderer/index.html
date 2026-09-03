@@ -477,6 +477,7 @@
       <section class="help-section">
         <h3>Saving &amp; undo</h3>
         <p>Ctrl/Cmd+Z undoes and Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redoes the last tag edit &mdash; this history is independent of any text field you might be typing in. Ctrl/Cmd+S saves; the first save (or Ctrl/Cmd+Shift+S, Save As) asks where to write the file, and later saves write straight back to that path.</p>
+        <p>Every save is atomic &mdash; the new file is fully written before it replaces the old one, so a crash or power loss mid-save can't corrupt your PDF. Before that replacement, the previous version is copied to a backup in your system's temp folder (not next to your PDF, so it won't clutter folders you send files from or out of), keyed to that file's path so each document's backup stays separate. Backups older than 7 days are cleaned up automatically.</p>
       </section>
     </div>
   </dialog>

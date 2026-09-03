@@ -72,6 +72,7 @@ Scope / known limitations (read this before extending):
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -79,6 +80,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 
 # main.js writes JSON to this process's stdin as UTF-8 (Node's default
@@ -3988,12 +3990,56 @@ def redo_edit(doc_id):
     }
 
 
+# Safety-net copies of the pre-save file (see save_document()) live here
+# rather than next to the user's PDFs - high-volume users who process many
+# files and ship them elsewhere don't want a stray backup file trailing
+# every document they touch. The OS does not clean this out on its own
+# (unlike e.g. Linux clearing /tmp on reboot, Windows never empties %TEMP%
+# by itself), so _prune_old_backups() below does that instead.
+BACKUP_RETENTION_DAYS = 7
+
+
+def _backup_dir():
+    d = os.path.join(tempfile.gettempdir(), "pdf-tag-editor-backups")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _backup_path_for(path):
+    # Keyed by a hash of the full path (not just the basename) so that e.g.
+    # two different "invoice.pdf" files open from different folders don't
+    # clobber each other's backup; the original basename is kept in the
+    # name too so the file is still recognizable if someone has to go
+    # digging through the backup folder after a crash.
+    digest = hashlib.sha256(os.path.abspath(path).encode("utf-8")).hexdigest()[:8]
+    return os.path.join(_backup_dir(), f"{os.path.basename(path)}.{digest}.bak")
+
+
+def _prune_old_backups():
+    """Best-effort sweep of the shared backup folder, run after each save.
+    Deliberately silent on any per-file error (e.g. another process holding
+    a handle, or the file having vanished already) - this is housekeeping,
+    not something a save should ever fail over."""
+    cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
+    try:
+        with os.scandir(_backup_dir()) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_file() and entry.stat().st_mtime < cutoff:
+                        os.remove(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def save_document(doc_id, path):
     """Writes `doc` to `path`, atomically and without ever destroying the
     last good copy: the new PDF is written to a temp file in the same
     directory first (so a crash or full disk mid-write leaves the existing
-    file untouched), an existing file at `path` is copied to `path.bak`
-    (overwriting any previous one) only once that write has fully
+    file untouched), an existing file at `path` is copied to a backup file
+    in the OS temp directory (see _backup_path_for(), overwriting any
+    previous backup for this same path) only once that write has fully
     succeeded, and the temp file then replaces `path` via os.replace, which
     is atomic on both POSIX and Windows."""
     doc = documents[doc_id]
@@ -4003,7 +4049,8 @@ def save_document(doc_id, path):
         with os.fdopen(fd, "wb") as f:
             doc["pdf"].save(f)
         if os.path.exists(path):
-            shutil.copy2(path, path + ".bak")
+            shutil.copy2(path, _backup_path_for(path))
+            _prune_old_backups()
         os.replace(tmp_path, path)
     except Exception:
         try:
