@@ -165,6 +165,22 @@ const api = {
   setRoleOrWrap: (docId, nodeIds, role) =>
     ipcRenderer.invoke('tags:set-role-or-wrap', { docId, nodeIds, role }),
   /**
+   * Appends a new, empty row to the end of the Table tag `tableId`.
+   * @param {string} docId
+   * @param {string} tableId
+   * @returns {Promise<import('./types/domain').InsertResult>}
+   */
+  addTableRow: (docId, tableId) =>
+    ipcRenderer.invoke('tags:add-table-row', { docId, tableId }),
+  /**
+   * Appends a new, empty column (one TD per existing row) to the Table tag `tableId`.
+   * @param {string} docId
+   * @param {string} tableId
+   * @returns {Promise<MutationResult>}
+   */
+  addTableColumn: (docId, tableId) =>
+    ipcRenderer.invoke('tags:add-table-column', { docId, tableId }),
+  /**
    * @param {string} docId
    * @param {string[]} nodeIds
    * @returns {Promise<MutationResult>}

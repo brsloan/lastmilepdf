@@ -245,6 +245,13 @@
       <h2>Table Editor</h2>
       <button type="button" id="btn-close-table-preview" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
+    <div class="table-editor-toolbar">
+      <p class="table-editor-hint table-editor-hint-persistent">Double-click a cell to edit its text. Select a row or column, then press Delete to remove it.</p>
+      <div class="table-editor-toolbar-buttons">
+        <button type="button" id="btn-table-editor-add-row" class="btn btn-ghost">+ Add Row</button>
+        <button type="button" id="btn-table-editor-add-column" class="btn btn-ghost">+ Add Column</button>
+      </div>
+    </div>
     <div id="table-preview-dialog-container" class="table-preview-dialog-body table-editor-body"></div>
     <form id="table-editor-fields" class="table-editor-fields">
       <p id="table-editor-hint" class="table-editor-hint">Select one or more cells in the table above to edit them.</p>

@@ -809,6 +809,14 @@ ipcMain.handle('tags:set-role-or-wrap', async (_event, { docId, nodeIds, role })
   return callWorker('set_role_or_wrap', { docId, nodeIds, role });
 });
 
+ipcMain.handle('tags:add-table-row', async (_event, { docId, tableId }) => {
+  return callWorker('add_table_row', { docId, tableId });
+});
+
+ipcMain.handle('tags:add-table-column', async (_event, { docId, tableId }) => {
+  return callWorker('add_table_column', { docId, tableId });
+});
+
 ipcMain.handle('tags:convert-to-paragraph', async (_event, { docId, nodeIds }) => {
   return callWorker('convert_to_paragraph', { docId, nodeIds });
 });

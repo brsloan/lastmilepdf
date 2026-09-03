@@ -63,6 +63,9 @@ export const state = {
   tableEditorSelectedIds: new Set(), // selected TH/TD cell ids within the Table Editor
   tableEditorAnchorId: null,    // last explicitly clicked/arrow-selected cell, for shift-click range selection
   tableEditorGrid: null,        // { positions, colCount } from the most recent renderTableEditor() build
+  tableEditorSelectionKind: null, // 'row' | 'column' | 'cell' | null - what kind of unit the row/column arrows last selected, for the Delete key (see handleTableEditorDeleteKey())
+  tableEditorSelectedRowId: null, // TR node id, set only when tableEditorSelectionKind === 'row'
+  tableEditorSelectedColIndex: null, // logical column index, set only when tableEditorSelectionKind === 'column'
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
   filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running

@@ -11,6 +11,29 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { buildTableGrid, collectRowCells, collectTableRows, createTableCellElement } from './table-preview.js';
 
+// Guards every operation below that mutates the table through the worker
+// (committing a cell edit, Add Row/Column, Delete, Convert to TH/TD) against
+// running concurrently with another one. Without this, starting a second
+// one (e.g. double-clicking another cell) while the first is still awaiting
+// its IPC round-trip left both racing to rebuild
+// el.tablePreviewDialogContainer out from under each other - clearing it
+// mid-edit forces an implicit blur on whatever textarea was still open,
+// re-entrantly firing *that* cell's own commit while the first one's is
+// still in flight. See runTableEditorMutation() below.
+let tableEditorMutationInFlight = false;
+
+// Runs `fn` (an async mutation) unless one is already in flight, in which
+// case the new attempt is dropped - see tableEditorMutationInFlight above.
+async function runTableEditorMutation(fn) {
+  if (tableEditorMutationInFlight) return;
+  tableEditorMutationInFlight = true;
+  try {
+    await fn();
+  } finally {
+    tableEditorMutationInFlight = false;
+  }
+}
+
 export async function renderTableEditor(tableNode) {
   const token = ++state.tableEditorToken;
   el.tablePreviewDialogContainer.innerHTML = '';
@@ -84,7 +107,11 @@ export async function renderTableEditor(tableNode) {
 }
 
 // A column arrow's click target: every cell whose span covers that logical
-// column, however many TH/TD elements that actually is.
+// column, however many TH/TD elements that actually is. Recorded as a
+// *column* selection (state.tableEditorSelectionKind), distinct from a
+// cell-by-cell selection that just happens to cover the same cells, so the
+// Delete key (see deleteTableEditorSelection()) knows to delete a whole
+// column's cells rather than nothing.
 function selectTableEditorColumn(colIndex) {
   if (!state.tableEditorGrid) return;
   const ids = [];
@@ -93,13 +120,20 @@ function selectTableEditorColumn(colIndex) {
   }
   state.tableEditorSelectedIds = new Set(ids);
   state.tableEditorAnchorId = ids[ids.length - 1] || null;
+  state.tableEditorSelectionKind = 'column';
+  state.tableEditorSelectedRowId = null;
+  state.tableEditorSelectedColIndex = colIndex;
   refreshTableEditorSelectionUI();
 }
 
+// Same idea for a row arrow - see selectTableEditorColumn() above.
 function selectTableEditorRow(trNode) {
   const ids = collectRowCells(trNode).map((cell) => cell.id);
   state.tableEditorSelectedIds = new Set(ids);
   state.tableEditorAnchorId = ids[ids.length - 1] || null;
+  state.tableEditorSelectionKind = 'row';
+  state.tableEditorSelectedRowId = trNode.id;
+  state.tableEditorSelectedColIndex = null;
   refreshTableEditorSelectionUI();
 }
 
@@ -109,6 +143,13 @@ function selectTableEditorRow(trNode) {
 // grid position rather than document order, so it behaves the way dragging
 // a selection across a spreadsheet would.
 function handleTableEditorCellClick(e, cellId) {
+  // A direct cell click/ctrl-click/shift-click never counts as "a row" or
+  // "a column" for the Delete key, even if it happens to end up covering
+  // exactly one - only the row/column arrows (see selectTableEditorRow()/
+  // selectTableEditorColumn() above) set those.
+  state.tableEditorSelectionKind = 'cell';
+  state.tableEditorSelectedRowId = null;
+  state.tableEditorSelectedColIndex = null;
   if (e.ctrlKey || e.metaKey) {
     const next = new Set(state.tableEditorSelectedIds);
     if (next.has(cellId)) next.delete(cellId);
@@ -155,6 +196,10 @@ function handleTableEditorCellClick(e, cellId) {
 // of a cell that has never had its own Actual Text set.
 function startEditingTableEditorCell(cellId) {
   if (!state.nodesById.has(cellId)) return;
+  // Don't open a second cell for editing while another one's commit (or any
+  // other table-editor mutation) is still in flight - see
+  // tableEditorMutationInFlight above.
+  if (tableEditorMutationInFlight) return;
   const cellEl = /** @type {HTMLElement} */ (
     el.tablePreviewDialogContainer.querySelector(`[data-cell-id="${cellId}"]`)
   );
@@ -205,7 +250,7 @@ function startEditingTableEditorCell(cellId) {
 
   let settled = false;
 
-  const commit = async () => {
+  const commit = () => runTableEditorMutation(async () => {
     if (settled) return;
     settled = true;
     const newText = input.value.trim();
@@ -223,13 +268,13 @@ function startEditingTableEditorCell(cellId) {
       reportError('Could not update cell Actual Text', err);
       await refreshTableEditorAfterEdit();
     }
-  };
+  });
 
-  const cancel = async () => {
+  const cancel = () => runTableEditorMutation(async () => {
     if (settled) return;
     settled = true;
     await refreshTableEditorAfterEdit();
-  };
+  });
 
   input.addEventListener('blur', commit);
   input.addEventListener('keydown', (e) => {
@@ -287,29 +332,142 @@ function updateTableEditorFields() {
 // editor table from it, then re-syncs the main details panel too (a no-op
 // unless this same table - or one of its cells - happens to be the active
 // tree selection, e.g. its inline preview needs the same update).
+//
+// state.tableEditorTableId is a node id, and node ids are a fresh
+// depth-first counter reassigned on every tree rebuild (see the module
+// docstring in tag_worker.py) - normally stable across a table-editor
+// mutation (nothing here ever inserts/removes anything *before* the table
+// in document order), but Undo/Redo isn't scoped to this dialog: it's
+// wired to the Edit menu (see renderer.js), which an HTML <dialog>'s
+// modality does nothing to block, and can revert the tree to a shape where
+// this id now points at something else entirely - or nothing. Rendering
+// whatever that id happens to resolve to as if it were still the table
+// (previously: collectTableRows() on a non-Table node just silently found
+// no rows) is what produced the confusing "No rows found in this table" -
+// checking the role here catches that and closes the dialog instead of
+// showing a plausible-looking lie.
 export async function refreshTableEditorAfterEdit() {
   const tableEntry = state.tableEditorTableId ? state.nodesById.get(state.tableEditorTableId) : null;
-  if (tableEntry) await renderTableEditor(tableEntry.node);
+  if (state.tableEditorTableId && (!tableEntry || tableEntry.node.role !== 'Table')) {
+    setStatus('This table is no longer open - Undo/Redo may have changed it.');
+    el.tablePreviewDialog.close();
+  } else if (tableEntry) {
+    await renderTableEditor(tableEntry.node);
+  }
   refreshDetailsForSelection();
+}
+
+// Clears the Table Editor's selection state entirely - used after an add/
+// delete, since the ids it referred to (a deleted row/column's cells, or
+// just-shifted siblings) are no longer meaningful, and renderTableEditor()
+// would otherwise carry stale ids into the rebuilt grid's selection classes.
+function resetTableEditorSelection() {
+  state.tableEditorSelectedIds = new Set();
+  state.tableEditorAnchorId = null;
+  state.tableEditorSelectionKind = null;
+  state.tableEditorSelectedRowId = null;
+  state.tableEditorSelectedColIndex = null;
+}
+
+// Backs the Table Editor's "Add Row" button: appends a new TR (with one
+// empty TD per existing column) to the end of the table - see
+// add_table_row() in tag_worker.py for exactly how it picks the row count
+// and where the new row attaches.
+export async function addTableEditorRow() {
+  if (!state.tableEditorTableId) return;
+  await runTableEditorMutation(async () => {
+    try {
+      const result = await window.api.addTableRow(state.docId, state.tableEditorTableId);
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      resetTableEditorSelection();
+      await refreshTableEditorAfterEdit();
+      setStatus('Added row.');
+    } catch (err) {
+      reportError('Could not add row', err);
+    }
+  });
+}
+
+// Backs the Table Editor's "Add Column" button: appends one new empty TD to
+// every existing row - see add_table_column() in tag_worker.py.
+export async function addTableEditorColumn() {
+  if (!state.tableEditorTableId) return;
+  await runTableEditorMutation(async () => {
+    try {
+      const result = await window.api.addTableColumn(state.docId, state.tableEditorTableId);
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      resetTableEditorSelection();
+      await refreshTableEditorAfterEdit();
+      setStatus('Added column.');
+    } catch (err) {
+      reportError('Could not add column', err);
+    }
+  });
+}
+
+// Backs the Table Editor dialog's Delete key: removes the row or column the
+// row/column arrows last selected (state.tableEditorSelectionKind, set by
+// selectTableEditorRow()/selectTableEditorColumn() above - a plain cell
+// selection is deliberately not handled here, see handleTableEditorCellClick()).
+// A row is deleted as a single TR subtree (taking its cells with it,
+// exactly like deleting any other tag - see delete_nodes() in
+// tag_worker.py); a column has no tag of its own to delete, so it's each of
+// that column's cells, deleted together as one undo step.
+export async function deleteTableEditorSelection() {
+  if (state.tableEditorSelectionKind === 'row' && state.tableEditorSelectedRowId) {
+    const rowId = state.tableEditorSelectedRowId;
+    if (!state.nodesById.has(rowId)) return;
+    await runTableEditorMutation(async () => {
+      try {
+        const result = await window.api.deleteNodes(state.docId, [rowId]);
+        applyFreshTree(result.tree);
+        applyUndoState(result);
+        resetTableEditorSelection();
+        await refreshTableEditorAfterEdit();
+        setStatus('Deleted row.');
+      } catch (err) {
+        reportError('Could not delete row', err);
+      }
+    });
+  } else if (state.tableEditorSelectionKind === 'column' && state.tableEditorSelectedColIndex !== null) {
+    const ids = Array.from(state.tableEditorSelectedIds).filter((id) => state.nodesById.has(id));
+    if (ids.length === 0) return;
+    await runTableEditorMutation(async () => {
+      try {
+        const result = await window.api.deleteNodes(state.docId, ids);
+        applyFreshTree(result.tree);
+        applyUndoState(result);
+        resetTableEditorSelection();
+        await refreshTableEditorAfterEdit();
+        setStatus(`Deleted column (${ids.length} cell${ids.length === 1 ? '' : 's'}).`);
+      } catch (err) {
+        reportError('Could not delete column', err);
+      }
+    });
+  }
 }
 
 export async function convertTableEditorSelection(role) {
   const ids = Array.from(state.tableEditorSelectedIds).filter((id) => state.nodesById.has(id));
   if (ids.length === 0) return;
 
-  try {
-    const result = await window.api.setRoleOrWrap(state.docId, ids, role);
-    applyFreshTree(result.tree);
-    applyUndoState(result);
-    state.tableEditorSelectedIds = new Set(ids.filter((id) => state.nodesById.has(id)));
-    if (!state.tableEditorSelectedIds.has(state.tableEditorAnchorId)) {
-      state.tableEditorAnchorId = state.tableEditorSelectedIds.size > 0
-        ? Array.from(state.tableEditorSelectedIds).pop()
-        : null;
+  await runTableEditorMutation(async () => {
+    try {
+      const result = await window.api.setRoleOrWrap(state.docId, ids, role);
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      state.tableEditorSelectedIds = new Set(ids.filter((id) => state.nodesById.has(id)));
+      if (!state.tableEditorSelectedIds.has(state.tableEditorAnchorId)) {
+        state.tableEditorAnchorId = state.tableEditorSelectedIds.size > 0
+          ? Array.from(state.tableEditorSelectedIds).pop()
+          : null;
+      }
+      await refreshTableEditorAfterEdit();
+      setStatus(`Set ${ids.length} cell${ids.length === 1 ? '' : 's'} to ${role}.`);
+    } catch (err) {
+      reportError(`Could not convert to ${role}`, err);
     }
-    await refreshTableEditorAfterEdit();
-    setStatus(`Set ${ids.length} cell${ids.length === 1 ? '' : 's'} to ${role}.`);
-  } catch (err) {
-    reportError(`Could not convert to ${role}`, err);
-  }
+  });
 }

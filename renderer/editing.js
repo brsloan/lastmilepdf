@@ -9,7 +9,7 @@
 
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
-import { selectableRows } from './dom.js';
+import { el, selectableRows } from './dom.js';
 import { isListLabelLeaf } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
@@ -26,6 +26,15 @@ export async function performUndo() {
     state.docInfo = result.docInfo || { title: null, author: null };
     applyUndoState(result);
     closeDetails();
+    // Same reasoning as closeDetails() above, extended to the Table Editor:
+    // its dialog isn't scoped to this undo (the Edit menu reaches it
+    // regardless of what modal is open - see the accelerator note in
+    // main.js), and a node id it's holding onto has no reliable
+    // correspondence to "the same" element once the tree's been rebuilt
+    // from a different snapshot. Rather than let it keep showing whatever
+    // that id happens to resolve to now, close it - close() on an
+    // already-closed <dialog> is a no-op per spec.
+    el.tablePreviewDialog.close();
     setStatus('Undid last change.');
   } catch (err) {
     reportError('Could not undo', err);
@@ -42,6 +51,7 @@ export async function performRedo() {
     state.docInfo = result.docInfo || { title: null, author: null };
     applyUndoState(result);
     closeDetails();
+    el.tablePreviewDialog.close(); // see the comment in performUndo() above
     setStatus('Redid change.');
   } catch (err) {
     reportError('Could not redo', err);

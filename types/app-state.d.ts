@@ -157,6 +157,12 @@ export interface AppState {
   /** Last explicitly selected cell, for shift-click ranges. */
   tableEditorAnchorId: string | null;
   tableEditorGrid: TableGrid | null;
+  /** What the row/column arrows last selected, so Delete knows what to remove. */
+  tableEditorSelectionKind: 'row' | 'column' | 'cell' | null;
+  /** TR node id, set only when tableEditorSelectionKind === 'row'. */
+  tableEditorSelectedRowId: string | null;
+  /** Logical column index, set only when tableEditorSelectionKind === 'column'. */
+  tableEditorSelectedColIndex: number | null;
 
   // --- Walk mode --------------------------------------------------------
   walking: boolean;

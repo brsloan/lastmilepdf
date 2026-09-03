@@ -155,6 +155,39 @@ function countOrganizational(tree) {
   return allNodes(tree).filter((n) => isOrganizational(n.role)).length;
 }
 
+/**
+ * Mirrors renderer/table-preview.js's collectTableRows(): a Table node's TR
+ * descendants, recursing through THead/TBody/TFoot wrappers but stopping at
+ * a nested Table - needed because a fixture can have more than one Table, so
+ * a bare project-wide byRole(tree, 'TR') would also count another table's
+ * rows when a test means to scope an add/delete to one specific table.
+ */
+function collectTableRows(tableNode) {
+  const rows = [];
+  (function visit(node) {
+    for (const child of node.children || []) {
+      if (child.role === 'TR') rows.push(child);
+      else if (child.role === 'Table') continue;
+      else visit(child);
+    }
+  })(tableNode);
+  return rows;
+}
+
+/** Mirrors collectRowCells(): a TR's TH/TD descendants, recursing through
+ * wrapper roles, stopping at a nested TR or Table. */
+function collectRowCells(trNode) {
+  const cells = [];
+  (function visit(node) {
+    for (const child of node.children || []) {
+      if (child.role === 'TH' || child.role === 'TD') cells.push(child);
+      else if (child.role === 'TR' || child.role === 'Table') continue;
+      else visit(child);
+    }
+  })(trNode);
+  return cells;
+}
+
 /** Two adjacent same-role siblings, for the operations that need a run. */
 function adjacentSiblings(tree, role) {
   let pair = null;
@@ -516,6 +549,94 @@ async function listAndTableTests(fixture) {
       for (const [role, expected] of Object.entries(counts)) {
         assertEqual(byRole(reopened.tree, role).length, expected, `${role} count changed on save`);
       }
+    });
+  }));
+
+  await test('adding a table row creates a TR with cells and survives save', () => withDoc(fixture, async (doc) => {
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const trBefore = byRole(doc.tree, 'TR').length;
+    const cellsBefore = byRole(doc.tree, 'TH').length + byRole(doc.tree, 'TD').length;
+    const tableRows = collectTableRows(table);
+    const lastRowBefore = tableRows[tableRows.length - 1];
+    const expectedNewCells = lastRowBefore ? collectRowCells(lastRowBefore).length : 1;
+
+    const result = await worker.call('add_table_row', { docId: doc.docId, tableId: table.id });
+    assert(result.newNodeId, 'no newNodeId returned');
+    const newRow = findById(result.tree, result.newNodeId);
+    assert(newRow, 'new row id is not in the rebuilt tree');
+    assertEqual(newRow.role, 'TR', 'new node is not a TR');
+    assertEqual(byRole(result.tree, 'TR').length, trBefore + 1, 'TR count did not increase by one');
+    const cellsAfter = byRole(result.tree, 'TH').length + byRole(result.tree, 'TD').length;
+    assertEqual(cellsAfter, cellsBefore + expectedNewCells, 'new row did not add the expected number of cells');
+
+    await saveAndReopen(doc.docId, 'add-row', (reopened) => {
+      assertEqual(byRole(reopened.tree, 'TR').length, trBefore + 1, 'new TR did not survive the save');
+    });
+  }));
+
+  await test('adding a table column adds one cell per row and survives save', () => withDoc(fixture, async (doc) => {
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const rows = collectTableRows(table);
+    if (rows.length === 0) skip('Table in this fixture has no rows');
+    const cellsBefore = byRole(doc.tree, 'TH').length + byRole(doc.tree, 'TD').length;
+    const trBefore = byRole(doc.tree, 'TR').length;
+
+    const result = await worker.call('add_table_column', { docId: doc.docId, tableId: table.id });
+    const cellsAfter = byRole(result.tree, 'TH').length + byRole(result.tree, 'TD').length;
+    assertEqual(cellsAfter, cellsBefore + rows.length, 'did not add exactly one new cell per row of this table');
+    assertEqual(byRole(result.tree, 'TR').length, trBefore, 'row count changed when only adding a column');
+
+    await saveAndReopen(doc.docId, 'add-column', (reopened) => {
+      const reopenedCells = byRole(reopened.tree, 'TH').length + byRole(reopened.tree, 'TD').length;
+      assertEqual(reopenedCells, cellsBefore + rows.length, 'the new column did not survive the save');
+    });
+  }));
+
+  await test('deleting a table row removes the row and its cells', () => withDoc(fixture, async (doc) => {
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const rows = collectTableRows(table);
+    if (rows.length === 0) skip('Table in this fixture has no rows');
+    const row = rows[rows.length - 1];
+    const cellCount = collectRowCells(row).length;
+    const trBefore = byRole(doc.tree, 'TR').length;
+    const cellsBefore = byRole(doc.tree, 'TH').length + byRole(doc.tree, 'TD').length;
+
+    // Node ids are a fresh depth-first counter reassigned on every rebuild
+    // (see the module docstring in tag_worker.py), so a *surviving* node can
+    // easily inherit the same id string a deleted one used to hold -
+    // checking "is this exact id gone" after the rebuild would be testing
+    // the wrong thing. The structural counts below are what actually proves
+    // the row and its cells were removed.
+    const result = await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [row.id] });
+    assertEqual(byRole(result.tree, 'TR').length, trBefore - 1, 'TR count did not decrease by one');
+    const cellsAfter = byRole(result.tree, 'TH').length + byRole(result.tree, 'TD').length;
+    assertEqual(cellsAfter, cellsBefore - cellCount, 'deleted row\'s cells were not all removed');
+
+    await saveAndReopen(doc.docId, 'delete-row', (reopened) => {
+      assertEqual(byRole(reopened.tree, 'TR').length, trBefore - 1, 'row deletion did not survive the save');
+    });
+  }));
+
+  await test('deleting a table column removes only that column\'s cells', () => withDoc(fixture, async (doc) => {
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const rows = collectTableRows(table).filter((r) => collectRowCells(r).length > 0);
+    if (rows.length === 0) skip('no TR with cells in this Table');
+    const firstCellIds = rows.map((r) => collectRowCells(r)[0].id);
+    const trBefore = byRole(doc.tree, 'TR').length;
+    const cellsBefore = byRole(doc.tree, 'TH').length + byRole(doc.tree, 'TD').length;
+
+    const result = await worker.call('delete_nodes', { docId: doc.docId, nodeIds: firstCellIds });
+    assertEqual(byRole(result.tree, 'TR').length, trBefore, 'row count changed when only deleting a column');
+    const cellsAfter = byRole(result.tree, 'TH').length + byRole(result.tree, 'TD').length;
+    assertEqual(cellsAfter, cellsBefore - firstCellIds.length, 'deleted column cells were not all removed');
+
+    await saveAndReopen(doc.docId, 'delete-column', (reopened) => {
+      const reopenedCells = byRole(reopened.tree, 'TH').length + byRole(reopened.tree, 'TD').length;
+      assertEqual(reopenedCells, cellsBefore - firstCellIds.length, 'column deletion did not survive the save');
     });
   }));
 }

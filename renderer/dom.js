@@ -83,6 +83,8 @@ export const el = {
   tablePreviewDialog: asDialog('table-preview-dialog'),
   tablePreviewDialogContainer: asElement('table-preview-dialog-container'),
   btnCloseTablePreview: asButton('btn-close-table-preview'),
+  btnTableEditorAddRow: asButton('btn-table-editor-add-row'),
+  btnTableEditorAddColumn: asButton('btn-table-editor-add-column'),
   tableEditorForm: asForm('table-editor-fields'),
   tableEditorHint: asElement('table-editor-hint'),
   tableEditorFieldRow: asElement('table-editor-field-row'),

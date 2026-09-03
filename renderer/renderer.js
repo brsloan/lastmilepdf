@@ -11,7 +11,7 @@ import { findFullPageImageLeafIds, getPageTextContent, hasDirectContentLeaf, pul
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
-import { convertTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
+import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
 import { isDescendant, walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { renderVerifyResults } from './verify.js';
@@ -409,6 +409,40 @@ el.btnTableEditorToTh.addEventListener('click', () => convertTableEditorSelectio
 
 el.btnTableEditorToTd.addEventListener('click', () => convertTableEditorSelection('TD'));
 
+el.btnTableEditorAddRow.addEventListener('click', () => addTableEditorRow());
+
+el.btnTableEditorAddColumn.addEventListener('click', () => addTableEditorColumn());
+
+// The Table Editor is a modal dialog, but none of the app's *keyboard*
+// shortcuts know that - they all live on window/document (role shortcuts,
+// arrow-key tree nav, Ctrl+Z/Y, Ctrl+P, Delete...) and only check whether
+// document.activeElement is an INPUT/TEXTAREA/SELECT before acting, not
+// whether a modal dialog is open over everything. Since this dialog's own
+// UI has plenty of keydown targets that AREN'T text fields - the row/column
+// arrows, the cells themselves between edits - any stray keystroke while
+// one of those (or nothing) has focus falls straight through to those
+// global handlers and acts on whatever's still selected in the tree behind
+// the modal, e.g. the very Table tag this dialog has open: a role-shortcut
+// letter ('t'/'d'/'h'/'p'/...) silently relabels it, an arrow key moves the
+// tree selection, Ctrl+Z undoes something unrelated - all invisibly, since
+// this dialog is on top. Stopping propagation here, unconditionally, for
+// every key (not just the Delete case below) is what actually isolates it.
+// Native behavior *inside* the dialog - typing in the inline cell editor or
+// the Scope/Span fields, Escape-to-close, Tab focus-trapping - is
+// unaffected: stopPropagation() only blocks the event from reaching
+// ancestors further out, never the target's own listeners or the browser's
+// own default handling. isDeleteShortcut() isn't defined yet at module-eval
+// time when this listener is registered, but it only needs to exist by the
+// time a keydown actually happens, so that's fine.
+el.tablePreviewDialog.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (!isDeleteShortcut(e)) return;
+  e.preventDefault();
+  deleteTableEditorSelection();
+});
+
 // --- content -> tag selection (reverse of the above) ---------------------
 //
 // Clicking the PDF preview hit-tests the current page's text items against
@@ -785,6 +819,9 @@ el.btnExpandTablePreview.addEventListener('click', () => {
   state.tableEditorTableId = nodeId;
   state.tableEditorSelectedIds = new Set();
   state.tableEditorAnchorId = null;
+  state.tableEditorSelectionKind = null;
+  state.tableEditorSelectedRowId = null;
+  state.tableEditorSelectedColIndex = null;
   renderTableEditor(entry.node);
   el.tablePreviewDialog.showModal();
 });
@@ -804,6 +841,9 @@ el.tablePreviewDialog.addEventListener('close', () => {
   state.tableEditorSelectedIds = new Set();
   state.tableEditorAnchorId = null;
   state.tableEditorGrid = null;
+  state.tableEditorSelectionKind = null;
+  state.tableEditorSelectedRowId = null;
+  state.tableEditorSelectedColIndex = null;
 });
 
 window.api.onMenuShortcuts(() => el.shortcutsDialog.showModal());

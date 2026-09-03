@@ -518,6 +518,107 @@ def set_role_or_wrap(doc_id, node_ids, role):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+def add_table_row(doc_id, table_id):
+    """Appends a new, empty row to the end of the Table tag `table_id`: a
+    fresh TR struct element, inserted as the last kid of whatever element
+    already holds the table's current last row (the table itself, or a
+    THead/TBody/TFoot wrapper it's nested in - see _collect_rows(), which
+    already flattens through those the same way), containing one empty TD
+    per column the table currently has (taken from that same last row's own
+    cell count via _collect_cells() - not a colSpan-aware grid position, so
+    a table already using colSpan/rowSpan may need manual cleanup after).
+    A table with no rows yet gets a single-cell-wide row appended directly
+    under the Table tag itself. Backs the Table Editor's "Add Row" button.
+    Like every other freshly created tag in this file, the new cells start
+    empty and are filled in afterward - here, through the Table Editor's own
+    double-click-to-edit cells."""
+    doc = documents[doc_id]
+    if table_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {table_id}")
+    table_obj = doc["elements"][table_id]
+    if _role_of(table_obj) != "Table":
+        raise ValueError("Not a Table tag")
+
+    rows = _collect_rows(table_obj)
+    if rows:
+        last_row = rows[-1]
+        last_row_id = _node_id_for_object(doc, last_row)
+        parent_obj = doc["elements"][doc["parent_map"][last_row_id]]
+        index = _kid_index(parent_obj, last_row) + 1
+        cell_count = len(_collect_cells(last_row))
+        page_index = doc["node_pages"].get(last_row_id)
+    else:
+        parent_obj = table_obj
+        index = len(_iter_kids(table_obj))
+        cell_count = 1
+        page_index = doc["node_pages"].get(table_id)
+
+    pdf = doc["pdf"]
+    new_row = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/TR"),
+        "/P": parent_obj,
+    }))
+    if page_index is not None:
+        new_row["/Pg"] = pdf.pages[page_index].obj
+
+    new_cells = []
+    for _ in range(cell_count):
+        cell = pdf.make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/S": pikepdf.Name("/TD"),
+            "/P": new_row,
+        }))
+        if page_index is not None:
+            cell["/Pg"] = pdf.pages[page_index].obj
+        new_cells.append(cell)
+    if new_cells:
+        new_row["/K"] = new_cells[0] if len(new_cells) == 1 else pikepdf.Array(new_cells)
+
+    _push_undo_snapshot(doc)
+    _insert_kid(parent_obj, new_row, index)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_node_id = _node_id_for_object(doc, new_row)
+    return {"tree": tree, "newNodeId": new_node_id, **_undo_state(doc)}
+
+
+def add_table_column(doc_id, table_id):
+    """Appends a new, empty column to the Table tag `table_id`: one new,
+    empty TD appended as the last kid of every existing row (see
+    _collect_rows()). Not colSpan-aware grid placement - just a trailing
+    append per row - which lands as the rightmost column for the common case
+    of a table with no colSpan/rowSpan cells; a table already using those
+    may need manual cleanup after. Backs the Table Editor's "Add Column"
+    button; one undo step covers every row's new cell."""
+    doc = documents[doc_id]
+    if table_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {table_id}")
+    table_obj = doc["elements"][table_id]
+    if _role_of(table_obj) != "Table":
+        raise ValueError("Not a Table tag")
+
+    rows = _collect_rows(table_obj)
+    if not rows:
+        raise ValueError("This table has no rows to add a column to")
+
+    pdf = doc["pdf"]
+    _push_undo_snapshot(doc)
+    for row_obj in rows:
+        row_id = _node_id_for_object(doc, row_obj)
+        page_index = doc["node_pages"].get(row_id) if row_id is not None else None
+        cell = pdf.make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/S": pikepdf.Name("/TD"),
+            "/P": row_obj,
+        }))
+        if page_index is not None:
+            cell["/Pg"] = pdf.pages[page_index].obj
+        _insert_kid(row_obj, cell, len(_iter_kids(row_obj)))
+
+    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+
+
 # Roles the 'P' shortcut's flatten dissolves rather than preserves, when
 # encountered anywhere in a List/Span/Div's subtree - see _paragraphize().
 _TRANSPARENT_ROLES = ("L", "Span", "Div", "LI", "Lbl", "LBody")
@@ -3742,6 +3843,10 @@ def main():
                 result = insert_paragraph_after(request["docId"], request.get("nodeId"))
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
+            elif cmd == "add_table_row":
+                result = add_table_row(request["docId"], request["tableId"])
+            elif cmd == "add_table_column":
+                result = add_table_column(request["docId"], request["tableId"])
             elif cmd == "convert_to_paragraph":
                 result = convert_to_paragraph(request["docId"], request["nodeIds"])
             elif cmd == "convert_to_figure":
