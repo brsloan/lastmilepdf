@@ -1173,6 +1173,13 @@ window.addEventListener('keydown', (e) => {
 // element's children simply aren't rendered (see renderTreeNode). Holding
 // Shift extends the selection instead of replacing it, growing/shrinking
 // from the fixed anchor exactly like shift+click (see extendSelectionTo).
+//
+// The Document root row isn't in selectableRows() (see the comment in
+// renderTreeNode() - it has no parent/siblings to drag/bulk-edit alongside),
+// so it's handled as a special case here: Down from root lands on the first
+// selectable row, and Up from that first row lands back on root. Root can't
+// be part of a Shift-extended range (extendSelectionTo() refuses it, same
+// as shift+click), so Shift+Up/Down simply doesn't step onto/off of it.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
   if (e.ctrlKey || e.metaKey) return; // Ctrl/Cmd+Up/Down reorders instead - see below
@@ -1182,8 +1189,22 @@ window.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
   const rows = selectableRows();
+
+  if (state.selectedNodeId === 'root') {
+    if (e.key !== 'ArrowDown' || e.shiftKey || rows.length === 0) return;
+    e.preventDefault();
+    selectNode(rows[0].dataset.nodeId);
+    return;
+  }
+
   const currentIndex = rows.findIndex((row) => row.dataset.nodeId === state.selectedNodeId);
   if (currentIndex === -1) return;
+
+  if (e.key === 'ArrowUp' && currentIndex === 0 && !e.shiftKey) {
+    e.preventDefault();
+    selectNode('root');
+    return;
+  }
 
   const nextIndex = e.key === 'ArrowUp' ? currentIndex - 1 : currentIndex + 1;
   if (nextIndex < 0 || nextIndex >= rows.length) return;
