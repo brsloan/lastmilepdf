@@ -9,6 +9,18 @@
         "start"
       ],
       "port": 3000
+    },
+    {
+      "name": "marketing-site",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8089",
+        "--directory",
+        "docs"
+      ],
+      "port": 8089
     }
   ]
 }
