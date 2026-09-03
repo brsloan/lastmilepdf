@@ -21,6 +21,7 @@ renderer/ (Chromium, no Node access)
   doc-io.js       - open / save / close
   bookmarks.js verify.js table-preview.js table-editor.js
   actual-text.js find-replace.js walk.js figure-draw.js ai-batch.js
+  actions.js scripts.js
                   - one feature each; see "Renderer module layout" below
 
 preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,updateNodes,
@@ -100,7 +101,7 @@ Modules are layered, and the layering is what keeps the graph from tangling:
 | --- | --- | --- |
 | Leaves | `state`, `dom`, `util`, `pdfjs` | nothing |
 | Low-level | `shell`, `tree-index`, `page-content` | leaves |
-| Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `ai-batch` | the above |
+| Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `ai-batch`, `actions`, `scripts` | the above |
 | Entry | `renderer.js` | everything |
 
 Two things are worth knowing before moving code between them:
@@ -114,6 +115,11 @@ Two things are worth knowing before moving code between them:
   crossing it is a hoisted `function` declaration. The reasoning is written
   out at the top of `renderer/tree-view.js`, and `npm run typecheck` reports
   any *other* cycle that appears.
+- **`actions.js` holds the one copy of each action a script can run**
+  (Smartifact, Scope Tables, Flatten All, Find/Replace, Fix All Actual Text
+  (AI)). Both the matching toolbar button and `scripts.js`'s Tools >
+  Scripts… runner call the same function, so a step behaves identically
+  whether it's clicked directly or run as part of a saved script.
 
 ## Type checking
 

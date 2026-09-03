@@ -429,6 +429,7 @@
       <section class="help-section">
         <h3>Toolbar tools</h3>
         <dl class="help-list">
+          <div class="help-item"><dt>Run Script</dt><dd>Runs whatever script is currently assigned via Tools &gt; Scripts&hellip;, in order, top to bottom. See "Scripts" below.</dd></div>
           <div class="help-item"><dt>Flatten</dt><dd>Recursively removes organizational tags &mdash; Div, Sect, Part, Span, and any custom tag type with "Span" in its name &mdash; found within each selected tag (or the whole document if nothing is selected), keeping all their contents in place. Useful for flattening structure that's more nested than it needs to be.</dd></div>
           <div class="help-item"><dt>Scope Tables</dt><dd>Looks at each table's header shape and sets Row/Column/Both scope on its TH cells automatically.</dd></div>
           <div class="help-item"><dt>Smartifact</dt><dd>Finds image leaves that are the same size as their page &mdash; typically full-page scan backgrounds &mdash; and marks them as artifacts (decorative, skipped by screen readers).</dd></div>
@@ -437,6 +438,11 @@
           <div class="help-item"><dt>Walk</dt><dd>Steps through the tag tree automatically, one tag at a time, so you can read along with the preview. While walking, <kbd>+</kbd>/<kbd>-</kbd> adjust the speed (remembered for next time) and any other key stops it.</dd></div>
           <div class="help-item"><dt>Verify</dt><dd>Runs a set of common PDF accessibility checks (tagging, title, language, headings, lists, tables, alternate text, bookmarks) and opens the results in their own window. Click a listed issue to jump straight to the offending tag.</dd></div>
         </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Scripts</h3>
+        <p>Tools &gt; Scripts&hellip; opens a builder for chaining Smartifact, Scope Tables, Flatten All, Find/Replace, and Fix All Actual Text (AI) into a named, ordered sequence. Add actions from the palette on the left, and reorder them with the &uarr;/&darr; buttons on each step &mdash; a script can include several Find/Replace steps, each configured with its own pair of tag types. Save the script under a name (the Script dropdown switches between saved scripts, and New starts a fresh one), and check "Assign to Run Script button" to make it the one the toolbar's <strong>Run Script</strong> button runs; the assignment is remembered between sessions. Running a script executes its steps in order, reporting progress in the status bar, and stops if a step fails &mdash; for example, a Fix All Actual Text (AI) step with no AI provider configured (see File &gt; Settings &gt; API Key&hellip;).</p>
       </section>
 
       <section class="help-section">
