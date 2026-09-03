@@ -2,7 +2,7 @@ import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, run
 import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
-import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel } from './details.js';
+import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
 import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels } from './editing.js';
@@ -194,6 +194,11 @@ el.fieldActualText.addEventListener('input', () => {
   }
 });
 
+// Typing into (or emptying) the field flips it between showing a real value
+// and only previewing the tag's content through the placeholder - see
+// updateActualTextLabel() in details.js.
+el.fieldActualText.addEventListener('input', updateActualTextLabel);
+
 // Discards this tag's AI fix (or, in Show AT Changes mode, its flagged
 // difference) by re-pulling its content leaf's raw text (same source "Pull
 // Content" uses) and saving that in place of it - no "original" value is
@@ -210,6 +215,7 @@ el.btnRevertAiFix.addEventListener('click', async () => {
     const original = (await pullContentText(nodeId)) || '';
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = original;
+    updateActualTextLabel();
     state.aiProposals.delete(nodeId);
     state.atChangeFlags.delete(nodeId);
     await applyDetailsChange(); // persists via the normal update path, which also re-renders the tree/field
@@ -576,6 +582,7 @@ el.btnPullContent.addEventListener('click', async () => {
     const text = await pullContentText(nodeId);
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = text;
+    updateActualTextLabel();
     setStatus(text ? 'Pulled content text into Actual Text.' : 'No content text found in this tag.');
   } catch (err) {
     reportError('Could not pull content text', err);
@@ -601,6 +608,7 @@ el.btnFixActualText.addEventListener('click', async () => {
     const fixed = await window.api.fixActualText(text);
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = fixed;
+    updateActualTextLabel();
     // Commit explicitly rather than relying on the form's native 'change'
     // event (el.detailsForm's 'change' listener, see applyDetailsChange()
     // below) - that only fires on blur if the textarea was focused when its
@@ -673,6 +681,7 @@ el.fieldActualText.addEventListener('focus', async () => {
     if (el.fieldActualText.value || el.fieldNodeId.value !== nodeId) return;
     if (text) {
       el.fieldActualText.value = text;
+      updateActualTextLabel();
       setStatus('Pulled content text into Actual Text.');
     }
   } catch (err) {

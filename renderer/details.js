@@ -23,6 +23,25 @@ import { clearHighlight, highlightNodeOnPage } from './viewer.js';
 // (see updateActualTextPlaceholder()).
 const DEFAULT_ACTUAL_TEXT_PLACEHOLDER = el.fieldActualText.placeholder;
 
+// The Actual Text field's label as authored in index.html, and the suffixed
+// form used while the field is only *previewing* content - see
+// updateActualTextLabel().
+const ACTUAL_TEXT_LABEL = el.fieldActualTextLabel.textContent;
+const ACTUAL_TEXT_PREVIEW_LABEL = `${ACTUAL_TEXT_LABEL} (preview)`;
+
+// Says so in the label when what's in the Actual Text field is the tag's own
+// content showing through as a placeholder (see
+// updateActualTextPlaceholder()) rather than Actual Text the tag actually
+// carries - otherwise the greyed-out text reads as a value that's already
+// saved. Proofread Mode is excluded because there the pull is put in as the
+// field's real value, so there's no placeholder-only state to label.
+export function updateActualTextLabel() {
+  const previewing = !state.proofreadMode
+    && !el.fieldActualText.value
+    && el.fieldActualText.placeholder !== DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+  el.fieldActualTextLabel.textContent = previewing ? ACTUAL_TEXT_PREVIEW_LABEL : ACTUAL_TEXT_LABEL;
+}
+
 export function setActivePanel(panel) {
   state.activePanel = panel;
   el.tabProperties.classList.toggle('active', panel === 'properties');
@@ -86,6 +105,7 @@ export function refreshDetailsForSelection() {
     el.detailsForm.hidden = true;
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+    updateActualTextLabel();
     updateActualTextReviewUI(null);
     refreshSplitContentPanel(nodeId);
     scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
@@ -116,6 +136,9 @@ export function refreshDetailsForSelection() {
   } else {
     updateActualTextPlaceholder(node, nodeId);
   }
+  // The pull above is async and updates the label again once it lands; this
+  // covers the multi-select case and the gap before it resolves.
+  updateActualTextLabel();
   // No meaningful single tag to show a proposal for during a multi-select.
   updateActualTextReviewUI(multi ? null : nodeId);
 
@@ -206,6 +229,7 @@ function showRootDetails(nodeId) {
 
   state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
   el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+  updateActualTextLabel();
   updateActualTextReviewUI(null);
 
   el.fieldRoleWrap.hidden = true;
@@ -246,6 +270,7 @@ export function closeDetails() {
   el.detailsForm.reset();
   state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
   el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+  updateActualTextLabel();
   updateActualTextReviewUI(null);
   el.fieldAlt.disabled = false;
   el.fieldActualText.disabled = false;
@@ -277,6 +302,7 @@ async function updateActualTextPlaceholder(node, nodeId) {
   if (!hasDirectContentLeaf(node)) {
     state.actualTextPlaceholderToken += 1; // invalidate any pull still in flight
     el.fieldActualText.placeholder = DEFAULT_ACTUAL_TEXT_PLACEHOLDER;
+    updateActualTextLabel();
     return;
   }
   const token = ++state.actualTextPlaceholderToken;
@@ -300,6 +326,7 @@ async function updateActualTextPlaceholder(node, nodeId) {
     el.fieldActualText.value = text;
     state.pendingPulledActualTextNodeId = nodeId;
   }
+  updateActualTextLabel();
 }
 
 // Auto-applies as the user types, not just when a text/textarea field is

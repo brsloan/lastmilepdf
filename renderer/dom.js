@@ -72,6 +72,7 @@ export const el = {
   fieldAlt: asTextarea('field-alt'),
   fieldAltWrap: asElement('field-alt-wrap'),
   fieldActualText: asTextarea('field-actual-text'),
+  fieldActualTextLabel: asElement('field-actual-text-label'),
   fieldActualTextWrap: asElement('field-actual-text-wrap'),
   fieldDocInfoSection: asElement('field-docinfo-section'),
   fieldDocTitle: asInput('field-doc-title'),
