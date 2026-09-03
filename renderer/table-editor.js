@@ -60,6 +60,7 @@ export async function renderTableEditor(tableNode) {
       const cellEl = createTableCellElement(cell, text);
       cellEl.classList.add('editor-cell');
       cellEl.dataset.cellId = cell.id;
+      cellEl.dataset.previewText = text;
       if (state.tableEditorSelectedIds.has(cell.id)) cellEl.classList.add('cell-selected');
       if (cell.id === state.tableEditorAnchorId) cellEl.classList.add('cell-anchor');
       // Suppresses the native text-drag-selection a mousedown+drag across
@@ -68,6 +69,10 @@ export async function renderTableEditor(tableNode) {
       // handler below is to select cells, not their text.
       cellEl.addEventListener('mousedown', (e) => e.preventDefault());
       cellEl.addEventListener('click', (e) => handleTableEditorCellClick(e, cell.id));
+      cellEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        startEditingTableEditorCell(cell.id);
+      });
       trEl.appendChild(cellEl);
     }
     table.appendChild(trEl);
@@ -135,6 +140,107 @@ function handleTableEditorCellClick(e, cellId) {
     state.tableEditorAnchorId = cellId;
   }
   refreshTableEditorSelectionUI();
+}
+
+// Double-clicking a cell lets you edit that cell tag's own Actual Text in
+// place, without opening the main Details panel (whose selection is
+// separate from the table editor's - see state.tableEditorSelectedIds vs
+// state.selectedNodeIds). Mirrors startRenamingBookmark()'s inline-input
+// pattern in bookmarks.js. The input starts pre-filled with whatever text
+// the cell is currently showing (cellEl.dataset.previewText, stashed by
+// renderTableEditor() from the same pullCellText() call that produced it) -
+// that's the cell's own Actual Text when it already has one, or the
+// composited pulled content when it doesn't - rather than the raw
+// node.actualText, which would start the input blank for the common case
+// of a cell that has never had its own Actual Text set.
+function startEditingTableEditorCell(cellId) {
+  if (!state.nodesById.has(cellId)) return;
+  const cellEl = /** @type {HTMLElement} */ (
+    el.tablePreviewDialogContainer.querySelector(`[data-cell-id="${cellId}"]`)
+  );
+  if (!cellEl || cellEl.querySelector('.editor-cell-input')) return;
+
+  // Capture the cell's current inner size (content + padding) before
+  // touching its content or padding below. Clearing the preview text (and,
+  // if this happens to be the row's tallest or the column's widest cell,
+  // leaving the row/column's size driven only by its *other* cells) would
+  // otherwise shrink or grow the whole row/column - a table's auto column
+  // widths are recomputed from live cell content same as row heights are -
+  // the instant editing starts, then snap back on commit/cancel.
+  // Re-imposing these same amounts, now entirely as `height`/`width` since
+  // padding drops to 0 below, keeps entering edit mode from reflowing the
+  // table at all.
+  const originalHeight = cellEl.clientHeight;
+  const originalWidth = cellEl.clientWidth;
+
+  const previewText = cellEl.dataset.previewText || '';
+  const input = document.createElement('textarea');
+  input.className = 'editor-cell-input';
+  input.value = previewText;
+  input.rows = 1;
+  cellEl.textContent = '';
+  cellEl.classList.add('cell-editing');
+  cellEl.style.height = `${originalHeight}px`;
+  cellEl.style.width = `${originalWidth}px`;
+  cellEl.appendChild(input);
+  // A CSS height:100% wouldn't fill this - a table cell's height is auto
+  // (driven by its row's content), and Chromium doesn't resolve a
+  // percentage height against an auto-height ancestor even for a table
+  // cell, so a taller row (from a longer sibling cell) would otherwise
+  // leave this textarea only as tall as its own single line. Measuring the
+  // now-laid-out cell (locked to its original height just above) and
+  // setting the height explicitly fills it exactly.
+  input.style.height = `${cellEl.clientHeight}px`;
+  input.focus();
+  input.select();
+
+  // Keeps clicks/drags inside the input from reaching the cell's own
+  // mousedown (preventDefault, to suppress drag-select) and click (cell
+  // selection) listeners above - both would otherwise fire on every
+  // interaction with the input itself, including the mousedown that's
+  // supposed to just place the cursor.
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('dblclick', (e) => e.stopPropagation());
+
+  let settled = false;
+
+  const commit = async () => {
+    if (settled) return;
+    settled = true;
+    const newText = input.value.trim();
+    if (newText === previewText) {
+      await refreshTableEditorAfterEdit();
+      return;
+    }
+    try {
+      const result = await window.api.updateNode(state.docId, cellId, { actualText: newText });
+      applyFreshTree(result.tree);
+      applyUndoState(result);
+      await refreshTableEditorAfterEdit();
+      setStatus('Updated cell Actual Text.');
+    } catch (err) {
+      reportError('Could not update cell Actual Text', err);
+      await refreshTableEditorAfterEdit();
+    }
+  };
+
+  const cancel = async () => {
+    if (settled) return;
+    settled = true;
+    await refreshTableEditorAfterEdit();
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  });
 }
 
 // Restyles the already-built cells in place rather than a full rebuild -

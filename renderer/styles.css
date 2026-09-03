@@ -1216,6 +1216,26 @@ body.proofread-mode .tree-pane {
   outline-color: var(--accent-strong);
 }
 
+.editor-cell.cell-editing {
+  padding: 0;
+}
+
+.editor-cell-input {
+  display: block;
+  width: 100%;
+  min-width: 40px;
+  min-height: 26px;
+  box-sizing: border-box;
+  resize: none;
+  overflow: auto;
+  background: var(--panel-alt);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  padding: 5px 7px;
+}
+
 .table-editor-fields {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
