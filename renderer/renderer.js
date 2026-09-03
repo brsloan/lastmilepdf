@@ -1321,6 +1321,24 @@ window.addEventListener('keydown', (e) => {
   renderTree();
 });
 
+// Ctrl/Cmd+Right expands every tag in the tree - the mirror of Ctrl/Cmd+Left
+// above.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowRight') return;
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (!state.tree) return;
+
+  e.preventDefault();
+  walkTree(state.tree, (node) => {
+    if (node.type !== 'element') return;
+    state.collapseOverrides.set(node.id, false);
+  });
+  renderTree();
+});
+
 // Delete (or the extra key set in File > Settings > Preferences, see
 // isDeleteShortcut() above) removes the current selection from the struct
 // tree. A tag (element node) is deleted along with its whole subtree; a
