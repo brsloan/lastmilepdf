@@ -1,6 +1,6 @@
 {
   "name": "lastmilepdf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone Electron app for viewing and editing PDF accessibility (tag) structure trees.",
   "main": "main.js",
   "author": "Benjamin Sloan",
