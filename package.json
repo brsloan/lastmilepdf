@@ -83,7 +83,8 @@
       "perMachine": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
