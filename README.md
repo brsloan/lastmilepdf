@@ -389,6 +389,14 @@ PyInstaller) rather than spawning a system Python. Windows and Linux are
 both built and CI-tested (`.github/workflows/release.yml` builds both on
 every version tag); see "Platform support" below for macOS.
 
+Release notes come from the changelog rather than from the commit log: the
+release job runs `node scripts/changelog-section.js "$GITHUB_REF_NAME"` and
+uses that version's section of `CHANGELOG.md` as the GitHub Release body. A
+tag whose version has no matching, non-empty `## [x.y.z]` heading fails that
+step - so before tagging, move the entries out of `## [Unreleased]` into a
+heading for the new version, add its compare link at the foot of the file,
+and bump the version in `package.json`.
+
 **Windows:**
 
 ```
@@ -491,6 +499,12 @@ Things this scaffold deliberately does not solve yet:
   characters aren't one unbroken run - no single pair of cuts keeps those and
   only those.
 - **Single document at a time.** No tabs/multi-document support.
+
+## Changelog
+
+Notable changes for each release are in [CHANGELOG.md](CHANGELOG.md).
+Installers are on the [Releases
+page](https://github.com/brsloan/lastmilepdf/releases).
 
 ## Contributing
 

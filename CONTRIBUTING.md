@@ -39,6 +39,12 @@ Both should pass cleanly before you start, and again before you open a PR.
 - **For UI changes**, run the app (`npm start`) and exercise the feature
   by hand. There's no automated UI test suite (see the README's Tests
   section for why); the smoke tests only exercise the Python worker.
+- **Add a line to the changelog** if the change is one a user would
+  notice - a new feature, a behaviour change, a bug fix. Put it under
+  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), under Added,
+  Changed, Fixed or Removed, and write it for someone using the app
+  rather than someone reading the diff. Internal refactors, test
+  changes and doc tweaks don't need one.
 
 ## Code style
 
