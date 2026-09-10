@@ -1127,6 +1127,10 @@ ipcMain.handle('tags:flatten-tags', async (_event, { docId, nodeIds }) => {
   return callWorker('flatten_tags', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:wrap-leaves', async (_event, { docId, nodeIds, role }) => {
+  return callWorker('wrap_leaves', { docId, nodeIds, role });
+});
+
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
   return callWorker('scope_tables', { docId });
 });

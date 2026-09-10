@@ -179,14 +179,16 @@ body.busy * {
   border-color: var(--accent-strong);
 }
 
-.btn-figure-draw-active {
+.btn-figure-draw-active,
+.btn-rect-select-active {
   background: var(--accent);
   border-color: var(--accent);
   color: #10201c;
   font-weight: 600;
 }
 
-.btn-figure-draw-active:hover:not(:disabled) {
+.btn-figure-draw-active:hover:not(:disabled),
+.btn-rect-select-active:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
 }
@@ -358,7 +360,8 @@ body.proofread-mode .tree-pane {
   cursor: pointer;
 }
 
-#pdf-canvas.figure-draw-mode {
+#pdf-canvas.figure-draw-mode,
+#pdf-canvas.rect-select-mode {
   cursor: crosshair;
 }
 
@@ -448,6 +451,28 @@ body.proofread-mode .tree-pane {
   background: color-mix(in srgb, #ffb020 22%, transparent);
   border: 1.5px dashed #ffb020;
   border-radius: 2px;
+}
+
+/* Select Content (rect-select.js): one outline per text run the dragged
+   rectangle picks up. Solid means the run sits entirely inside the
+   rectangle and is taken as-is. */
+.select-box {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border: 1px solid var(--accent-strong);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* Dashed means the leaf could not be split at the rectangle's edge, so it
+   comes along whole - and this outline extends past the rectangle to show
+   exactly how much extra content that is. Deliberately loud (the same
+   warning amber the app uses elsewhere): retagging content the user never
+   dragged over is the one way this tool can quietly damage a document's
+   reading order. */
+.select-overhang {
+  background: color-mix(in srgb, var(--warn-text) 20%, transparent);
+  border: 1.5px dashed var(--warn-text);
 }
 
 /* --- tag tree --- */

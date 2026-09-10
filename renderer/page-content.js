@@ -9,6 +9,55 @@ import { pdfjsLib } from './pdfjs.js';
 import { PAGE_SCALE, state } from './state.js';
 import { extractMcidFromItemId } from './util.js';
 
+// Fraction of item.height treated as rising above the text baseline, the
+// rest as descent below it. pdf.js's own text-layer builder leans on a
+// similar per-font ascent ratio (it has real font-metric tables for it);
+// this fixed ratio is an approximation, but is close enough for a highlight
+// box and avoids depending on pdf.js's private font-metrics internals.
+const TEXT_ASCENT_RATIO = 0.75;
+
+// item.transform places a text run's local origin (its baseline) in PDF
+// page space and gives its local x/y axis directions - but item.width/
+// item.height are already absolute page-space lengths along those axes,
+// not unit-square coordinates. Re-running them through the full transform
+// (which still has font size baked into its a/d components) double-scales
+// them - that was inflating every box by roughly the font size and pushing
+// wide/large text off the page. Instead, build the run's quad directly in
+// page space using the transform's *unit* axis directions, split around
+// the baseline by TEXT_ASCENT_RATIO, then map that quad through the
+// viewport transform.
+//
+// Lives here rather than in viewer.js (which owns the highlight overlay and
+// was its original home) because rect-select.js needs the same per-item
+// geometry to decide what a dragged rectangle covers, and viewer.js already
+// imports from this module - putting it the other way round would be a
+// circular import.
+export function itemRectInViewport(item, viewport) {
+  const [a, b, c, d, e, f] = item.transform;
+  const xAxisLen = Math.hypot(a, b) || 1;
+  const yAxisLen = Math.hypot(c, d) || 1;
+  const ux = [a / xAxisLen, b / xAxisLen];
+  const uy = [c / yAxisLen, d / yAxisLen];
+  const ascent = item.height * TEXT_ASCENT_RATIO;
+  const descent = item.height - ascent;
+
+  const pageCorners = [
+    [e - uy[0] * descent, f - uy[1] * descent],
+    [e + ux[0] * item.width - uy[0] * descent, f + ux[1] * item.width - uy[1] * descent],
+    [e + uy[0] * ascent, f + uy[1] * ascent],
+    [e + ux[0] * item.width + uy[0] * ascent, f + ux[1] * item.width + uy[1] * ascent],
+  ];
+  const corners = pageCorners.map((p) => pdfjsLib.Util.applyTransform(p, viewport.transform));
+  const xs = corners.map((c2) => c2[0]);
+  const ys = corners.map((c2) => c2[1]);
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+  };
+}
+
 export function collectTargetMcids(nodeId) {
   const entry = state.nodesById.get(nodeId);
   if (!entry) return [];
@@ -109,6 +158,7 @@ export function clearPageCaches() {
   state.textContentCache.clear();
   state.mcidTextCache.clear();
   state.mcidGraphicsCache.clear();
+  state.leafRectsCache.clear();
 }
 
 export async function getPageTextContent(pageNumber) {
@@ -118,6 +168,50 @@ export async function getPageTextContent(pageNumber) {
     const textContent = await page.getTextContent({ includeMarkedContent: true });
     const viewport = page.getViewport({ scale: PAGE_SCALE });
     return { textContent, viewport };
+  });
+}
+
+// A page's mcid -> [rect, ...] lookup in viewport space: every text run and
+// every graphic each marked-content id paints, kept as separate rects rather
+// than unioned into one box.
+//
+// Separate rects matter here in a way they don't for the highlight overlay
+// (which unions them - see highlightNodeOnPage): a paragraph that wraps over
+// six lines has a union box spanning the full column, so a rectangle dragged
+// over one line would read as covering a sliver of it. Measuring coverage
+// per run instead keeps "how much of this leaf did I select?" honest for
+// multi-line content - see coverageOf() in rect-select.js.
+export async function getPageLeafRects(pageNumber) {
+  if (state.leafRectsCache.has(pageNumber)) return state.leafRectsCache.get(pageNumber);
+  return dedupePageBuild('leafRects', pageNumber, state.leafRectsCache, async () => {
+    const { textContent, viewport } = await getPageTextContent(pageNumber);
+    const map = new Map();
+    const mcidStack = [];
+    for (const item of textContent.items) {
+      if (item.str === undefined) {
+        if (item.type === 'beginMarkedContentProps' || item.type === 'beginMarkedContent') {
+          mcidStack.push(extractMcidFromItemId(item.id));
+        } else if (item.type === 'endMarkedContent') {
+          mcidStack.pop();
+        }
+        continue;
+      }
+      // Whitespace-only runs carry no ink to select, and their boxes are
+      // wide enough to skew a coverage figure noticeably.
+      if (!item.str || !item.str.trim()) continue;
+      const currentMcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
+      if (currentMcid === null) continue;
+      if (!map.has(currentMcid)) map.set(currentMcid, []);
+      map.get(currentMcid).push(itemRectInViewport(item, viewport));
+    }
+    // Figures and other drawn content have no text runs at all; their rects
+    // come from the operator-list pass instead.
+    const graphicRects = await getPageGraphicRects(pageNumber);
+    for (const [mcid, rects] of graphicRects) {
+      if (!map.has(mcid)) map.set(mcid, []);
+      map.get(mcid).push(...rects);
+    }
+    return map;
   });
 }
 

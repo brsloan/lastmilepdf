@@ -526,6 +526,177 @@ def set_role_or_wrap(doc_id, node_ids, role):
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
+def _prune_emptied(doc, candidate_ids, protected_ids):
+    """Unlinks every struct element in `candidate_ids` that a just-completed
+    move left with no /K at all, then repeats upward: removing an emptied
+    <P> can empty the <Div> that held it. Returns how many were removed.
+
+    Safe precisely because an empty element owns no marked content - so
+    unlinking one can't orphan an MCID, and none of delete_nodes()'s
+    _artifact_leaves() machinery applies here (that exists for removing tags
+    that still *own* content; this content moved rather than being deleted).
+
+    `protected_ids` never gets pruned however empty it looks - the caller
+    passes the /Document wrapper, since a document with no /Document element
+    is worse than one with an empty one. Mirrors what join_tags() already
+    does to its emptied source tags, so the editor has one convention for
+    this rather than two."""
+    removed = 0
+    pending = list(candidate_ids)
+    while pending:
+        node_id = pending.pop()
+        if node_id is None or node_id == "root" or node_id in protected_ids:
+            continue
+        if doc["node_kind"].get(node_id) != "element":
+            continue
+        obj = doc["elements"].get(node_id)
+        if obj is None or _iter_kids(obj):
+            continue
+        parent_id = doc["parent_map"].get(node_id)
+        parent_obj = doc["elements"].get(parent_id) if parent_id is not None else None
+        if parent_obj is None:
+            continue
+        _remove_kid(parent_obj, obj)
+        removed += 1
+        pending.append(parent_id)  # may itself be empty now
+    return removed
+
+
+def _highest_fully_selected_ancestor(doc, leaf_id, selected_ids, stop_ids):
+    """Walking up from `leaf_id`, the highest ancestor whose every content
+    leaf is in `selected_ids` - i.e. the largest existing tag the selection
+    completely consumes. `leaf_id` itself when no ancestor qualifies.
+
+    This is what decides where wrap_leaves() puts its new tag. Dragging a
+    rectangle over a whole paragraph should leave <H2> exactly where <P>
+    was, not <P><H2>...</H2></P> - which is what anchoring to the leaf's own
+    slot (the way _wrap_leaf does, correctly, for a single hand-picked leaf)
+    would produce here."""
+    best = leaf_id
+    walker = doc["parent_map"].get(leaf_id)
+    while walker is not None and walker not in stop_ids and walker != "root":
+        if doc["node_kind"].get(walker) != "element":
+            break
+        leaves = _collect_leaf_ids(doc, walker)
+        if not leaves or any(lid not in selected_ids for lid in leaves):
+            break
+        best = walker
+        walker = doc["parent_map"].get(walker)
+    return best
+
+
+def wrap_leaves(doc_id, node_ids, role):
+    """Groups the content leaves in `node_ids` - which, unlike
+    _group_into_container()'s input, may sit under several different parents
+    - into one new struct element with role `role`, and discards any source
+    tag the move leaves empty. Backs the page preview's rectangle-select
+    tagging (see rect-select.js).
+
+    Two shapes, because the common case deserves the better answer:
+      - The selection is exactly one element's entire leaf set: relabel that
+        element's /S in place, the same as set_role_or_wrap() does for an
+        element. Nothing moves, and the tag keeps its own /Alt, /Lang and
+        /ActualText - which a wrap-then-discard would throw away.
+      - Otherwise: build a new element, move every selected leaf into it in
+        document order, and slot it where the highest fully-consumed tag
+        used to sit (see _highest_fully_selected_ancestor).
+
+    Every leaf must be on one page. A rectangle is per-page by construction,
+    so this only ever fires on a malformed request - but a bare MCID leaf
+    inherits its page from its containing element (see the module
+    docstring), so grouping across pages would silently relabel which page
+    the content points at, exactly as reorder_many() refuses to."""
+    doc = documents[doc_id]
+    if not node_ids:
+        raise ValueError("No content selected")
+
+    for node_id in node_ids:
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) not in ("content-int", "content-dict"):
+            raise ValueError("Rectangle selection can only group content, not tags")
+
+    pages = {doc["node_pages"].get(nid) for nid in node_ids}
+    if len(pages) != 1:
+        raise ValueError("Can't group content from more than one page into a single tag")
+    page_index = next(iter(pages))
+
+    # Document order across arbitrary parents: parent_map is filled in
+    # _walk()'s own depth-first, left-to-right order, so filtering it
+    # preserves that order - the same property _group_into_container()
+    # relies on within a single parent.
+    selected = set(node_ids)
+    ordered_ids = [nid for nid in doc["parent_map"] if nid in selected]
+    if not ordered_ids:
+        raise ValueError("Could not locate the selected content in the tree")
+
+    _, document_parent_id = _document_insertion_parent(doc)
+    stop_ids = {document_parent_id, "root"}
+
+    # Relabel-in-place case: the whole of one tag, and nothing else.
+    parent_ids = {doc["parent_map"].get(nid) for nid in ordered_ids}
+    if len(parent_ids) == 1:
+        sole_parent_id = next(iter(parent_ids))
+        if (sole_parent_id is not None
+                and sole_parent_id not in stop_ids
+                and doc["node_kind"].get(sole_parent_id) == "element"
+                and _collect_leaf_ids(doc, sole_parent_id) == ordered_ids):
+            _push_undo_snapshot(doc)
+            doc["elements"][sole_parent_id]["/S"] = pikepdf.Name("/" + role)
+            tree = _rebuild_after_mutation(doc_id)
+            return {
+                "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
+                "relabelled": True, **_undo_state(doc),
+            }
+
+    # Where the new tag goes, decided against the tree as it stands now -
+    # before anything is unlinked and the positions move.
+    anchor_id = _highest_fully_selected_ancestor(doc, ordered_ids[0], selected, stop_ids)
+    anchor_parent_id = doc["parent_map"].get(anchor_id)
+    if anchor_parent_id is None:
+        raise ValueError("The selected content has no parent tag to group it within")
+    anchor_parent_obj = doc["elements"][anchor_parent_id]
+    insert_index = _kid_index(anchor_parent_obj, doc["elements"][anchor_id])
+    if insert_index == -1:
+        raise ValueError("Could not locate the selected content in its parent")
+
+    _push_undo_snapshot(doc)
+
+    new_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+        "/P": anchor_parent_obj,
+    }))
+    # Set /Pg explicitly for the same reason _wrap_leaf() does: the leaves
+    # inside may be bare MCIDs with no page of their own.
+    if page_index is not None:
+        new_elem["/Pg"] = doc["pdf"].pages[page_index].obj
+
+    source_parent_ids = []
+    moved = []
+    for node_id in ordered_ids:
+        leaf_obj = doc["elements"][node_id]
+        source_parent_id = doc["parent_map"].get(node_id)
+        source_parent_obj = doc["elements"].get(source_parent_id) if source_parent_id is not None else None
+        if source_parent_obj is not None:
+            _remove_kid(source_parent_obj, leaf_obj)
+            source_parent_ids.append(source_parent_id)
+        moved.append(leaf_obj)
+        if isinstance(leaf_obj, pikepdf.Dictionary):
+            leaf_obj["/P"] = new_elem
+    new_elem["/K"] = pikepdf.Array(moved)
+
+    _insert_kid(anchor_parent_obj, new_elem, insert_index)
+    removed_count = _prune_emptied(doc, source_parent_ids, stop_ids)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_node_id = _node_id_for_object(doc, new_elem)
+    return {
+        "tree": tree, "newNodeId": new_node_id, "removedTagCount": removed_count,
+        "relabelled": False, **_undo_state(doc),
+    }
+
+
 def add_table_row(doc_id, table_id):
     """Appends a new, empty row to the end of the Table tag `table_id`: a
     fresh TR struct element, inserted as the last kid of whatever element
@@ -4153,6 +4324,8 @@ def main():
                 result = insert_paragraph_after(request["docId"], request.get("nodeId"))
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
+            elif cmd == "wrap_leaves":
+                result = wrap_leaves(request["docId"], request["nodeIds"], request["role"])
             elif cmd == "add_table_row":
                 result = add_table_row(request["docId"], request["tableId"])
             elif cmd == "add_table_column":

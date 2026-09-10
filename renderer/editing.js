@@ -11,6 +11,7 @@ import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
 import { isListLabelLeaf } from './page-content.js';
+import { clearRectSelect } from './rect-select.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
@@ -287,6 +288,41 @@ export async function deleteSelection() {
 // tag_worker.py), which is what we want selected afterward anyway. Not used
 // for the 'I' shortcut - see convertSelectionToListItem(), which needs the
 // Lbl/LBody handling convert_to_list_item() backs it with instead.
+// Tags whatever the Select Content rectangle is currently holding (see
+// rect-select.js) as one new tag with `role`, via wrap_leaves().
+//
+// Unlike applyRoleShortcut() above, this never wraps each selected item
+// separately: the whole point of the gesture is that the rectangle's
+// contents become one tag, even when the leaves came from several different
+// paragraphs. The worker also discards any source tag the move leaves empty,
+// which is why the status line reports that count - a rectangle that happens
+// to consume an entire <Sect> removes it, and that shouldn't be silent.
+export async function tagRectSelection(role) {
+  const ids = state.rectSelectPending;
+  if (!ids || ids.length === 0) return;
+
+  try {
+    const result = await window.api.wrapLeaves(state.docId, ids, role);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    clearRectSelect();
+
+    if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
+    else closeDetails();
+
+    const count = ids.length;
+    const what = `${count} item${count === 1 ? '' : 's'}`;
+    const removed = result.removedTagCount > 0
+      ? ` ${result.removedTagCount} emptied tag${result.removedTagCount === 1 ? '' : 's'} discarded.`
+      : '';
+    setStatus(result.relabelled
+      ? `Retagged as ${role}.${removed}`
+      : `Tagged ${what} as ${role}.${removed}`);
+  } catch (err) {
+    reportError(`Could not tag the selection as ${role}`, err);
+  }
+}
+
 export async function applyRoleShortcut(role) {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;

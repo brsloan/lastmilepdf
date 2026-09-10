@@ -417,6 +417,117 @@ async function editTests(fixture) {
     assertEqual(countNodes(redone.tree), afterEdit, 'redo did not reapply the edit');
   }));
 
+  // wrap_leaves() - the page preview's Select Content rectangle. Three
+  // shapes, because which one fires decides whether the result is what the
+  // user drew: the whole of one tag (relabel in place, attributes kept), part
+  // of one tag (nest inside it, source survives), and leaves from two tags
+  // (new tag takes the consumed tag's slot, emptied sources discarded).
+  await test('tagging a whole tag\'s content relabels it in place', () => withDoc(fixture, async (doc) => {
+    const parent = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.children.length > 0
+      && n.children.every((k) => k.type === 'content'));
+    if (!parent) skip('no element with only content leaves in this fixture');
+
+    const leafIds = parent.children.map((k) => k.id);
+    const before = countNodes(doc.tree);
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'H2',
+    });
+
+    assert(result.relabelled, 'should have relabelled rather than wrapped');
+    assertEqual(result.removedTagCount, 0, 'relabelling should discard nothing');
+    assertEqual(countNodes(result.tree), before, 'relabelling changed the node count');
+    const retagged = findById(result.tree, result.newNodeId);
+    assertEqual(retagged.role, 'H2', 'role was not applied');
+    assertEqual(retagged.children.length, leafIds.length, 'lost content while relabelling');
+
+    await saveAndReopen(doc.docId, 'wrap-leaves-relabel', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the retagged tag did not survive save');
+    });
+  }));
+
+  await test('tagging part of a tag nests a new tag and keeps the source', () => withDoc(fixture, async (doc) => {
+    const parent = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.children.length >= 2
+      && n.children.every((k) => k.type === 'content'));
+    if (!parent) skip('no element with two or more content leaves in this fixture');
+
+    const leafIds = [parent.children[0].id];
+    const kidsBefore = parent.children.length;
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'Span',
+    });
+
+    assert(!result.relabelled, 'a partial selection must not relabel the source tag');
+    assertEqual(result.removedTagCount, 0, 'a surviving source tag must not be discarded');
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.role, parent.role, 'the new tag did not land inside the source tag');
+    assertEqual(holder.children.length, kidsBefore,
+      'the source tag should still have one child per original leaf');
+  }));
+
+  await test('tagging across two tags discards the ones it empties', () => withDoc(fixture, async (doc) => {
+    // Two sibling tags on one page whose children are all content leaves:
+    // taking every leaf from both leaves both empty, so both should go.
+    let pair = null;
+    for (const node of allNodes(doc.tree)) {
+      const kids = node.children.filter((c) => c.type === 'element');
+      for (let i = 0; i < kids.length - 1 && !pair; i += 1) {
+        const [a, b] = [kids[i], kids[i + 1]];
+        const usable = (n) => n.children.length > 0 && n.children.every((k) => k.type === 'content');
+        if (usable(a) && usable(b) && a.page === b.page) pair = { container: node, a, b };
+      }
+      if (pair) break;
+    }
+    if (!pair) skip('no adjacent leaf-only sibling tags in this fixture');
+
+    const leafIds = [...pair.a.children, ...pair.b.children].map((k) => k.id);
+    const leavesBefore = contentLeaves(doc.tree).length;
+    const nodesBefore = countNodes(doc.tree);
+
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'H3',
+    });
+
+    assertEqual(result.removedTagCount, 2, 'both emptied source tags should have been discarded');
+    // Two tags out, one in - and not a single content leaf lost on the way.
+    assertEqual(countNodes(result.tree), nodesBefore - 1, 'unexpected net node count');
+    assertEqual(contentLeaves(result.tree).length, leavesBefore, 'content was lost');
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.id, pair.container.id, 'the new tag did not take the consumed tags\' place');
+
+    await saveAndReopen(doc.docId, 'wrap-leaves-across', (reopened) => {
+      assertEqual(contentLeaves(reopened.tree).length, leavesBefore,
+        'the saved file lost content leaves');
+      assert(byRole(reopened.tree, 'H3').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+
+  await test('refuses to group content from two different pages', () => withDoc(fixture, async (doc) => {
+    const byPage = new Map();
+    for (const node of allNodes(doc.tree)) {
+      if (node.type !== 'content' || node.page === null || node.page === undefined) continue;
+      if (!byPage.has(node.page)) byPage.set(node.page, []);
+      byPage.get(node.page).push(node.id);
+    }
+    const pages = [...byPage.keys()].sort((a, b) => a - b);
+    if (pages.length < 2) skip('fixture has content on only one page');
+
+    // A bare MCID leaf takes its page from its containing tag, so grouping
+    // across pages would silently relabel which page the content points at.
+    let threw = false;
+    try {
+      await worker.call('wrap_leaves', {
+        docId: doc.docId,
+        nodeIds: [byPage.get(pages[0])[0], byPage.get(pages[1])[0]],
+        role: 'P',
+      });
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'a cross-page selection was accepted');
+  }));
+
   await test('flattening unwraps organizational tags and they stay gone', () => withDoc(fixture, async (doc) => {
     // Flatten never removes the tag you selected - only the organizational
     // tags nested inside it - so this selects the root and expects everything

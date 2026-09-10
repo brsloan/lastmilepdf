@@ -12,52 +12,9 @@
 
 import { pdfjsLib } from './pdfjs.js';
 import { el } from './dom.js';
-import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent } from './page-content.js';
+import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport } from './page-content.js';
 import { PAGE_SCALE, state } from './state.js';
 import { base64ToUint8Array, categoryForRole, extractMcidFromItemId, pointInRect, unionRects } from './util.js';
-
-// Fraction of item.height treated as rising above the text baseline, the
-// rest as descent below it. pdf.js's own text-layer builder leans on a
-// similar per-font ascent ratio (it has real font-metric tables for it);
-// this fixed ratio is an approximation, but is close enough for a highlight
-// box and avoids depending on pdf.js's private font-metrics internals.
-const TEXT_ASCENT_RATIO = 0.75;
-
-// item.transform places a text run's local origin (its baseline) in PDF
-// page space and gives its local x/y axis directions - but item.width/
-// item.height are already absolute page-space lengths along those axes,
-// not unit-square coordinates. Re-running them through the full transform
-// (which still has font size baked into its a/d components) double-scales
-// them - that was inflating every box by roughly the font size and pushing
-// wide/large text off the page. Instead, build the run's quad directly in
-// page space using the transform's *unit* axis directions, split around
-// the baseline by TEXT_ASCENT_RATIO, then map that quad through the
-// viewport transform.
-function itemRectInViewport(item, viewport) {
-  const [a, b, c, d, e, f] = item.transform;
-  const xAxisLen = Math.hypot(a, b) || 1;
-  const yAxisLen = Math.hypot(c, d) || 1;
-  const ux = [a / xAxisLen, b / xAxisLen];
-  const uy = [c / yAxisLen, d / yAxisLen];
-  const ascent = item.height * TEXT_ASCENT_RATIO;
-  const descent = item.height - ascent;
-
-  const pageCorners = [
-    [e - uy[0] * descent, f - uy[1] * descent],
-    [e + ux[0] * item.width - uy[0] * descent, f + ux[1] * item.width - uy[1] * descent],
-    [e + uy[0] * ascent, f + uy[1] * ascent],
-    [e + ux[0] * item.width + uy[0] * ascent, f + ux[1] * item.width + uy[1] * ascent],
-  ];
-  const corners = pageCorners.map((p) => pdfjsLib.Util.applyTransform(p, viewport.transform));
-  const xs = corners.map((c2) => c2[0]);
-  const ys = corners.map((c2) => c2[1]);
-  return {
-    x: Math.min(...xs),
-    y: Math.min(...ys),
-    width: Math.max(...xs) - Math.min(...xs),
-    height: Math.max(...ys) - Math.min(...ys),
-  };
-}
 
 // Same corners-through-viewport-transform approach as itemRectInViewport()
 // above, for a plain page-space [x0, y0, x1, y1] rect (a tag's /Layout

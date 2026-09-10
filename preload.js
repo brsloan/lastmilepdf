@@ -117,6 +117,17 @@ const api = {
   flattenTags: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:flatten-tags', { docId, nodeIds }),
   /**
+   * Groups content leaves selected by a rectangle on the page preview into
+   * one new tag, discarding any source tag the move leaves empty. Unlike
+   * setRoleOrWrap(), the leaves may come from several different parents.
+   * @param {string} docId
+   * @param {string[]} nodeIds content-leaf ids, any order
+   * @param {string} role
+   * @returns {Promise<import('./types/domain').WrapLeavesResult>}
+   */
+  wrapLeaves: (docId, nodeIds, role) =>
+    ipcRenderer.invoke('tags:wrap-leaves', { docId, nodeIds, role }),
+  /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
    */

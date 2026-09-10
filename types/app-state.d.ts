@@ -21,6 +21,14 @@ export interface Point {
   y: number;
 }
 
+/** An axis-aligned box in pdf.js viewport space, as the overlays use. */
+export interface ViewportRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** An entry in `state.bookmarksById` - mirrors IndexedNode, for the outline. */
 export interface IndexedBookmark {
   node: BookmarkNode;
@@ -75,6 +83,21 @@ export interface PageGraphicsInfo {
 export interface FigureDrawRect {
   start: Point;
   current: Point;
+}
+
+/**
+ * One content leaf a Select Content rectangle picked up, and how much of it
+ * the rectangle actually covered - see hitsForRect() in rect-select.js.
+ */
+export interface RectSelectHit {
+  /** The content leaf's node id, as wrap_leaves() expects it. */
+  nodeId: string;
+  /** The leaf's painted runs in viewport space, one rect per text run. */
+  rects: ViewportRect[];
+  /** Share (0-1) of those runs' combined area inside the rectangle. */
+  coverage: number;
+  /** True when the leaf sits entirely inside, so it has no overhang to flag. */
+  full: boolean;
 }
 
 export interface AppState {
@@ -133,6 +156,8 @@ export interface AppState {
   mcidTextCache: Map<number, Map<number, string>>;
   /** page number -> cached graphics info, reset per document. */
   mcidGraphicsCache: Map<number, PageGraphicsInfo>;
+  /** page number -> Map(mcid -> painted rects), reset per document. */
+  leafRectsCache: Map<number, Map<number, ViewportRect[]>>;
 
   // --- editing state ----------------------------------------------------
   /** Tag edits made since the last save. */
@@ -181,6 +206,20 @@ export interface AppState {
   // --- the Add Figure tool ---------------------------------------------
   figureDrawActive: boolean;
   figureDrawRect: FigureDrawRect | null;
+
+  // --- Select Content (rect-select.js) ----------------------------------
+  /** True while the rubber-band content-selection tool is armed. */
+  rectSelectActive: boolean;
+  /** The in-progress drag, in canvas-pixel space; null when not dragging. */
+  rectSelectRect: FigureDrawRect | null;
+  /** What the current (or just-finished) drag covers. */
+  rectSelectHits: RectSelectHit[] | null;
+  /** How many leaves that drag touched but covered too little of to take. */
+  rectSelectSkipped: number;
+  /** Leaf ids from a finished drag, waiting on a role keystroke. */
+  rectSelectPending: string[] | null;
+  /** mcid -> leaf node id for the page being dragged on; built once per drag. */
+  rectSelectIndex: Map<number, string> | null;
 
   // --- Actual Text review ----------------------------------------------
   /** nodeId -> an AI fix already applied, kept to render the inline diff. */

@@ -5,8 +5,12 @@ import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSele
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
-import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels } from './editing.js';
+import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels, tagRectSelection } from './editing.js';
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
+import {
+  MIN_RECT_SELECT_PX, clearRectSelect, normalizedDragBox,
+  refreshRectSelectPreview, setRectSelectActive,
+} from './rect-select.js';
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
@@ -1753,15 +1757,38 @@ function findTagShortcutAction(key) {
   return TAG_SHORTCUT_ACTIONS.find((a) => state.tagShortcuts[a.id]?.toLowerCase() === key)?.id ?? null;
 }
 
+// The role each tagging shortcut produces when it's applied to a pending
+// rectangle selection rather than to tags already in the tree. Only the
+// actions that mean "make this content into a tag with role X" are here:
+// list/listItem/table/tr/join restructure tags that already exist, which
+// isn't a thing a fresh rectangle selection can do, so those fall through
+// to their normal behaviour (see the handler below).
+const RECT_SELECT_ROLES = {
+  h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
+  paragraph: 'P', td: 'TD', th: 'TH', caption: 'Caption', figure: 'Figure',
+};
+
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (state.selectedNodeIds.size === 0) return;
 
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
   const action = findTagShortcutAction(e.key.toLowerCase());
   if (!action) return;
+
+  // A rectangle selection takes priority over whatever is selected in the
+  // tree: the user just drew a box and is answering "as what?".
+  if (state.rectSelectPending && state.rectSelectPending.length > 0) {
+    const role = RECT_SELECT_ROLES[action];
+    if (role) {
+      e.preventDefault();
+      tagRectSelection(role);
+      return;
+    }
+  }
+
+  if (state.selectedNodeIds.size === 0) return;
 
   e.preventDefault();
   switch (action) {
@@ -1845,6 +1872,9 @@ el.verifyDialog.addEventListener('click', (e) => {
 
 el.btnPrevPage.addEventListener('click', async () => {
   if (state.currentPage <= 1) return;
+  // A pending rectangle selection names content on the page being left, and
+  // its overlay is positioned in that page's viewport - neither survives.
+  clearRectSelect();
   state.currentPage -= 1;
   await renderCurrentPage();
   updatePageNavUI();
@@ -1853,6 +1883,7 @@ el.btnPrevPage.addEventListener('click', async () => {
 
 el.btnNextPage.addEventListener('click', async () => {
   if (state.currentPage >= state.pageCount) return;
+  clearRectSelect();
   state.currentPage += 1;
   await renderCurrentPage();
   updatePageNavUI();
@@ -1965,6 +1996,27 @@ el.canvas.addEventListener('mousedown', (e) => {
   syncHighlightLayerBounds();
 });
 
+// --- Select Content: rectangle -> content leaves -> one new tag -----------
+//
+// The same rubber-band gesture as Add Figures above, answering a different
+// question: not "what region did you draw?" but "which existing content
+// leaves did you cover?". On mouseup the covered leaves are held pending
+// (state.rectSelectPending) and the next tagging shortcut groups them into
+// one tag via wrap_leaves() - see the keydown handler further down, which
+// intercepts before the normal per-tag shortcut behaviour.
+
+el.canvas.addEventListener('mousedown', (e) => {
+  if (!state.rectSelectActive || !state.pdfDoc) return;
+  e.preventDefault();
+  const p = canvasPointFromEvent(e);
+  state.rectSelectRect = { start: p, current: p };
+  state.rectSelectPending = null;
+  // Rebuilt per drag rather than reused: the tree may have been re-indexed
+  // (fresh node ids) by an edit since the last one - see buildLeafIndexForPage().
+  state.rectSelectIndex = null;
+  syncHighlightLayerBounds();
+});
+
 // mousemove/mouseup listen on window rather than the canvas so a drag that
 // briefly leaves the canvas bounds (fast mouse movement) still tracks and
 // completes normally, matching typical rubber-band-select behavior.
@@ -1973,6 +2025,12 @@ window.addEventListener('mousemove', async (e) => {
   state.figureDrawRect.current = canvasPointFromEvent(e);
   const { viewport } = await getPageTextContent(state.currentPage);
   renderFigureDrawRect(viewport.width, viewport.height);
+});
+
+window.addEventListener('mousemove', async (e) => {
+  if (!state.rectSelectRect) return;
+  state.rectSelectRect.current = canvasPointFromEvent(e);
+  await refreshRectSelectPreview();
 });
 
 window.addEventListener('mouseup', async () => {
@@ -2008,10 +2066,53 @@ window.addEventListener('mouseup', async () => {
   }
 });
 
+window.addEventListener('mouseup', async () => {
+  if (!state.rectSelectRect) return;
+  const box = normalizedDragBox(state.rectSelectRect);
+
+  if (box.width < MIN_RECT_SELECT_PX || box.height < MIN_RECT_SELECT_PX) {
+    clearRectSelect();
+    return;
+  }
+
+  const hits = state.rectSelectHits || [];
+  const skipped = state.rectSelectSkipped || 0;
+  state.rectSelectRect = null; // drag over; the overlay stays up as the preview
+  if (hits.length === 0) {
+    el.drawOverlay.innerHTML = '';
+    state.rectSelectPending = null;
+    // "Nothing there" and "you clipped the edge of something" are very
+    // different mistakes, and only the second one tells the user what to do.
+    setStatus(skipped > 0
+      ? `Nothing selected - the rectangle covered less than half of ${skipped === 1 ? 'the item' : 'each of the items'} it touched. Drag over more of it.`
+      : 'Nothing taggable under that rectangle.');
+    return;
+  }
+
+  state.rectSelectPending = hits.map((h) => h.nodeId);
+  const partial = hits.filter((h) => !h.full).length;
+  const noun = hits.length === 1 ? 'item' : 'items';
+  setStatus(partial > 0
+    ? `${hits.length} ${noun} selected, ${partial} extending past the rectangle (dashed) - press a tagging shortcut to tag them.`
+    : `${hits.length} ${noun} selected - press a tagging shortcut to tag them.`);
+});
+
 el.btnAddFigure.addEventListener('click', () => {
   if (!state.docId) return;
   setFigureDrawActive(!state.figureDrawActive);
-  if (state.figureDrawActive) setStatus('Drag a rectangle around the figure to tag it (Esc to cancel).');
+  if (state.figureDrawActive) {
+    setRectSelectActive(false); // the two rubber-band tools are mutually exclusive
+    setStatus('Drag a rectangle around the figure to tag it (Esc to cancel).');
+  }
+});
+
+el.btnRectSelect.addEventListener('click', () => {
+  if (!state.docId) return;
+  setRectSelectActive(!state.rectSelectActive);
+  if (state.rectSelectActive) {
+    setFigureDrawActive(false);
+    setStatus('Drag a rectangle over the content to select it (Esc to cancel).');
+  }
 });
 
 el.btnAddP.addEventListener('click', () => {
@@ -2025,6 +2126,20 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   setFigureDrawActive(false);
   setStatus('Add Figure cancelled.');
+}, true);
+
+// Escape drops a pending rectangle selection without tagging it; a second
+// Escape leaves the tool entirely.
+window.addEventListener('keydown', (e) => {
+  if (!state.rectSelectActive || e.key !== 'Escape') return;
+  e.preventDefault();
+  if (state.rectSelectPending || state.rectSelectRect) {
+    clearRectSelect();
+    setStatus('Selection cleared.');
+    return;
+  }
+  setRectSelectActive(false);
+  setStatus('Select Content cancelled.');
 }, true);
 
 // --- Walk: auto-advance the tag selection --------------------------------

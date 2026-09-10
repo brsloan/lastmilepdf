@@ -140,6 +140,19 @@ export interface InsertResult extends MutationResult {
 }
 
 /**
+ * `wrap_leaves()`'s result - the page preview's rectangle-select tagging.
+ * `relabelled` is true when the selection turned out to be exactly one
+ * tag's whole content, so that tag's own /S was retyped in place instead of
+ * a new tag being built around it; `newNodeId` then names that same tag.
+ * `removedTagCount` is how many source tags the move left empty and the
+ * worker therefore discarded (including ancestors emptied in turn).
+ */
+export interface WrapLeavesResult extends InsertResult {
+  relabelled: boolean;
+  removedTagCount: number;
+}
+
+/**
  * `figure_from_rect()`'s result. `method` records which of the two tagging
  * strategies the worker picked for the drawn rectangle - see the section
  * comment above figure_from_rect() in tag_worker.py.

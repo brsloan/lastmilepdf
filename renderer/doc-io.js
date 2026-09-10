@@ -8,6 +8,7 @@ import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails } from './details.js';
 import { el } from './dom.js';
 import { clearPageCaches } from './page-content.js';
+import { setRectSelectActive } from './rect-select.js';
 import { updateRunScriptButtonState } from './scripts.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
@@ -76,6 +77,7 @@ export async function performOpen(filePath) {
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnAddFigure.disabled = !opened.hasStructTree;
+    el.btnRectSelect.disabled = !opened.hasStructTree;
     el.btnAddP.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
     el.btnFixAllActualText.disabled = !opened.hasStructTree;
@@ -267,10 +269,15 @@ export async function performClose() {
   setFileName(null);
   markDirty(false);
 
+  // Leaves the rubber-band tool armed-but-empty otherwise: its pending
+  // selection names node ids from the document being closed.
+  setRectSelectActive(false);
+
   el.btnFlatten.disabled = true;
   el.btnScopeTables.disabled = true;
   el.btnSmartifact.disabled = true;
   el.btnAddFigure.disabled = true;
+  el.btnRectSelect.disabled = true;
   el.btnAddP.disabled = true;
   el.btnWalk.disabled = true;
   el.btnFixAllActualText.disabled = true;
