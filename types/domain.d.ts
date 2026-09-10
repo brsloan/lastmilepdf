@@ -199,6 +199,8 @@ export interface RectSelection {
   startIndex: number;
   /** One past the last covered character; null means it runs to the end. */
   endIndex: number | null;
+  /** Where this run's own leading list marker ends, when it has one. */
+  labelSplit?: number | null;
 }
 
 /**

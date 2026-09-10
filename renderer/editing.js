@@ -305,10 +305,14 @@ export async function tagRectSelection(role) {
   // A leaf with no run - fully covered, or one the worker couldn't measure -
   // is sent as its whole self, which is what makes this degrade cleanly to
   // taking leaves whole on documents whose fonts can't be read.
+  // Each run carries its own list marker, if it has one: a list built from
+  // several runs gives every item its own Lbl, not just the first.
+  const wantsLabels = role === 'LI' || role === 'L';
   const selections = hits.map((hit) => ({
     nodeId: hit.nodeId,
     startIndex: hit.run ? hit.run.startIndex : 0,
     endIndex: hit.run ? hit.run.endIndex : null,
+    labelSplit: wantsLabels ? (leadingListLabelLength(hit.runText) || null) : null,
   }));
   const pageIndex = state.currentPage - 1;
 
@@ -318,27 +322,23 @@ export async function tagRectSelection(role) {
   // than from a leaf's full text, since a cut may have taken only part of
   // one. "First" here is reading order down the page, which is where a
   // bullet sits relative to the words it introduces.
+  // The other shape a marker comes in: already a run of its own, beside the
+  // run it introduces. Then there is nothing to cut - the first piece simply
+  // becomes the Lbl.
   let useLabel = false;
-  let labelSplit = null;
-  if (role === 'LI') {
-    const inReadingOrder = [...hits].sort((a, b) => {
+  if (role === 'LI' && hits.length > 1) {
+    const first = [...hits].sort((a, b) => {
       const ay = Math.min(...a.rects.map((r) => r.y));
       const by = Math.min(...b.rects.map((r) => r.y));
       if (Math.abs(ay - by) > 1) return ay - by;
       return Math.min(...a.rects.map((r) => r.x)) - Math.min(...b.rects.map((r) => r.x));
-    });
-    const firstText = inReadingOrder[0]?.runText;
-    if (inReadingOrder.length > 1 && looksLikeListLabel(firstText)) {
-      useLabel = true;               // the marker is already a piece of its own
-    } else {
-      const split = leadingListLabelLength(firstText);
-      if (split > 0) labelSplit = split;  // it shares a run; cut it off
-    }
+    })[0];
+    useLabel = looksLikeListLabel(first?.runText);
   }
 
   try {
     const result = await window.api.tagRectContent(
-      state.docId, pageIndex, selections, role, useLabel, labelSplit);
+      state.docId, pageIndex, selections, role, useLabel);
     // A cut rewrites the page's content stream, so pdf.js is now holding
     // bytes that no longer describe the page. Re-feed it before the tree
     // update below asks it to draw a highlight against those positions.

@@ -658,19 +658,40 @@ _POSITION_CONSTRAINED_ROLES = {
 _DIVIDED_TAG_KEYS = ("/S", "/Pg", "/Lang")
 
 
-def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label, label_split=None):
+def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label,
+                         label_split=None, li_items=None):
     """Fills a freshly built tag's /K with the leaves the rectangle picked.
 
-    An LI is the exception: its content is always the Lbl/LBody pair, never
-    bare leaves, so it goes through the same _set_li_content() the 'I'
-    shortcut uses rather than getting the leaves directly."""
+    Two roles never hold bare leaves. An LI's content is always the
+    Lbl/LBody pair, so it goes through the same _set_li_content() the 'I'
+    shortcut uses; and a list holds LI elements, one per run the rectangle
+    covered, rather than the runs themselves."""
     if role == "LI":
         _set_li_content(doc, elem, leaf_ids, use_label, label_split)
+        return
+    if role == "L" and li_items:
+        _fill_list(doc, elem, li_items)
         return
     for leaf_obj in leaf_objs:
         if isinstance(leaf_obj, pikepdf.Dictionary):
             leaf_obj["/P"] = elem
     elem["/K"] = pikepdf.Array(leaf_objs)
+
+
+def _fill_list(doc, list_elem, li_items):
+    """Populates a new /L with one /LI per item - each item being the leaves
+    of one run the rectangle covered, already cut so that a labelled one
+    leads with its marker."""
+    lis = []
+    for item in li_items:
+        li = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/S": pikepdf.Name("/LI"),
+            "/P": list_elem,
+        }))
+        _set_li_content(doc, li, item["leafIds"], item["useLabel"])
+        lis.append(li)
+    list_elem["/K"] = pikepdf.Array(lis)
 
 
 def _sibling_split_plan(doc, ordered_ids, stop_ids):
@@ -711,7 +732,8 @@ def _sibling_split_plan(doc, ordered_ids, stop_ids):
     return parent_id, before, after
 
 
-def _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_label=False, label_split=None):
+def _split_container_around(doc_id, plan, ordered_ids, role, page_index,
+                            use_label=False, label_split=None, li_items=None):
     """Divides a tag so the selected run becomes its sibling rather than its
     child: [before] [new tag] [after], dropping either outer piece when the
     selection sits at that end. The original element keeps the leading half
@@ -740,7 +762,7 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_lab
         leaf_obj = doc["elements"][node_id]
         _remove_kid(parent_obj, leaf_obj)
         moved.append(leaf_obj)
-    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
 
     # The original element is always kept, holding whichever half is left,
     # so its own attributes stay with text they were written for. A fresh
@@ -782,7 +804,7 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_lab
     }
 
 
-def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None):
+def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None, li_items=None):
     """wrap_leaves() without the undo snapshot, so tag_rect_content() can run
     its cuts and this under a single one."""
     doc = documents[doc_id]
@@ -815,6 +837,8 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None)
             # convert_to_list_item() does when it relabels an element.
             if role == "LI":
                 _set_li_content(doc, relabelled_elem, ordered_ids, use_label, label_split)
+            elif role == "L" and li_items:
+                _fill_list(doc, relabelled_elem, li_items)
             tree = _rebuild_after_mutation(doc_id)
             return {
                 "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
@@ -825,7 +849,8 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None)
     # not inside it (see _sibling_split_plan).
     plan = _sibling_split_plan(doc, ordered_ids, stop_ids)
     if plan is not None:
-        return _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_label, label_split)
+        return _split_container_around(doc_id, plan, ordered_ids, role, page_index,
+                                       use_label, label_split, li_items)
 
     # Where the new tag goes, decided against the tree as it stands now -
     # before anything is unlinked and the positions move.
@@ -858,7 +883,7 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None)
             _remove_kid(source_parent_obj, leaf_obj)
             source_parent_ids.append(source_parent_id)
         moved.append(leaf_obj)
-    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
 
     _insert_kid(anchor_parent_obj, new_elem, insert_index)
     removed_count = _prune_emptied(doc, source_parent_ids, stop_ids)
@@ -871,15 +896,17 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None)
     }
 
 
-def tag_rect_content(doc_id, page_index, selections, role, use_label=False, label_split=None):
+def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     """The page preview's rectangle selection, when the rectangle cuts
     through content rather than only around it: divides each partially
     covered leaf at the rectangle's edges, then groups everything the
     rectangle actually covers into one new tag with role `role`.
 
-    `selections` is [{"nodeId", "startIndex", "endIndex"}, ...], the indices
-    being character offsets into that leaf's own decoded text (the same
-    string get_leaf_text() returns), naming the run the rectangle covers.
+    `selections` is [{"nodeId", "startIndex", "endIndex", "labelSplit"}, ...],
+    the indices being character offsets into that leaf's own decoded text
+    (the same string get_leaf_text() returns), naming the run the rectangle
+    covers. "labelSplit", where a run leads with a list marker, is how far
+    into that run the marker ends - see _split_label_off().
     A selection covering the whole leaf - startIndex 0 and endIndex at or
     past its length - needs no cut and is simply taken as it stands, which
     is how a caller asks for Phase-1 behaviour on a leaf it can't measure.
@@ -923,6 +950,8 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False, labe
             "mcid": mcid,
             "start": int(selection.get("startIndex", 0) or 0),
             "end": selection.get("endIndex"),
+            # Where this run's own leading list marker ends, when it has one.
+            "label_split": selection.get("labelSplit"),
         })
 
     _push_undo_snapshot(doc)
@@ -933,7 +962,7 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False, labe
     planned.sort(key=lambda p: order.get(p["nodeId"], 0))
 
     cuts_made = 0
-    kept_mcids = []
+    kept = []
     for plan in reversed(planned):
         node_id = _leaf_id_for_mcid(doc, page_index, plan["mcid"])
         if node_id is None:
@@ -947,7 +976,7 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False, labe
             # either. Worth short-circuiting rather than merely skipping the
             # cut: this is exactly the case a caller uses for a leaf whose
             # font it couldn't measure, and decoding one of those raises.
-            kept_mcids.append(keep_mcid)
+            kept.append({"mcid": keep_mcid, "label_split": plan["label_split"]})
             continue
 
         codes = _decode_leaf(doc, node_id)[5]
@@ -963,7 +992,7 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False, labe
             # The tail of this cut is the run we want, so follow its mcid.
             _, _, keep_mcid, _, _ = _cut_leaf(doc, node_id, start)
             cuts_made += 1
-        kept_mcids.append(keep_mcid)
+        kept.append({"mcid": keep_mcid, "label_split": plan["label_split"]})
 
     tree = _rebuild_after_mutation(doc_id)
 
@@ -979,26 +1008,40 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False, labe
     # Cuts were applied back to front, so put the survivors into document
     # order before anything cares which of them comes first.
     position = {nid: i for i, nid in enumerate(doc["parent_map"])}
-    kept_mcids.sort(key=lambda mcid: position.get(_leaf_id_for_mcid(doc, page_index, mcid), 0))
+    kept.sort(key=lambda k: position.get(_leaf_id_for_mcid(doc, page_index, k["mcid"]), 0))
 
-    # An LI's marker gets cut off here rather than in _set_li_content(),
-    # which by then is holding leaves already detached from their parent -
-    # and _cut_leaf() needs a leaf still in place to splice its other half
-    # in beside. Falling back leaves the unlabelled shape, same as before.
-    if role == "LI" and label_split:
+    # Each run's own marker gets cut off here rather than in
+    # _set_li_content(), which by then is holding leaves already detached
+    # from their parent - and _cut_leaf() needs a leaf still in place to
+    # splice its other half in beside. A cut that can't be made just leaves
+    # that item unlabelled, which is what it would have been anyway.
+    items = []
+    for entry in kept:
+        split = entry["label_split"]
+        if not split:
+            items.append({"mcids": [entry["mcid"]], "useLabel": False})
+            continue
         try:
             _, head_mcid, tail_mcid, _, _ = _cut_leaf(
-                doc, ids_for(kept_mcids[:1])[0], label_split)
+                doc, ids_for([entry["mcid"]])[0], split)
         except ValueError:
-            pass
-        else:
-            cuts_made += 1
-            _rebuild_after_mutation(doc_id)
-            kept_mcids = [head_mcid, tail_mcid] + kept_mcids[1:]
-            use_label = True
-            label_split = None  # applied; _set_li_content must not retry it
+            items.append({"mcids": [entry["mcid"]], "useLabel": False})
+            continue
+        cuts_made += 1
+        _rebuild_after_mutation(doc_id)
+        items.append({"mcids": [head_mcid, tail_mcid], "useLabel": True})
 
-    result = _wrap_leaves_impl(doc_id, ids_for(kept_mcids), role, use_label, label_split)
+    flat_ids = [leaf_id for item in items for leaf_id in ids_for(item["mcids"])]
+    if role == "L":
+        # A list is the one role that isn't a single tag over the whole
+        # selection: each run becomes its own LI inside it.
+        li_items = [{"leafIds": ids_for(item["mcids"]), "useLabel": item["useLabel"]}
+                    for item in items]
+        result = _wrap_leaves_impl(doc_id, flat_ids, role, li_items=li_items)
+    else:
+        # Everything else takes the whole selection. For an LI that means one
+        # item, so only the first run's marker can be its Lbl.
+        result = _wrap_leaves_impl(doc_id, flat_ids, role, items[0]["useLabel"] or use_label)
     result["cutCount"] = cuts_made
     # The one command here besides split_leaf() that rewrites a page's
     # content stream, so the renderer's pdf.js copy needs the new bytes -
@@ -4621,7 +4664,7 @@ def main():
                 result = tag_rect_content(
                     request["docId"], request["pageIndex"],
                     request["selections"], request["role"],
-                    request.get("useLabel", False), request.get("labelSplit"))
+                    request.get("useLabel", False))
             elif cmd == "add_table_row":
                 result = add_table_row(request["docId"], request["tableId"])
             elif cmd == "add_table_column":

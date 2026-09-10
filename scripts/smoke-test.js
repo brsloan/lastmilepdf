@@ -791,10 +791,9 @@ async function editTests(fixture) {
     const result = await worker.call('tag_rect_content', {
       docId: doc.docId,
       pageIndex: leaf.page,
-      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null, labelSplit: split }],
       role: 'LI',
       useLabel: false,
-      labelSplit: split,
     });
 
     const li = findById(result.tree, result.newNodeId);
@@ -824,14 +823,50 @@ async function editTests(fixture) {
     const result = await worker.call('tag_rect_content', {
       docId: doc.docId,
       pageIndex: leaf.page,
-      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null, labelSplit: 100000 }],
       role: 'LI',
       useLabel: false,
-      labelSplit: 100000,
     });
     const li = findById(result.tree, result.newNodeId);
     assertEqual(li.children.length, 1, 'a failed split should leave one LBody');
     assertEqual(li.children[0].role, 'LBody', 'the fallback should still be an LBody');
+  }));
+
+  await test('tagging several runs as a list gives each its own item', () => withDoc(fixture, async (doc) => {
+    // A list is the one role that isn't a single tag over the whole
+    // selection: every run the rectangle covered becomes its own LI, each
+    // with its own label, rather than all of them landing in one item.
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough to cut in three');
+    const { leaf, offsets } = target;
+    const third = Math.floor(offsets.length / 3);
+    const cuts = [offsets[0], offsets[third], offsets[third * 2]];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [
+        { nodeId: leaf.id, startIndex: cuts[0], endIndex: cuts[1] },
+        { nodeId: leaf.id, startIndex: cuts[1], endIndex: cuts[2] },
+        { nodeId: leaf.id, startIndex: cuts[2], endIndex: null },
+      ],
+      role: 'L',
+    });
+
+    const list = findById(result.tree, result.newNodeId);
+    assertEqual(list.role, 'L', 'the new tag is not a list');
+    assertEqual(list.children.length, 3, 'each covered run should be its own item');
+    for (const item of list.children) {
+      assertEqual(item.role, 'LI', 'a list child is not an LI');
+      assertEqual(item.children.length, 1, 'an unlabelled item should hold one LBody');
+      assertEqual(item.children[0].role, 'LBody', 'an item holds bare content');
+    }
+
+    await saveAndReopen(doc.docId, 'rect-list', (reopened) => {
+      const lists = byRole(reopened.tree, 'L');
+      assert(lists.some((n) => n.children.filter((c) => c.role === 'LI').length === 3),
+        'the three-item list did not survive save');
+    });
   }));
 
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {

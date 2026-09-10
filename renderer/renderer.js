@@ -1765,7 +1765,7 @@ function findTagShortcutAction(key) {
 // to their normal behaviour (see the handler below).
 const RECT_SELECT_ROLES = {
   h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
-  paragraph: 'P', listItem: 'LI', td: 'TD', th: 'TH',
+  paragraph: 'P', listItem: 'LI', list: 'L', td: 'TD', th: 'TH',
   caption: 'Caption', figure: 'Figure',
 };
 
@@ -1791,7 +1791,7 @@ window.addEventListener('keydown', (e) => {
     if (role) {
       tagRectSelection(role);
     } else {
-      // list/table/tr/join all regroup tags that already exist, which isn't
+      // table/tr/join all regroup tags that already exist, which isn't
       // something a rectangle full of content can be turned into in one step.
       const label = TAG_SHORTCUT_ACTIONS.find((a) => a.id === action)?.label || action;
       setStatus(`"${label}" works on tags in the tree, not on a selection from the page.`

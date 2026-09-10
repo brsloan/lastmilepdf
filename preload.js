@@ -134,12 +134,11 @@ const api = {
    * @param {number} pageIndex 0-based
    * @param {import('./types/domain').RectSelection[]} selections
    * @param {string} role
-   * @param {boolean} [useLabel] For an LI, split its first piece into a Lbl.
+   * @param {boolean} [useLabel] For an LI whose marker is already a piece of its own.
    * @returns {Promise<import('./types/domain').TagRectContentResult>}
    */
-  tagRectContent: (docId, pageIndex, selections, role, useLabel = false, labelSplit = null) =>
-    ipcRenderer.invoke('tags:tag-rect-content',
-      { docId, pageIndex, selections, role, useLabel, labelSplit }),
+  tagRectContent: (docId, pageIndex, selections, role, useLabel = false) =>
+    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role, useLabel }),
   /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
