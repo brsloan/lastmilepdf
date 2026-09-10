@@ -625,6 +625,7 @@ export function leadingListLabelLength(text) {
   return match ? match[1].length + match[2].length : 0;
 }
 
+
 // The text of the first content leaf under `nodeId`, or '' - what both list
 // label questions above get asked about.
 export async function firstLeafText(nodeId) {

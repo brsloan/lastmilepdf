@@ -957,9 +957,13 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     _push_undo_snapshot(doc)
 
     # Document order, so "later ones first" below is a real reversal rather
-    # than whatever order the renderer happened to send.
+    # than whatever order the renderer happened to send. Several selections
+    # can name the same leaf - a list painted as one run contributes one per
+    # item - so where they start breaks the tie, and cutting back to front
+    # keeps every earlier offset pointing at the text it was measured
+    # against (the left half of a cut keeps the original MCID).
     order = {nid: i for i, nid in enumerate(doc["parent_map"])}
-    planned.sort(key=lambda p: order.get(p["nodeId"], 0))
+    planned.sort(key=lambda p: (order.get(p["nodeId"], 0), p["start"]))
 
     cuts_made = 0
     kept = []

@@ -869,6 +869,58 @@ async function editTests(fixture) {
     });
   }));
 
+  await test('a list built from one leaf gives every item its own label', () => withDoc(fixture, async (doc) => {
+    // The workflow this exists for: one rectangle over a whole visual list,
+    // one L keystroke. A list is routinely painted as a single run, so the
+    // renderer sends one selection per item found inside it - several
+    // naming the same leaf, which the worker has to cut back to front for
+    // the earlier offsets to stay valid.
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough for three items');
+    const { leaf, text, offsets } = target;
+    const third = Math.floor(offsets.length / 3);
+    const bounds = [offsets[0], offsets[third], offsets[third * 2], null];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [0, 1, 2].map((i) => ({
+        nodeId: leaf.id,
+        startIndex: bounds[i],
+        endIndex: bounds[i + 1],
+        // One character of each item stands in for its marker.
+        labelSplit: offsets[offsets.indexOf(bounds[i]) + 1] - bounds[i],
+      })),
+      role: 'L',
+    });
+
+    const list = findById(result.tree, result.newNodeId);
+    assertEqual(list.children.length, 3, 'each item inside the leaf should be its own LI');
+    for (const item of list.children) {
+      assertEqual(item.children.length, 2, 'a labelled item holds a Lbl and an LBody');
+      assertEqual(item.children[0].role, 'Lbl', 'the first child should be the Lbl');
+      assertEqual(item.children[1].role, 'LBody', 'the second child should be the LBody');
+    }
+
+    // Nothing lost or reordered: the items still spell out the original.
+    const rebuilt = [];
+    for (const item of list.children) {
+      for (const part of item.children) {
+        for (const contentLeaf of part.children) {
+          rebuilt.push((await worker.call('get_leaf_text',
+            { docId: doc.docId, nodeId: contentLeaf.id })).text);
+        }
+      }
+    }
+    assertEqual(rebuilt.join(''), text, 'the items do not reconstruct the original text');
+
+    await saveAndReopen(doc.docId, 'rect-list-items', (reopened) => {
+      const labelled = byRole(reopened.tree, 'LI')
+        .filter((n) => n.children.some((c) => c.role === 'Lbl'));
+      assert(labelled.length >= 3, 'the labelled items did not survive save');
+    });
+  }));
+
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
     const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
     if (!leaf) skip('fixture has no placed content leaves');

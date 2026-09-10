@@ -15,6 +15,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { listItemPieces } from './rect-select.js';
 import { refreshPdfPreviewBytes } from './viewer.js';
 
 export async function performUndo() {
@@ -297,6 +298,32 @@ export async function deleteSelection() {
 // paragraphs. The worker also discards any source tag the move leaves empty,
 // which is why the status line reports that count - a rectangle that happens
 // to consume an entire <Sect> removes it, and that shouldn't be silent.
+// One selection per list item found inside a covered run - or just the run
+// itself where its items can't be told apart, which is the same thing this
+// did before and still the right answer for a leaf that can't be cut.
+function listSelectionsFor(hit) {
+  const base = hit.run ? hit.run.startIndex : 0;
+  const pieces = hit.glyphs ? listItemPieces(hit.glyphs, hit.run) : [];
+  if (pieces.length === 0) {
+    return [{
+      nodeId: hit.nodeId,
+      startIndex: base,
+      endIndex: hit.run ? hit.run.endIndex : null,
+      labelSplit: leadingListLabelLength(hit.runText) || null,
+    }];
+  }
+  const runEnd = hit.run ? hit.run.endIndex : null;
+  const textLength = pieces[pieces.length - 1].end;
+  return pieces.map((piece) => ({
+    nodeId: hit.nodeId,
+    startIndex: base + piece.start,
+    // Keep "runs to the end" as null where it really does, so the worker
+    // can skip decoding a leaf it doesn't need to cut.
+    endIndex: runEnd === null && piece.end === textLength ? null : base + piece.end,
+    labelSplit: piece.labelLength || null,
+  }));
+}
+
 export async function tagRectSelection(role) {
   const hits = state.rectSelectHits;
   if (!hits || hits.length === 0) return;
@@ -305,15 +332,18 @@ export async function tagRectSelection(role) {
   // A leaf with no run - fully covered, or one the worker couldn't measure -
   // is sent as its whole self, which is what makes this degrade cleanly to
   // taking leaves whole on documents whose fonts can't be read.
-  // Each run carries its own list marker, if it has one: a list built from
-  // several runs gives every item its own Lbl, not just the first.
-  const wantsLabels = role === 'LI' || role === 'L';
-  const selections = hits.map((hit) => ({
-    nodeId: hit.nodeId,
-    startIndex: hit.run ? hit.run.startIndex : 0,
-    endIndex: hit.run ? hit.run.endIndex : null,
-    labelSplit: wantsLabels ? (leadingListLabelLength(hit.runText) || null) : null,
-  }));
+  // A list is built from items, and a run is not the same thing as an item:
+  // a whole list is often painted as one run, so tagging the selection as a
+  // list has to find the items inside each run rather than assume one each.
+  // Every other role takes the runs as they come.
+  const selections = role === 'L'
+    ? hits.flatMap((hit) => listSelectionsFor(hit))
+    : hits.map((hit) => ({
+      nodeId: hit.nodeId,
+      startIndex: hit.run ? hit.run.startIndex : 0,
+      endIndex: hit.run ? hit.run.endIndex : null,
+      labelSplit: role === 'LI' ? (leadingListLabelLength(hit.runText) || null) : null,
+    }));
   const pageIndex = state.currentPage - 1;
 
   // An LI splits into Lbl + LBody when its first piece is a bare marker,

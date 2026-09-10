@@ -35,7 +35,7 @@
 
 import { el } from './dom.js';
 import { state } from './state.js';
-import { getPageCodeBoxes, getPageLeafRects, getPageTextContent } from './page-content.js';
+import { getPageCodeBoxes, getPageLeafRects, getPageTextContent, leadingListLabelLength } from './page-content.js';
 
 // Below this share of its own painted area inside the rectangle, a leaf that
 // must be taken WHOLE is left out entirely - half being the natural reading
@@ -292,6 +292,66 @@ function glyphsInRun(glyphs, run) {
     existing.height = bottom - existing.y;
   }
   return Array.from(lines.values());
+}
+
+// Where each list item starts and ends inside one covered run, as
+// { start, end, labelLength } offsets into that run.
+//
+// A whole list is often painted as one marked-content run, so "one run, one
+// item" would sweep an entire list into a single LI. The items have to be
+// found in the text - but a marker alone is not enough to go on, because
+// "[A-Za-z]." matches the initials in ordinary prose ("U. S. Grant") as
+// readily as it matches a lettered list.
+//
+// What separates the two is position: a real item begins a line. That's a
+// question the glyph boxes can answer and the text can't, which is why this
+// lives here rather than beside the regex in page-content.js. A wrapped
+// continuation line ("through physical, verbal, ...") starts a line but
+// carries no marker, so it stays part of the item above it.
+//
+// Text before the first marker becomes an unlabelled leading item rather
+// than being folded into the first labelled one or dropped: it is content
+// the user selected, and this way it stays visible and separable.
+export function listItemPieces(glyphs, run) {
+  const start = run ? run.startIndex : 0;
+  const end = run ? run.endIndex : Infinity;
+
+  let offset = 0;
+  let text = '';
+  const lineStarts = new Set();
+  let previousLine = null;
+  for (const glyph of glyphs) {
+    const at = offset;
+    offset += glyph.text.length;
+    if (at < start || at >= end) continue;
+    const line = Math.round(glyph.y);
+    if (previousLine === null || line !== previousLine) lineStarts.add(text.length);
+    previousLine = line;
+    text += glyph.text;
+  }
+  if (!text) return [];
+
+  // Asked line by line rather than by scanning the whole run for markers,
+  // because a PDF line break is not a character: "...alpha" and "* beta" on
+  // consecutive lines run together as "...alpha* beta", so a marker that
+  // begins a line usually has no whitespace in front of it to match on.
+  const marks = [];
+  for (const at of [...lineStarts].sort((a, b) => a - b)) {
+    const length = leadingListLabelLength(text.slice(at));
+    if (length > 0) marks.push({ at, length });
+  }
+  if (marks.length === 0) return [{ start: 0, end: text.length, labelLength: 0 }];
+
+  const pieces = [];
+  if (marks[0].at > 0) pieces.push({ start: 0, end: marks[0].at, labelLength: 0 });
+  for (let i = 0; i < marks.length; i += 1) {
+    pieces.push({
+      start: marks[i].at,
+      end: i + 1 < marks.length ? marks[i + 1].at : text.length,
+      labelLength: marks[i].length,
+    });
+  }
+  return pieces.filter((p) => p.end > p.start);
 }
 
 export function normalizedDragBox(rect) {
