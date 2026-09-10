@@ -9,7 +9,7 @@
 //   3. Expose a small set of IPC handlers that the preload script forwards
 //      to the renderer as `window.api.*`.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -401,7 +401,92 @@ function clearStoredCustomApiKey(providerId) {
   writeSettingsFile(settings);
 }
 
-// Whether the PDF preview labels a selected tag's role above its highlight
+// --- Color theme -------------------------------------------------------
+//
+// File > Settings > Preferences > Appearance. Three choices are offered but
+// only two exist as palettes (see the header comment in styles.css): 'auto'
+// is resolved here, never in CSS, so the renderer only ever deals with a
+// real theme name and the stylesheet needs no media queries.
+//
+// Defaults to 'auto', so a first run matches whatever the machine is already
+// set to rather than imposing dark on someone running a light desktop. The
+// cost is that the default is no longer a fixed answer: getResolvedTheme()
+// consults nativeTheme, which is only correct once applyNativeThemeSource()
+// has put themeSource back to 'system'. That call is the first thing in
+// app.whenReady(), before the window exists - keep it there.
+
+const THEMES = ['auto', 'dark', 'light'];
+
+/** The ground each theme paints, mirroring --bg in styles.css. Used for the
+ *  window's own backgroundColor, which is what shows for the few frames
+ *  before the renderer paints - the wrong value here is a visible flash. */
+const THEME_BACKGROUNDS = {
+  dark: '#1b1c21',
+  light: '#ffffff',
+};
+
+function getThemePreference() {
+  const stored = readSettingsFile().theme;
+  // 'accessible' was this palette's name while there were two light themes.
+  // The weaker one is gone and this is simply 'light' now, so anyone who had
+  // picked it keeps the theme they chose instead of being silently reset to
+  // dark by the validation below. Mapped on read rather than rewritten on
+  // disk: idempotent, and it costs nothing to leave in place.
+  if (stored === 'accessible') return 'light';
+  // Validated rather than trusted: a hand-edited settings.json holding a
+  // theme name that no longer exists would otherwise stamp an attribute no
+  // block matches, and every palette token would fall back to dark's.
+  // Anything unrecognised - including a fresh install with no theme key at
+  // all - lands on 'auto' and follows the OS.
+  return THEMES.includes(stored) ? stored : 'auto';
+}
+
+/** The stored preference with 'auto' collapsed to whatever the OS is asking
+ *  for. Always 'dark' or 'light' - never 'auto'. */
+function getResolvedTheme() {
+  const pref = getThemePreference();
+  if (pref !== 'auto') return pref;
+  // Safe to read as the OS's answer only because themeSource is held at
+  // 'system' whenever the preference is 'auto' - see the warning in
+  // applyNativeThemeSource() below.
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+// The parts of the window Electron and Windows draw rather than the
+// stylesheet - the menu bar, the title bar, context menus, DevTools - do not
+// see our CSS at all. themeSource is the only lever on them.
+//
+// Two limits worth knowing, neither of them ours to fix:
+//   * It is a three-way switch (system/light/dark), with no way to express
+//     "light, but at 7:1". So the frame gets plain light for our light
+//     theme: the right half of the pair, since its ground is white, but the
+//     window chrome will not carry the theme's stronger contrast.
+//   * On Windows the title bar reliably picks this up when it is set before
+//     the window is created; changing it on a window that already exists is
+//     long-standing flaky in Electron (electron#23479, electron#27100). The
+//     menu bar and context menus do update live. So a theme switch may leave
+//     the title bar behind until the next launch.
+//
+// WARNING: while themeSource is overridden, nativeTheme.shouldUseDarkColors
+// returns the override instead of the OS setting. Pinning it to 'dark' for an
+// explicit dark choice would therefore freeze the answer getResolvedTheme()
+// gives for 'auto', and Auto would stop tracking the OS for good. Hence
+// 'system' for 'auto' - that is load-bearing, not tidiness.
+function applyNativeThemeSource(pref) {
+  nativeTheme.themeSource = pref === 'auto' ? 'system' : pref;
+}
+
+function setThemePreference(value) {
+  if (!THEMES.includes(value)) return;
+  const settings = readSettingsFile();
+  settings.theme = value;
+  writeSettingsFile(settings);
+  // After the write, so the 'updated' event this fires sees the new
+  // preference and takes the early return in the nativeTheme handler.
+  applyNativeThemeSource(value);
+}
+
+// Whether the selected tag's role is drawn as a label on its highlight
 // box (File > Settings > Preferences). Persisted in the same settings.json
 // as the API key so it's remembered between sessions.
 function getShowTagTypeLabel() {
@@ -629,9 +714,16 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 900,
+    // 940, not 900: .workbench's three columns have minimums of 360 + 280 +
+    // 300 = 940px, and body sets overflow: hidden, so at 900 the details
+    // pane was clipped by 40px with no way to scroll to it - at 100% zoom,
+    // before any text resizing came into it.
+    minWidth: 940,
     minHeight: 600,
-    backgroundColor: '#1e1f24',
+    // The ground shown for the frames between the window appearing and the
+    // renderer's first paint. Read from the saved theme rather than fixed,
+    // otherwise a light-theme user gets a dark flash on every launch.
+    backgroundColor: THEME_BACKGROUNDS[getResolvedTheme()],
     icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -949,6 +1041,9 @@ autoUpdater.on('update-downloaded', (info) => {
 });
 
 app.whenReady().then(() => {
+  // Before the menu is built and before the window exists: Windows only
+  // takes the title bar's light/dark cue at window-creation time.
+  applyNativeThemeSource(getThemePreference());
   Menu.setApplicationMenu(buildAppMenu());
   startWorker();
   createWindow();
@@ -1294,6 +1389,38 @@ ipcMain.handle('settings:get-custom-provider-config', async (_event, { providerI
 ipcMain.handle('settings:set-custom-provider-config', async (_event, { providerId, baseUrl, model }) => {
   setCustomProviderConfig(providerId, baseUrl, model);
   return true;
+});
+
+// The one synchronous channel in the app. Every other preference is read
+// with invoke(), which resolves after the first paint - harmless for a
+// checkbox, but for the theme it would mean the window paints dark and then
+// switches, on every single launch. theme-boot.js blocks on this before the
+// body is parsed, so the correct attribute is on <html> from the start.
+ipcMain.on('settings:get-resolved-theme-sync', (event) => {
+  event.returnValue = getResolvedTheme();
+});
+
+ipcMain.handle('settings:get-theme', async () => getThemePreference());
+ipcMain.handle('settings:set-theme', async (event, { value }) => {
+  setThemePreference(value);
+  const resolved = getResolvedTheme();
+  // Keep the window's own ground in step, so a later restore/resize does
+  // not briefly expose the previous theme's color behind the renderer.
+  const win = BrowserWindow.fromWebContents(event.sender);
+  win?.setBackgroundColor(THEME_BACKGROUNDS[resolved]);
+  return resolved;
+});
+
+// Only fires while the preference is 'auto' in practice: the OS flipping
+// between light and dark changes nothing if the user picked a theme
+// outright, and getResolvedTheme() already encodes that.
+nativeTheme.on('updated', () => {
+  if (getThemePreference() !== 'auto') return;
+  const resolved = getResolvedTheme();
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.setBackgroundColor(THEME_BACKGROUNDS[resolved]);
+    sendToWindow(win, 'theme:changed', resolved);
+  }
 });
 
 ipcMain.handle('settings:get-show-tag-type-label', async () => getShowTagTypeLabel());

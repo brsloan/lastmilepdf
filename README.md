@@ -15,6 +15,7 @@ Features:
 - Use AI to clean up OCR errors in Actual Text fields, highlighting changes for approval (configurable to use any AI provider)
 - Tag figures on scanned pages that were missed by auto-tagger
 - Select Content: drag a rectangle over the page preview to select the text under it and tag it with a single keystroke - the rectangle cuts leaves at its own edges, so you can tag half a paragraph as a heading, or a set of bullets as a real list with a Lbl/LBody per item, without touching the tag tree. Ctrl+L does the same for a reference list, whose entries are marked out by a hanging indent rather than by any character in the text
+- Two color themes (File > Settings > Preferences > Appearance): the original dark workbench, and a light theme. "Auto", the default, follows the OS light/dark setting. Both meet WCAG 2.1 AA for contrast and the light one goes further, to 7:1 for text; switching the app's own UI is instant - no restart. The menu bar and title bar are drawn by Electron/Windows rather than by our CSS, so they follow `nativeTheme.themeSource` instead, and on Windows the title bar may not repaint until the next launch
 - Easily filter to just figures for quick alt-text adding, tables for reviewing, etc.
 - Walk feature walks the tree automatically at the pace you set so you don't have to keep pressing the down key to walk the whole tree
 - Proofread mode allows quick comparison between OCR text and original image with AI fixes highlighted in yellow
@@ -151,6 +152,15 @@ Modules are layered, and the layering is what keeps the graph from tangling:
 | Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `list-preview`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `rect-select`, `split-content`, `proofread`, `ai-batch`, `actions`, `scripts` | the above |
 | Entry | `renderer.js` | everything |
 
+One file sits outside this graph on purpose: **`theme-boot.js`** is a classic
+script (no `type="module"`, no `defer`) loaded from `<head>`, so it runs while
+the parser is still above `<body>`. That is the only moment early enough to
+put the saved theme on `<html>` before the first paint; a deferred module
+would paint dark first and then switch, on every launch. It imports nothing
+and is the one place in the renderer that reads a preference synchronously -
+see `getResolvedThemeSync()` in `preload.js`. The app's CSP forbids inline
+scripts, which is why it is a file rather than a `<script>` block.
+
 Two things are worth knowing before moving code between them:
 
 - **`state.js` and `dom.js` must stay leaves.** Everything imports them, so
@@ -272,9 +282,41 @@ Two caveats worth knowing:
 npm test
 ```
 
-Runs `scripts/smoke-test.js`, which drives `python/tag_worker.py` directly
-over the same JSON-lines protocol `main.js` uses - no Electron and no UI
-involved. It takes about 8 seconds.
+Runs two things: `scripts/contrast-check.js` first (instant, no Python
+needed), then `scripts/smoke-test.js`, which drives `python/tag_worker.py`
+directly over the same JSON-lines protocol `main.js` uses - no Electron and no
+UI involved. It takes about 8 seconds.
+
+### `scripts/contrast-check.js`
+
+```
+npm run test:contrast
+```
+
+Asserts that `renderer/styles.css` actually meets the contrast targets its two
+themes claim: 4.5:1 text for dark (WCAG 2.1 AA) and 7:1 for light (AAA), plus
+3:1 for control boundaries and for the outlines drawn on the PDF page. It also
+checks that both theme blocks declare the same palette, and that every
+`var(--x)` in the file resolves.
+
+Light aiming at 7:1 rather than 4.5:1 is deliberate. There were briefly two
+light themes - a 4.5:1 one and a 7:1 high-contrast one - but they landed close
+enough that keeping both was not worth the second palette to maintain, so the
+stronger one became the light theme outright. `main.js` maps a saved
+`"accessible"` preference onto `"light"` for anyone who had picked it.
+
+Both of those are things a person cannot eyeball. A later "make this a bit
+dimmer" gets no pushback from the type checker, and a token missing from one
+theme block is invisible until someone switches to that theme and finds one
+theme's text on another theme's ground. The check exists so the claim in the
+header comment of `styles.css` stays true rather than becoming folklore.
+
+Two details worth knowing if you edit it: every colour token has to be a hex
+literal, because a named colour would come through as `NaN` and compare false
+against every threshold - failing for the wrong reason. And each foreground is
+measured against *every* background surface rather than its intended one; both
+defects found while the themes were being built were a token landing on a
+surface nobody had thought about.
 
 This covers the layer where the bugs actually happen. The worker is where PDF
 semantics live, and a wrong edit there produces a file that looks correct in

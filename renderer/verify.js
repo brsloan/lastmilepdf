@@ -401,15 +401,14 @@ export async function renderVerifyResults() {
 
       const header = document.createElement('div');
       header.className = 'verify-check-header';
-      const dot = document.createElement('span');
-      dot.className = `verify-status verify-status-${check.status}`;
+      header.append(buildStatusMarker(check.status));
       const title = document.createElement('span');
       title.className = 'verify-check-title';
       title.textContent = check.title;
       const detail = document.createElement('span');
       detail.className = 'verify-check-detail';
       detail.textContent = check.detail;
-      header.append(dot, title, detail);
+      header.append(title, detail);
 
       if (check.repair && check.status === 'fail') {
         header.appendChild(buildRepairButton(check.repair));
@@ -451,6 +450,47 @@ export async function renderVerifyResults() {
 
 // A failing check can offer a one-click fix (so far, only "Orphaned marked
 // content" via `repair`, but any future check could set it) - runs the same
+// A glyph and a spoken name per check status. This used to be a bare
+// colored dot, which meant the result of every check was carried by hue
+// alone: invisible to a screen reader, and indistinguishable to anyone who
+// cannot separate the four hues - the exact 1.4.1 failure this app exists to
+// find in other people's documents.
+//
+// The glyph is aria-hidden and the name is visually hidden, so each channel
+// reaches exactly one audience and neither reads the state twice.
+// '×' and '–' are plain Latin-1/General-Punctuation characters present in
+// Consolas and every other font in --font-mono. '✓' is the one that may not
+// be, in which case Chromium substitutes a font for that glyph alone - which
+// is why .verify-status sets a fixed width and centers its content, so a
+// substituted checkmark still lines up with the other three rows.
+const VERIFY_STATUS = {
+  pass: { glyph: '✓', label: 'Passed' },
+  fail: { glyph: '×', label: 'Failed' },
+  warn: { glyph: '!', label: 'Warning' },
+  na: { glyph: '–', label: 'Not applicable' },
+};
+
+function buildStatusMarker(status) {
+  const marker = document.createElement('span');
+  marker.className = `verify-status verify-status-${status}`;
+  // Falls back to the 'na' presentation rather than rendering an empty
+  // marker if a new status is ever added without being listed above.
+  const { glyph, label } = VERIFY_STATUS[status] || VERIFY_STATUS.na;
+
+  const shape = document.createElement('span');
+  shape.setAttribute('aria-hidden', 'true');
+  shape.textContent = glyph;
+
+  const name = document.createElement('span');
+  name.className = 'visually-hidden';
+  // Trailing colon so a screen reader reads "Failed: Document is tagged"
+  // rather than running the state straight into the check's title.
+  name.textContent = `${label}: `;
+
+  marker.append(shape, name);
+  return marker;
+}
+
 // actions.js function its other trigger(s) use, then re-renders the whole
 // report in place so the dialog shows the fix having actually taken effect
 // rather than leaving a stale "fail" row up next to a status message the

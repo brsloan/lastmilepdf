@@ -434,6 +434,29 @@ const api = {
   /** @param {() => void} callback */
   onMenuPreferences: (callback) => ipcRenderer.on('menu:preferences', callback),
 
+  // File > Settings > Preferences > Appearance - the color theme. The stored
+  // preference is 'auto' | 'dark' | 'light'; the *resolved* theme is one of
+  // the last two, with 'auto' collapsed against the OS setting in main.js.
+  // A settings.json still holding the retired 'accessible' is mapped onto
+  // 'light' there too, so it never reaches this bridge.
+  //
+  // sendSync is deliberate and used nowhere else: theme-boot.js needs the
+  // answer before the body is parsed, and invoke() cannot deliver it that
+  // early - a promise resolves after the first paint, which is exactly the
+  // dark flash this avoids. It blocks the renderer for one settings.json
+  // read, once per launch.
+  /** @returns {'dark' | 'light'} */
+  getResolvedThemeSync: () => ipcRenderer.sendSync('settings:get-resolved-theme-sync'),
+  /** @returns {Promise<'auto' | 'dark' | 'light'>} */
+  getTheme: () => ipcRenderer.invoke('settings:get-theme'),
+  /** Returns the resolved theme to stamp on <html>.
+   *  @param {'auto' | 'dark' | 'light'} value
+   *  @returns {Promise<'dark' | 'light'>} */
+  setTheme: (value) => ipcRenderer.invoke('settings:set-theme', { value }),
+  /** Fires when the OS light/dark setting changes while the preference is
+   *  'auto'. @param {(event: unknown, resolved: string) => void} callback */
+  onThemeChanged: (callback) => ipcRenderer.on('theme:changed', callback),
+
   // File > Settings > Preferences > Show Tag Type Label - persisted in
   // settings.json (see main.js) so it's remembered between sessions.
   /** @returns {Promise<boolean>} */

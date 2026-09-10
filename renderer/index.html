@@ -11,6 +11,11 @@
   <title>LastMilePDF</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
+  <!-- Deliberately NOT deferred and NOT a module: this has to run while
+       the parser is still above <body> so the saved theme is on <html>
+       before the first paint. See renderer/theme-boot.js. Placed after
+       the stylesheet link so the CSS fetch starts first. -->
+  <script src="theme-boot.js"></script>
 </head>
 <body>
 
@@ -59,7 +64,10 @@
         <canvas id="pdf-canvas"></canvas>
         <div id="highlight-layer" class="highlight-layer" aria-hidden="true"></div>
         <div id="draw-overlay" class="highlight-layer" aria-hidden="true"></div>
-        <div id="viewer-placeholder" class="viewer-placeholder">Open a PDF to preview it here.</div>
+        <!-- The span carries the panel backing: this message sits on the
+             canvas trough, which stays mid-to-dark in every theme, so the
+             text needs a surface of its own to keep its contrast. -->
+        <div id="viewer-placeholder" class="viewer-placeholder"><span>Open a PDF to preview it here.</span></div>
         <div id="canvas-scroll-spacer-bottom" class="canvas-scroll-spacer" aria-hidden="true"></div>
       </div>
     </section>
@@ -604,6 +612,25 @@
     </div>
     <div class="settings-body">
       <p class="settings-hint">Appearance</p>
+      <fieldset class="field field-radio-group" id="preferences-theme-group">
+        <legend>Color theme</legend>
+        <label class="field-radio">
+          <input type="radio" name="preferences-theme" value="auto" />
+          <span>Auto — follow system light/dark</span>
+        </label>
+        <label class="field-radio">
+          <input type="radio" name="preferences-theme" value="dark" />
+          <span>Dark</span>
+        </label>
+        <label class="field-radio">
+          <input type="radio" name="preferences-theme" value="light" />
+          <span>Light</span>
+        </label>
+      </fieldset>
+      <!-- Stated once for the group rather than as a badge on one option.
+           Tagging a single theme "meets WCAG 2.1 AA" implied the other did
+           not, which was never true - both clear 4.5:1 throughout. -->
+      <p class="settings-hint">Both themes meet WCAG 2.1 AA for contrast. Light goes further, to 7:1 for text.</p>
       <label class="field field-checkbox">
         <input type="checkbox" id="preferences-show-tag-type-label" />
         <span>Show tag type label on highlight</span>
