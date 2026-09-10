@@ -51,11 +51,20 @@ async function flattenTargets(targetIds) {
     : 'No organizational tags found.';
 }
 
-/** @returns {Promise<string>} */
+/**
+ * Sets Row/Column/Both scope on every table's TH cells from its header
+ * shape - the toolbar's Scope Tables button, and a script's 'scope-tables'
+ * step. The selection survives the rebuild, so with a Table selected the
+ * details panel is still showing a preview built from the pre-scope nodes
+ * (its per-TH direction indicators - see SCOPE_ICONS in table-preview.js);
+ * refreshing it here redraws that preview against the fresh tree.
+ * @returns {Promise<string>}
+ */
 export async function runScopeTables() {
   const result = await window.api.scopeTables(state.docId);
   applyFreshTree(result.tree);
   applyUndoState(result);
+  refreshDetailsForSelection();
   return result.tablesScoped > 0
     ? `Scoped ${result.tablesScoped} table${result.tablesScoped === 1 ? '' : 's'}.`
     : 'No tables matched a recognized header shape.';
