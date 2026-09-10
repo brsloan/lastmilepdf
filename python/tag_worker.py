@@ -2719,25 +2719,85 @@ def _count_organizational_tags(struct_obj):
     return count
 
 
-def _flatten_organizational_tags(struct_obj):
+def _rehome_flattened_kid(doc, kid, new_parent, old_page, new_parent_page):
+    """One kid of a dissolved organizational tag, made safe to sit directly
+    under `new_parent` instead. `old_page` is the page the dissolved tag
+    resolved to and `new_parent_page` the page its parent resolves to (both
+    0-based indices, or None).
+
+    /Pg is inheritable, so a kid that carried none of its own was reading
+    its page off the tag we're about to delete. Where the two pages differ,
+    that page has to be written down somewhere or the kid silently repoints
+    at whatever shares its MCID numbers on the parent's page (see
+    _kid_for_leaf for the same hazard under convert_to_figure). A dict kid
+    - struct element, /MCR or /OBJR - can just take an explicit /Pg. A bare
+    MCID has no dict of its own to put one in, so it's promoted to an /MCR,
+    which does, and keeps pointing exactly where it always did."""
+    if isinstance(kid, pikepdf.Dictionary):
+        if "/S" in kid:
+            kid["/P"] = new_parent
+        if "/Pg" not in kid and old_page is not None and old_page != new_parent_page:
+            kid["/Pg"] = doc["pdf"].pages[old_page].obj
+        return kid
+    mcid = _as_leaf_mcid(kid)
+    if mcid is None or old_page is None or old_page == new_parent_page:
+        return kid
+    return pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/MCR"),
+        "/Pg": doc["pdf"].pages[old_page].obj,
+        "/MCID": mcid,
+    })
+
+
+def _flatten_organizational_tags(doc, struct_obj, inherited_page):
     """Recursively removes organizational struct elements (see
     _is_organizational_role) from struct_obj's subtree, splicing each one's
     own kids into its parent's /K in its place (so their contents are kept,
     just un-nested by one level). Mutates /K on every ancestor whose kids
     changed, and reparents (/P) any surviving struct-element grandkids to
     their new direct parent. struct_obj itself is never removed, even if it
-    is itself organizational - only what's nested inside it is flattened."""
+    is itself organizational - only what's nested inside it is flattened.
+    `inherited_page` is the 0-based page index struct_obj's own /Pg-less
+    kids resolve to, i.e. its nearest /Pg-bearing ancestor's page.
+
+    Dissolving a tag can strand the content under it, because /Pg is
+    inherited: a Span with a /Pg wrapping bare MCIDs is often the only
+    thing saying what page those MCIDs are numbered against, and splicing
+    them under a parent with a different (or no) page leaves them naming
+    nothing. Two ways out, cheapest first: if struct_obj resolves to no
+    page at all it simply adopts the dissolved tag's /Pg, which keeps the
+    MCIDs bare and editable and is what the tagger would have written had
+    the Span never existed; failing that (struct_obj is already committed
+    to another page) each stranded kid carries the page itself, via
+    _rehome_flattened_kid. Adopting a /Pg also gives it to any /Pg-less kid
+    already spliced in above - but only ever in the case where those
+    resolved to no page whatsoever, so a plausible page beats none."""
+    own_page = _resolve_page_index(doc, struct_obj.get("/Pg"))
+    if own_page is None:
+        own_page = inherited_page
     changed = False
     new_kids = []
     for kid in _iter_kids(struct_obj):
         if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
-            _flatten_organizational_tags(kid)  # post-order: flatten nested ones first
+            kid_page = _resolve_page_index(doc, kid.get("/Pg"))
+            if kid_page is None:
+                kid_page = own_page
+            _flatten_organizational_tags(doc, kid, kid_page)  # post-order: nested ones first
             if _is_organizational_role(str(kid["/S"]).lstrip("/")):
                 changed = True
+                # Re-read: flattening the kid may have just given it a /Pg of
+                # its own, adopted from a tag dissolved inside it, and that's
+                # the page its contents are numbered against now.
+                kid_page = _resolve_page_index(doc, kid.get("/Pg"))
+                if kid_page is None:
+                    kid_page = own_page
+                if own_page is None and kid_page is not None:
+                    struct_obj["/Pg"] = doc["pdf"].pages[kid_page].obj
+                    own_page = kid_page
                 for grandkid in _iter_kids(kid):
-                    if isinstance(grandkid, pikepdf.Dictionary) and "/S" in grandkid:
-                        grandkid["/P"] = struct_obj
-                    new_kids.append(grandkid)
+                    new_kids.append(
+                        _rehome_flattened_kid(doc, grandkid, struct_obj, kid_page, own_page)
+                    )
                 continue
         new_kids.append(kid)
     if changed:
@@ -2775,7 +2835,7 @@ def flatten_tags(doc_id, node_ids):
 
     _push_undo_snapshot(doc)
     for nid in targets:
-        _flatten_organizational_tags(doc["elements"][nid])
+        _flatten_organizational_tags(doc, doc["elements"][nid], doc["node_pages"].get(nid))
     return {"tree": _rebuild_after_mutation(doc_id), "removed": removed, **_undo_state(doc)}
 
 

@@ -39,6 +39,13 @@ const FIXTURES = ['test-complex-generated.pdf'];
 // `python scripts/make-standard14-fixture.py`.
 const STANDARD14_FIXTURE = 'test-standard14.pdf';
 
+// test-crosspage-spans.pdf: organizational tags that carry a /Pg their parent
+// doesn't share, so dissolving them strands the content underneath unless
+// flatten puts that page back somewhere. Every wrapper in the main fixture
+// sits on the same page as its parent, so nothing there exercises that.
+// Rebuild with `python scripts/make-crosspage-fixture.py`.
+const CROSSPAGE_FIXTURE = 'test-crosspage-spans.pdf';
+
 // --- talking to the worker -------------------------------------------------
 
 /**
@@ -137,6 +144,36 @@ function firstByRole(tree, role) {
 /** Bare marked-content leaves - the tree's actual page content, not tags. */
 function contentLeaves(tree) {
   return allNodes(tree).filter((n) => n.type === 'content');
+}
+
+/**
+ * Every content leaf as "page:mcid", in document order - what the page's
+ * marked content actually is, independent of the tags wrapped around it.
+ *
+ * An MCID only means anything relative to a page, and a leaf's page is
+ * inherited from whichever ancestor last set /Pg, so an edit that moves
+ * leaves between parents can repoint them at another page - or at no page -
+ * without changing the tree's shape or node count at all. Comparing this
+ * before and after is the only way those show up.
+ */
+function contentFingerprint(tree) {
+  return contentLeaves(tree).map((n) => `${n.page}:${n.mcid}`).join(' ');
+}
+
+/**
+ * The tag directly holding the content leaf for `mcid` on `page`.
+ *
+ * Node ids are reassigned every time the tree is rebuilt, but a leaf's
+ * (page, mcid) names the same marked content for the life of the document -
+ * so this is how to ask what happened to one specific piece of content
+ * across an edit that reshuffled the tags around it.
+ */
+function ownerOfLeaf(tree, page, mcid) {
+  const leaf = contentLeaves(tree).find((n) => n.page === page && n.mcid === mcid);
+  if (!leaf) {
+    throw new Error(`no content leaf for mcid ${mcid} on page ${page} - it changed page or lost one`);
+  }
+  return parentOf(tree, leaf.id);
 }
 
 function findById(tree, id) {
@@ -1057,16 +1094,26 @@ async function editTests(fixture) {
     // would leave a document that still looks structurally valid.
     const keepBefore = countNodes(doc.tree) - before;
 
+    // A wrapper is often the only thing carrying /Pg over the bare MCIDs
+    // inside it, so splicing them up a level can strand them on the wrong
+    // page or on none at all - content that survives the node count but
+    // now names marked content belonging to some other tag entirely.
+    const contentBefore = contentFingerprint(doc.tree);
+
     const result = await worker.call('flatten_tags', { docId: doc.docId, nodeIds: ['root'] });
     assertEqual(result.removed, before, 'removed count does not match the organizational tags present');
     assertEqual(countOrganizational(result.tree), 0, 'organizational tags remain in the returned tree');
     assertEqual(countNodes(result.tree), keepBefore, 'flatten dropped content along with the wrappers');
+    assertEqual(contentFingerprint(result.tree), contentBefore,
+      'flatten moved content leaves onto a different page (or off every page)');
 
     await saveAndReopen(doc.docId, 'flatten', (reopened) => {
       assertEqual(countOrganizational(reopened.tree), 0,
         'organizational tags came back after save');
       assertEqual(countNodes(reopened.tree), keepBefore,
         'the saved file lost content that flatten should have kept');
+      assertEqual(contentFingerprint(reopened.tree), contentBefore,
+        'the saved file has content leaves pointing at the wrong page');
     });
   }));
 
@@ -1404,10 +1451,83 @@ async function standardFontTests(fixture) {
   }));
 }
 
+/**
+ * Flatten against wrappers that straddle a page break - see CROSSPAGE_FIXTURE.
+ *
+ * The failure these guard against is invisible to a node count: the tree keeps
+ * its exact shape while the content underneath quietly changes page, which in
+ * a PDF means it now names whatever marked content shares its MCID number over
+ * there. The fixture's two pages reuse MCIDs 0-2 deliberately so that shows up.
+ */
+async function crossPageTests(fixture) {
+  await test('flattening leaves cross-page content on the page it came from', () => withDoc(fixture, async (doc) => {
+    const contentBefore = contentFingerprint(doc.tree);
+    const keepBefore = countNodes(doc.tree) - countOrganizational(doc.tree);
+
+    const result = await worker.call('flatten_tags', { docId: doc.docId, nodeIds: ['root'] });
+    assertEqual(countOrganizational(result.tree), 0, 'organizational tags remain after flatten');
+    assertEqual(countNodes(result.tree), keepBefore, 'flatten dropped content along with the wrappers');
+    assertEqual(contentFingerprint(result.tree), contentBefore,
+      'flatten moved cross-page content onto the wrong page (or off every page)');
+    assertEqual(contentLeaves(result.tree).filter((n) => n.page === null).length, 0,
+      'flatten left content leaves belonging to no page at all');
+
+    await saveAndReopen(doc.docId, 'crosspage-flatten', (reopened) => {
+      assertEqual(contentFingerprint(reopened.tree), contentBefore,
+        'the saved file has cross-page content pointing at the wrong page');
+    });
+  }));
+
+  await test('flattening hands the page down to whatever kept the content', () => withDoc(fixture, async (doc) => {
+    // Every one of these leaves is on page index 1 and reached it through a
+    // Span that is about to be dissolved. Where the page ends up afterwards
+    // is the whole question, so each is checked by name.
+    assertEqual(ownerOfLeaf(doc.tree, 1, 0).role, 'Span', 'fixture: mcid 0 is not held by a Span');
+    assertEqual(ownerOfLeaf(doc.tree, 1, 2).role, 'Span', 'fixture: mcid 2 is not held by a Span');
+    assertEqual(ownerOfLeaf(doc.tree, 1, 3).role, 'Span', 'fixture: mcid 3 is not held by a Span');
+
+    const result = await worker.call('flatten_tags', { docId: doc.docId, nodeIds: ['root'] });
+
+    // The paragraph that swallowed it is committed to page 0 and can't adopt
+    // page 1 without stranding its own content, so this leaf has to carry the
+    // page itself - it stays on page 1 under a parent that isn't.
+    const straddling = ownerOfLeaf(result.tree, 1, 0);
+    assertEqual(straddling.role, 'P', 'mcid 0 did not end up in the page-0 paragraph');
+    assertEqual(straddling.page, 0, 'the page-0 paragraph moved to another page');
+    assert(contentLeaves(straddling).some((n) => n.page === 0),
+      'the paragraph lost the page-0 content it already had');
+
+    // A paragraph that had no /Pg of its own was reading page 1 off that same
+    // Span, so it needs one written down too.
+    assertEqual(ownerOfLeaf(result.tree, 1, 1).page, 1,
+      'the nested paragraph followed its new parent onto the wrong page');
+
+    // These two name no page anywhere above them, so they can simply take the
+    // dissolved Span's - the case that broke a real list item. The second
+    // reaches it through a dissolved Div, one level further up.
+    const listBody = ownerOfLeaf(result.tree, 1, 2);
+    assertEqual(listBody.role, 'LBody', 'mcid 2 did not end up in the list body');
+    assertEqual(listBody.page, 1, 'the list body did not take over the page its Span named');
+    assertEqual(firstByRole(result.tree, 'Lbl').page, 0,
+      'the list label was dragged off page 0 with its body');
+
+    const buried = ownerOfLeaf(result.tree, 1, 3);
+    assertEqual(buried.role, 'P', 'mcid 3 did not end up in the paragraph that wrapped the Div');
+    assertEqual(buried.page, 1, 'the page did not carry up through the dissolved Div');
+
+    await saveAndReopen(doc.docId, 'crosspage-pages', (reopened) => {
+      assertEqual(ownerOfLeaf(reopened.tree, 1, 2).page, 1,
+        'the list body lost its page again on save');
+      assertEqual(ownerOfLeaf(reopened.tree, 1, 3).page, 1,
+        'the paragraph under the Div lost its page again on save');
+    });
+  }));
+}
+
 // --- main ------------------------------------------------------------------
 
 async function main() {
-  const missing = [...FIXTURES, STANDARD14_FIXTURE]
+  const missing = [...FIXTURES, STANDARD14_FIXTURE, CROSSPAGE_FIXTURE]
     .filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missing.length) {
     console.error(`Missing fixture PDFs: ${missing.join(', ')}`);
@@ -1435,6 +1555,10 @@ async function main() {
     console.log(`
 ${STANDARD14_FIXTURE}`);
     await standardFontTests(STANDARD14_FIXTURE);
+
+    console.log(`
+${CROSSPAGE_FIXTURE}`);
+    await crossPageTests(CROSSPAGE_FIXTURE);
   } finally {
     worker.stop();
     fs.rmSync(tempDir, { recursive: true, force: true });
