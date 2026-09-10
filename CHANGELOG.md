@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-10
+
 ### Fixed
 - Flatten now removes `Sub` tags along with `Div`, `Sect`, `Part` and `Span`.
 - The tag properties panel refreshes after Scope Tables, instead of showing the
@@ -103,7 +105,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/brsloan/lastmilepdf/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/brsloan/lastmilepdf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/brsloan/lastmilepdf/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brsloan/lastmilepdf/compare/v0.2.0...v0.3.0
