@@ -10,6 +10,13 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Changed
+- Tightened the in-app Help text throughout, and moved the shortcut list out of
+  Help in favour of pointing at Help > Shortcuts.
+- The Help text now round-trips to `docs/help.md` for editing: `npm run
+  help:export` writes the Markdown, `npm run help:import` writes it back into
+  the dialog, and `npm run help:check` reports drift between the two.
+
 ## [0.4.2] - 2026-09-10
 
 ### Fixed

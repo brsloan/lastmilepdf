@@ -17,6 +17,9 @@
   "scripts": {
     "start": "electron .",
     "typecheck": "node scripts/typecheck.js",
+    "help:export": "node scripts/help-doc.js export",
+    "help:import": "node scripts/help-doc.js import",
+    "help:check": "node scripts/help-doc.js check",
     "test": "node scripts/contrast-check.js && node scripts/smoke-test.js",
     "test:contrast": "node scripts/contrast-check.js",
     "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
