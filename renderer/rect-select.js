@@ -10,24 +10,32 @@
 // each leaf did that rectangle actually cover?", and being honest in the
 // overlay about the answer.
 //
-// Coverage is measured per text run, not against a leaf's overall bounding
-// box (see getPageLeafRects() in page-content.js for why): a paragraph
-// wrapping over six lines has a union box spanning the whole column, so a
-// rectangle over one line would score as barely covering it, and a
-// rectangle over the column's whitespace would score as covering all of it.
+// Coverage is never measured against a leaf's overall bounding box: a
+// paragraph wrapping over six lines has a union box spanning the whole
+// column, so a rectangle over one line would score as barely covering it,
+// and a rectangle over the column's whitespace would score as covering all
+// of it. It's measured against the leaf's actual painted extent, at
+// whichever of two resolutions is available:
 //
-// A leaf is taken whole or not at all. Splitting one at the rectangle's
-// edge needs to know which *character* the edge falls between, which needs
-// the font's /ToUnicode - that's the glyph-advance engine, and it isn't
-// built yet. Until it is, a partially covered leaf brings its overhang
-// along, and the overlay draws that overhang dashed so it can't pass
-// unnoticed: retagging a leaf that is 70% inside a heading's rectangle
-// otherwise silently reads 30% of a body paragraph out as part of the
-// heading.
+//   - per character, from the worker's glyph-advance engine
+//     (getPageCodeBoxes()), wherever the PDF's fonts can be measured
+//   - per text run, from pdf.js (getPageLeafRects()), wherever they can't
+//
+// The finer of the two also decides whether a leaf is *splittable*: naming a
+// cut point needs to know which character the rectangle's edge falls
+// between, which needs the font's /ToUnicode. Selecting a leaf whole needs
+// only a box, which pdf.js always has - so a leaf the engine refuses stays
+// perfectly selectable, just indivisible.
+//
+// A leaf is still taken whole or not at all: acting on a cut point is Phase
+// 3. So a partially covered leaf brings its overhang along, and the overlay
+// draws that overhang dashed so it can't pass unnoticed - retagging a leaf
+// that is 70% inside a heading's rectangle otherwise silently reads 30% of a
+// body paragraph out as part of the heading.
 
 import { el } from './dom.js';
 import { state } from './state.js';
-import { getPageLeafRects, getPageTextContent } from './page-content.js';
+import { getPageCodeBoxes, getPageLeafRects, getPageTextContent } from './page-content.js';
 
 // Below this share of its own painted area inside the rectangle, a leaf is
 // left out entirely. Half is the natural reading of "mostly inside", and
@@ -114,7 +122,7 @@ function coverageOf(rects, box) {
 // selects. `leafIndex` comes from buildLeafIndexForPage(); `leafRects` from
 // getPageLeafRects(). Returned in no particular order - wrap_leaves() sorts
 // into document order itself, which is the only ordering that matters.
-export function hitsForRect(box, leafRects, leafIndex) {
+export function hitsForRect(box, leafRects, leafIndex, pageGlyphs = null) {
   const hits = [];
   // Leaves the rectangle touched but didn't cover enough of. Counted rather
   // than discarded so the status line can tell "there's nothing there" apart
@@ -124,15 +132,48 @@ export function hitsForRect(box, leafRects, leafIndex) {
   for (const [mcid, rects] of leafRects) {
     const nodeId = leafIndex.get(mcid);
     if (!nodeId) continue; // painted content the struct tree doesn't claim
-    const coverage = coverageOf(rects, box);
+
+    // Per-character geometry where the worker could measure the font, per
+    // text run where it couldn't. Both answer the same question; the glyph
+    // boxes just answer it at the resolution a split would need, and are
+    // what tells us the leaf is splittable at all.
+    const glyphs = pageGlyphs?.byMcid.get(mcid);
+    const measured = glyphs && glyphs.length > 0 ? glyphs : rects;
+    const coverage = coverageOf(measured, box);
     if (coverage <= 0) continue;
     if (coverage < COVERAGE_THRESHOLD) {
       skipped += 1;
       continue;
     }
-    hits.push({ nodeId, rects, coverage, full: coverage >= FULL_COVERAGE });
+    hits.push({
+      nodeId,
+      rects,
+      coverage,
+      full: coverage >= FULL_COVERAGE,
+      // Whether a cut point could be named inside this leaf, once Phase 3
+      // can act on one. A span the engine refused is still perfectly
+      // selectable - a box comes from pdf.js - just not divisible.
+      splittable: !!(glyphs && glyphs.length > 0),
+    });
   }
   return { hits, skipped };
+}
+
+// The character offset a rectangle edge at viewport x `edgeX` implies within
+// one leaf: every glyph whose horizontal midpoint sits left of the edge is
+// on the near side of the cut.
+//
+// Counts len(text) rather than 1 per glyph because a ligature decodes to
+// more than one character, and split_leaf() indexes the decoded string.
+// Nothing calls this yet - Phase 3 does, and it is here so the offset is
+// computed from the same glyph boxes the overlay is already drawn from.
+export function splitIndexAtX(glyphs, edgeX) {
+  let index = 0;
+  for (const glyph of glyphs) {
+    if (glyph.x + glyph.width / 2 >= edgeX) break;
+    index += glyph.text.length;
+  }
+  return index;
 }
 
 export function normalizedDragBox(rect) {
@@ -186,15 +227,16 @@ export async function refreshRectSelectPreview() {
   const empty = { hits: [], skipped: 0 };
   if (!state.rectSelectRect || !state.pdfDoc) return empty;
   const box = normalizedDragBox(state.rectSelectRect);
-  const [leafRects, { viewport }] = await Promise.all([
+  const [leafRects, { viewport }, pageGlyphs] = await Promise.all([
     getPageLeafRects(state.currentPage),
     getPageTextContent(state.currentPage),
+    getPageCodeBoxes(state.currentPage),
   ]);
   if (!state.rectSelectRect) return empty; // drag ended while we awaited
   if (!state.rectSelectIndex) {
     state.rectSelectIndex = buildLeafIndexForPage(state.currentPage - 1);
   }
-  const result = hitsForRect(box, leafRects, state.rectSelectIndex);
+  const result = hitsForRect(box, leafRects, state.rectSelectIndex, pageGlyphs);
   state.rectSelectHits = result.hits;
   state.rectSelectSkipped = result.skipped;
   renderRectSelectOverlay(box, result.hits, viewport.width, viewport.height);

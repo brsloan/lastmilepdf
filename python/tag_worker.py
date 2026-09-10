@@ -110,6 +110,18 @@ except ImportError:
     sys.stdout.flush()
     sys.exit(1)
 
+# The font and matrix primitives this file used to define itself. They moved
+# to glyph_metrics.py so that module and this one can both use them without
+# importing each other, and are aliased back to their original private names
+# here so every call site in this file reads as it always did.
+from glyph_metrics import (  # noqa: E402
+    font_tounicode as _font_tounicode,
+    mat_apply as _mat_apply,
+    mat_mult as _mat_mult,
+    resolve_inherited as _resolve_inherited,
+)
+import glyph_metrics  # noqa: E402
+
 
 # doc_id -> {"pdf": pikepdf.Pdf, "elements": {node_id: Dictionary}, "parent_map": {node_id: parent_id}, "counter": int}
 documents = {}
@@ -3038,7 +3050,7 @@ def join_tags(doc_id, node_ids):
 # text is only as splittable as it is *provably* decodable. Two separate
 # questions have to both be answered with certainty before a single font
 # code can be sliced out of a string operand:
-#   - how many bytes is one code? (_font_code_width) - always 1 for a simple
+#   - how many bytes is one code? (glyph_metrics.font_code_width) - always 1 for a simple
 #     font; for a Type0/CID font, 2 for the near-ubiquitous /Identity-H (or
 #     -V) predefined encoding, or read from an embedded /Encoding CMap's own
 #     codespace range. This deliberately does *not* come from the font's
@@ -3049,7 +3061,7 @@ def join_tags(doc_id, node_ids):
 #     that are all 2-byte) since it exists to be looked up by, not to
 #     describe, the font's real encoding.
 #   - what Unicode text does a code of that width decode to?
-#     (_parse_bf_mappings, reading the font's /ToUnicode bfchar/bfrange)
+#     (glyph_metrics.parse_bf_mappings, reading /ToUnicode bfchar/bfrange)
 # An unrecognized font subtype, an unsupported predefined CMap, a mixed-width
 # embedded CMap, an undecodable code, marked content nested inside the span,
 # or a split point that doesn't land exactly on a character boundary all
@@ -3058,129 +3070,18 @@ def join_tags(doc_id, node_ids):
 # content-stream split can corrupt what a viewer actually paints, which is
 # why this code takes the conservative branch every time it's unsure.
 #
+# Both of those, and the matrix/page-inheritance helpers this section leans
+# on, now live in glyph_metrics.py - which needs them too, to place each
+# character on the page for the rectangle-selection tool. They are imported
+# back under their original private names at the top of this file, so the
+# call sites below read as they always did.
+#
 # get_leaf_text() (read-only) and split_leaf() (mutating) share the same
 # decode pipeline (_decode_leaf) so what the Tag Properties panel shows the
 # user to place a cursor in is *exactly* what split_leaf() will operate on -
 # not pdf.js's own text extraction (which the tag tree's preview elsewhere
 # uses), since any drift between "what you see" and "what gets split" would
 # make the cursor position lie.
-
-def _codespace_widths(text):
-    """The distinct byte-widths declared by every `begincodespacerange`
-    block in a CMap's own text - {len(lo_hex) // 2 for each <lo> <hi> pair}.
-    Shared by _font_code_width() (reading a font's *own* /Encoding CMap,
-    when it's an embedded stream rather than a predefined name) - not used
-    against a /ToUnicode CMap's codespace, which can legitimately be wider
-    than any code it actually maps (see the section docstring above)."""
-    widths = set()
-    for block in re.findall(r"begincodespacerange(.*?)endcodespacerange", text, re.S):
-        for lo, _hi in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
-            widths.add(len(lo) // 2)
-    return widths
-
-
-def _font_code_width(font):
-    """How many bytes one font code occupies in a `Tj`/`TJ`/`'`/`"` string
-    operand for `font` - the width _decode_leaf_content() needs to chop a
-    raw operand into codes, before any /ToUnicode lookup happens at all.
-    Always 1 for a simple font. For a Type0 (composite) font, 2 for the
-    near-ubiquitous predefined /Identity-H or /Identity-V encoding, or
-    whatever a single-width embedded /Encoding CMap's own codespace range
-    declares - any other predefined CMap name, or a mixed-width embedded
-    one, isn't supported (raises ValueError; see the section docstring)."""
-    subtype = str(font.get("/Subtype", ""))
-    if subtype != "/Type0":
-        return 1
-    encoding = font.get("/Encoding")
-    if isinstance(encoding, pikepdf.Name):
-        if str(encoding) in ("/Identity-H", "/Identity-V"):
-            return 2
-        raise ValueError(f"Unsupported predefined CMap encoding: {encoding}")
-    if isinstance(encoding, (pikepdf.Dictionary, pikepdf.Stream)):
-        try:
-            text = bytes(encoding.read_bytes()).decode("latin-1")
-        except Exception as exc:
-            raise ValueError(f"Could not read this font's Encoding CMap: {exc}") from exc
-        widths = _codespace_widths(text)
-        if len(widths) != 1:
-            raise ValueError("This font's Encoding CMap has no single, unambiguous character width")
-        return widths.pop()
-    raise ValueError("This font's character encoding isn't recognized")
-
-
-def _parse_bf_mappings(stream_bytes):
-    """Parses a /ToUnicode CMap stream's `beginbfchar`/`beginbfrange` blocks
-    into {code_int: decoded_str}. This is a light regex-based reader for the
-    predictable shape font-embedding tools actually emit, not a full
-    PostScript interpreter - anything it doesn't recognize (a malformed
-    range, ...) raises ValueError rather than silently mis-parsing, since a
-    wrong decode here would silently mis-split real text."""
-    try:
-        text = stream_bytes.decode("latin-1")
-    except Exception as exc:
-        raise ValueError(f"Could not read this font's ToUnicode CMap: {exc}") from exc
-
-    def dst_to_text(hex_str):
-        raw = bytes.fromhex(hex_str)
-        if len(raw) % 2 != 0:
-            raise ValueError("Malformed ToUnicode destination string")
-        return raw.decode("utf-16-be")
-
-    mapping = {}
-    for block in re.findall(r"beginbfchar(.*?)endbfchar", text, re.S):
-        for code_hex, dst_hex in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
-            mapping[int(code_hex, 16)] = dst_to_text(dst_hex)
-
-    for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
-        # Array form: <lo> <hi> [ <d0> <d1> ... ] - one explicit destination
-        # per code in the range.
-        for lo_hex, hi_hex, array_body in re.findall(
-            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[(.*?)\]", block, re.S
-        ):
-            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
-            dsts = re.findall(r"<([0-9A-Fa-f]+)>", array_body)
-            if len(dsts) != hi - lo + 1:
-                raise ValueError("Malformed ToUnicode bfrange array")
-            for code, dst_hex in zip(range(lo, hi + 1), dsts):
-                mapping[code] = dst_to_text(dst_hex)
-        # Scalar form: <lo> <hi> <dst> - dst increments by (code - lo) for
-        # each code in the range. Matched against whatever the array form
-        # above didn't already consume, so the two forms can't double-count
-        # the same range.
-        remainder = re.sub(r"<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\[.*?\]", "", block, flags=re.S)
-        for lo_hex, hi_hex, dst_hex in re.findall(
-            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", remainder
-        ):
-            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
-            dst_bytes = bytes.fromhex(dst_hex)
-            base = int.from_bytes(dst_bytes, "big")
-            for offset, code in enumerate(range(lo, hi + 1)):
-                value = base + offset
-                mapping[code] = value.to_bytes(len(dst_bytes), "big").decode("utf-16-be")
-
-    return mapping
-
-
-def _font_tounicode(page, font_name):
-    """(width, mapping) - width from _font_code_width(), mapping from
-    _parse_bf_mappings() - for /Resources/Font/<font_name> on `page`, or
-    None if the font can't be resolved, its encoding isn't one this file
-    understands, or it carries no /ToUnicode. /Resources is inheritable the
-    same way /MediaBox is (see _resolve_inherited) - a font used by every
-    page in a section is often set once on a shared /Pages node rather than
-    repeated per page."""
-    resources = _resolve_inherited(page.obj, "/Resources")
-    fonts = resources.get("/Font") if isinstance(resources, pikepdf.Dictionary) else None
-    font = fonts.get(font_name) if isinstance(fonts, pikepdf.Dictionary) else None
-    if not isinstance(font, pikepdf.Dictionary) or "/ToUnicode" not in font:
-        return None
-    try:
-        width = _font_code_width(font)
-        mapping = _parse_bf_mappings(bytes(font["/ToUnicode"].read_bytes()))
-    except Exception:
-        return None
-    return width, mapping
-
 
 def _find_mcid_block(instructions, mcid):
     """(start, end) indices into `instructions` such that instructions[start]
@@ -3500,6 +3401,43 @@ def _leaf_id_for_mcid(doc, page_index, mcid):
     return None
 
 
+def get_page_code_boxes(doc_id, page_index):
+    """Where every character on `page_index` sits, for the renderer's
+    rectangle selection - see glyph_metrics.page_code_boxes().
+
+    Read-only, and cached per page on the renderer's side rather than here,
+    since it's derived entirely from bytes the renderer can't reach but
+    doesn't change until an edit rewrites the page's content stream.
+
+    Coordinates are PDF page space, rounded to two decimal places: the
+    renderer converts them into its own viewport space anyway, and a
+    text-heavy page carries a few thousand of these, so full float precision
+    would inflate the payload for digits nothing downstream can use.
+
+    `refusals` is {mcid: reason} for spans that painted text the engine
+    declined to measure. The renderer treats a refused span as selectable but
+    not splittable - selecting a whole leaf only needs a box, which comes
+    from pdf.js, while naming a split point needs this."""
+    doc = documents[doc_id]
+    pdf = doc["pdf"]
+    if page_index < 0 or page_index >= len(pdf.pages):
+        raise ValueError(f"Page {page_index} is out of range")
+
+    boxes, refusals = glyph_metrics.page_code_boxes(pdf.pages[page_index])
+    return {
+        "pageIndex": page_index,
+        "boxes": [{
+            "mcid": b["mcid"], "seq": b["seq"], "text": b["text"],
+            "x0": round(b["x0"], 2), "y0": round(b["y0"], 2),
+            "x1": round(b["x1"], 2), "y1": round(b["y1"], 2),
+            "invisible": b["invisible"],
+        } for b in boxes],
+        # JSON object keys must be strings; the renderer parses them back.
+        "refusals": {str(mcid): reason for mcid, reason in refusals.items()
+                     if mcid is not None},
+    }
+
+
 def split_leaf(doc_id, node_id, split_index):
     """Splits one content leaf's marked content into two at character offset
     `split_index` into get_leaf_text()'s decoded text (so `split_index` must
@@ -3636,30 +3574,6 @@ def split_leaf(doc_id, node_id, split_index):
 # the drag/drop reordering the tag tree already supports is still there for
 # whatever the estimate gets wrong.
 
-def _mat_mult(m1, m2):
-    """Composes two PDF transformation matrices as `m1` applied first, `m2`
-    second - i.e. a point transforms as `point * m1 * m2`. This is the order
-    a content stream's `cm` operator combines with the CTM already in
-    effect: the new matrix describes the *inner* (most recently established)
-    coordinate system."""
-    a1, b1, c1, d1, e1, f1 = m1
-    a2, b2, c2, d2, e2, f2 = m2
-    return (
-        a1 * a2 + b1 * c2,
-        a1 * b2 + b1 * d2,
-        c1 * a2 + d1 * c2,
-        c1 * b2 + d1 * d2,
-        e1 * a2 + f1 * c2 + e2,
-        e1 * b2 + f1 * d2 + f2,
-    )
-
-
-def _mat_apply(point, m):
-    x, y = point
-    a, b, c, d, e, f = m
-    return (a * x + c * y + e, b * x + d * y + f)
-
-
 def _rect_area(r):
     x0, y0, x1, y1 = r
     return max(0.0, x1 - x0) * max(0.0, y1 - y0)
@@ -3669,28 +3583,6 @@ def _rect_intersection_area(a, b):
     x0, y0 = max(a[0], b[0]), max(a[1], b[1])
     x1, y1 = min(a[2], b[2]), min(a[3], b[3])
     return _rect_area((x0, y0, x1, y1))
-
-
-def _resolve_inherited(page_obj, key, default=None):
-    """Walks /Parent (the Pages tree) for a page attribute that's allowed to
-    be inherited rather than set directly on the page itself - /Resources
-    and /MediaBox both are, and a scanned document built from one shared
-    template per section often relies on that instead of repeating them on
-    every page."""
-    node = page_obj
-    seen = set()
-    while node is not None:
-        if key in node:
-            return node[key]
-        parent = node.get("/Parent")
-        if not isinstance(parent, pikepdf.Dictionary):
-            return default
-        if getattr(parent, "is_indirect", False):
-            if parent.objgen in seen:
-                return default
-            seen.add(parent.objgen)
-        node = parent
-    return default
 
 
 def _page_image_placements(page):
@@ -4316,6 +4208,8 @@ def main():
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "get_leaf_text":
                 result = get_leaf_text(request["docId"], request["nodeId"])
+            elif cmd == "get_page_code_boxes":
+                result = get_page_code_boxes(request["docId"], request["pageIndex"])
             elif cmd == "split_leaf":
                 result = split_leaf(request["docId"], request["nodeId"], request["splitIndex"])
             elif cmd == "figure_from_rect":

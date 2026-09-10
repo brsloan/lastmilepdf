@@ -93,6 +93,7 @@ export const state = {
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
   leafRectsCache: new Map(),    // page number -> Map(mcid -> rects[]), reset per document - see getPageLeafRects()
+  codeBoxCache: new Map(),      // page number -> { byMcid, refusals } per-character geometry, reset per document - see getPageCodeBoxes()
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
   listPreviewToken: 0,         // invalidates in-flight list-preview builds when selection/doc changes

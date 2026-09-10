@@ -159,6 +159,7 @@ export function clearPageCaches() {
   state.mcidTextCache.clear();
   state.mcidGraphicsCache.clear();
   state.leafRectsCache.clear();
+  state.codeBoxCache.clear();
 }
 
 export async function getPageTextContent(pageNumber) {
@@ -212,6 +213,61 @@ export async function getPageLeafRects(pageNumber) {
       map.get(mcid).push(...rects);
     }
     return map;
+  });
+}
+
+// A page's per-character geometry, from the worker's glyph-advance engine
+// (get_page_code_boxes() in tag_worker.py), converted into the same viewport
+// space every other rect here uses.
+//
+// This is the finer-grained counterpart to getPageLeafRects() above: that
+// measures whole text runs from pdf.js, this measures individual characters
+// from the PDF's own font metrics. The rectangle selection prefers this
+// where it exists, and falls back to run-level rects where the fonts can't
+// be measured - see rect-select.js.
+//
+// One worker round trip per page, cached like the pdf.js reads. The engine
+// is read-only, and what it describes only changes when an edit rewrites the
+// page's content stream, which is exactly when clearPageCaches() runs.
+export async function getPageCodeBoxes(pageNumber) {
+  if (state.codeBoxCache.has(pageNumber)) return state.codeBoxCache.get(pageNumber);
+  return dedupePageBuild('codeBoxes', pageNumber, state.codeBoxCache, async () => {
+    const { viewport } = await getPageTextContent(pageNumber);
+    let payload;
+    try {
+      payload = await window.api.getPageCodeBoxes(state.docId, pageNumber - 1);
+    } catch (err) {
+      // A worker that can't measure this page is not a failure the caller
+      // needs to handle - selection still works from pdf.js geometry, just
+      // at run rather than character resolution.
+      console.warn('Could not read per-character geometry for page', pageNumber, err);
+      return { byMcid: new Map(), refusals: new Map() };
+    }
+
+    const byMcid = new Map();
+    for (const box of payload.boxes) {
+      // The worker speaks PDF page space (y up from the bottom-left); the
+      // overlays speak viewport space (y down from the top-left).
+      const [vx0, vy0] = viewport.convertToViewportPoint(box.x0, box.y0);
+      const [vx1, vy1] = viewport.convertToViewportPoint(box.x1, box.y1);
+      if (!byMcid.has(box.mcid)) byMcid.set(box.mcid, []);
+      byMcid.get(box.mcid).push({
+        seq: box.seq,
+        text: box.text,
+        invisible: box.invisible,
+        x: Math.min(vx0, vx1),
+        y: Math.min(vy0, vy1),
+        width: Math.abs(vx1 - vx0),
+        height: Math.abs(vy1 - vy0),
+      });
+    }
+    for (const glyphs of byMcid.values()) glyphs.sort((a, b) => a.seq - b.seq);
+
+    const refusals = new Map();
+    for (const [mcid, reason] of Object.entries(payload.refusals || {})) {
+      refusals.set(Number(mcid), reason);
+    }
+    return { byMcid, refusals };
   });
 }
 

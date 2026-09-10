@@ -1155,6 +1155,10 @@ ipcMain.handle('tags:get-leaf-text', async (_event, { docId, nodeId }) => {
   return callWorker('get_leaf_text', { docId, nodeId });
 });
 
+ipcMain.handle('tags:get-page-code-boxes', async (_event, { docId, pageIndex }) => {
+  return callWorker('get_page_code_boxes', { docId, pageIndex });
+});
+
 ipcMain.handle('tags:split-leaf', async (_event, { docId, nodeId, splitIndex }) => {
   return callWorker('split_leaf', { docId, nodeId, splitIndex });
 });

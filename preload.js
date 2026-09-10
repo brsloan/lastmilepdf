@@ -166,6 +166,15 @@ const api = {
   getLeafText: (docId, nodeId) =>
     ipcRenderer.invoke('tags:get-leaf-text', { docId, nodeId }),
   /**
+   * Per-character geometry for one page, in PDF page space - what the
+   * rectangle selection needs to name a split point. Read-only.
+   * @param {string} docId
+   * @param {number} pageIndex 0-based
+   * @returns {Promise<import('./types/domain').PageCodeBoxes>}
+   */
+  getPageCodeBoxes: (docId, pageIndex) =>
+    ipcRenderer.invoke('tags:get-page-code-boxes', { docId, pageIndex }),
+  /**
    * @param {string} docId
    * @param {string} nodeId
    * @param {number} splitIndex

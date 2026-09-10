@@ -29,6 +29,24 @@ export interface ViewportRect {
   height: number;
 }
 
+/** One character's box in viewport space, from the worker's glyph engine. */
+export interface GlyphBox extends ViewportRect {
+  /** Index within its own marked-content span, counting from 0. */
+  seq: number;
+  /** What it decodes to - usually one character, but a ligature can be more. */
+  text: string;
+  /** Painted in text render mode 3, as an OCR layer over a scan is. */
+  invisible: boolean;
+}
+
+/** One page's per-character geometry, plus the spans that couldn't be measured. */
+export interface PageGlyphs {
+  /** mcid -> its glyphs, in painting order. */
+  byMcid: Map<number, GlyphBox[]>;
+  /** mcid -> why that span was refused; such a span is selectable but not splittable. */
+  refusals: Map<number, string>;
+}
+
 /** An entry in `state.bookmarksById` - mirrors IndexedNode, for the outline. */
 export interface IndexedBookmark {
   node: BookmarkNode;
@@ -98,6 +116,8 @@ export interface RectSelectHit {
   coverage: number;
   /** True when the leaf sits entirely inside, so it has no overhang to flag. */
   full: boolean;
+  /** True when the worker could measure this leaf's font, so a cut point inside it could be named. */
+  splittable: boolean;
 }
 
 export interface AppState {
@@ -158,6 +178,8 @@ export interface AppState {
   mcidGraphicsCache: Map<number, PageGraphicsInfo>;
   /** page number -> Map(mcid -> painted rects), reset per document. */
   leafRectsCache: Map<number, Map<number, ViewportRect[]>>;
+  /** page number -> per-character geometry from the worker, reset per document. */
+  codeBoxCache: Map<number, PageGlyphs>;
 
   // --- editing state ----------------------------------------------------
   /** Tag edits made since the last save. */

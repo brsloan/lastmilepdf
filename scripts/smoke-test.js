@@ -417,6 +417,78 @@ async function editTests(fixture) {
     assertEqual(countNodes(redone.tree), afterEdit, 'redo did not reapply the edit');
   }));
 
+  // get_page_code_boxes() - the glyph-advance engine (glyph_metrics.py).
+  // The contract that matters is that what it reports is exactly what
+  // split_leaf() will slice: a character offset taken from geometry is
+  // meaningless if the two disagree about what the text is.
+  await test('per-character geometry matches what split_leaf decodes', () => withDoc(fixture, async (doc) => {
+    const leaves = contentLeaves(doc.tree).filter((n) => n.page !== null && n.page !== undefined);
+    if (leaves.length === 0) skip('fixture has no content leaves');
+
+    const pages = [...new Set(leaves.map((n) => n.page))].sort((a, b) => a - b).slice(0, 3);
+    let compared = 0;
+    for (const pageIndex of pages) {
+      const result = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+
+      const byMcid = new Map();
+      for (const box of result.boxes) {
+        if (!byMcid.has(box.mcid)) byMcid.set(box.mcid, []);
+        byMcid.get(box.mcid).push(box);
+      }
+      // A refused span must contribute no boxes at all - a partial result
+      // would read as complete and put every later offset out by that much.
+      for (const mcid of Object.keys(result.refusals)) {
+        assert(!byMcid.has(Number(mcid)),
+          `refused span ${mcid} still returned glyph boxes`);
+      }
+
+      for (const leaf of leaves.filter((n) => n.page === pageIndex)) {
+        const boxes = byMcid.get(leaf.mcid);
+        if (!boxes) continue;
+        const leafText = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id });
+        if (leafText.text === null || leafText.text === undefined) continue;
+        const engineText = boxes
+          .sort((a, b) => a.seq - b.seq)
+          .map((b) => b.text)
+          .join('');
+        assertEqual(engineText, leafText.text,
+          `engine and get_leaf_text disagree on p${pageIndex} mcid ${leaf.mcid}`);
+        compared += 1;
+
+        // Glyphs must carry real extent, and advance left to right *along a
+        // line* - not across the whole span, since a leaf that wraps starts
+        // its next line back at the left margin. Grouped by baseline so the
+        // check means "the pen moves forward as it writes".
+        const byLine = new Map();
+        for (const box of boxes) {
+          assert(box.x1 >= box.x0, 'glyph box has negative width');
+          assert(box.y1 > box.y0, 'glyph box has no height');
+          const line = box.y0.toFixed(1);
+          if (!byLine.has(line)) byLine.set(line, []);
+          byLine.get(line).push(box);
+        }
+        for (const lineBoxes of byLine.values()) {
+          let previousX = -Infinity;
+          for (const box of lineBoxes) {
+            assert(box.x0 >= previousX - 0.01, 'the pen moved backwards along a line');
+            previousX = box.x0;
+          }
+        }
+      }
+    }
+    assert(compared > 0, 'no leaves were actually compared');
+  }));
+
+  await test('rejects an out-of-range page instead of guessing', () => withDoc(fixture, async (doc) => {
+    let threw = false;
+    try {
+      await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 9999 });
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'an out-of-range page index was accepted');
+  }));
+
   // wrap_leaves() - the page preview's Select Content rectangle. Three
   // shapes, because which one fires decides whether the result is what the
   // user drew: the whole of one tag (relabel in place, attributes kept), part

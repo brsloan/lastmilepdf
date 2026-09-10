@@ -2090,11 +2090,20 @@ window.addEventListener('mouseup', async () => {
   }
 
   state.rectSelectPending = hits.map((h) => h.nodeId);
-  const partial = hits.filter((h) => !h.full).length;
+  const partial = hits.filter((h) => !h.full);
   const noun = hits.length === 1 ? 'item' : 'items';
-  setStatus(partial > 0
-    ? `${hits.length} ${noun} selected, ${partial} extending past the rectangle (dashed) - press a tagging shortcut to tag them.`
-    : `${hits.length} ${noun} selected - press a tagging shortcut to tag them.`);
+  // Only the partially covered items are worth reporting measurability for:
+  // a fully covered leaf is taken whole no matter what, so whether its font
+  // could be measured makes no difference to what happens to it.
+  const unmeasured = partial.filter((h) => !h.splittable).length;
+  let detail = '';
+  if (partial.length > 0) {
+    detail = `, ${partial.length} extending past the rectangle (dashed)`;
+    if (unmeasured > 0) {
+      detail += ` - ${unmeasured === partial.length ? 'none' : `${partial.length - unmeasured} of ${partial.length}`} can be measured precisely`;
+    }
+  }
+  setStatus(`${hits.length} ${noun} selected${detail} - press a tagging shortcut to tag them.`);
 });
 
 el.btnAddFigure.addEventListener('click', () => {

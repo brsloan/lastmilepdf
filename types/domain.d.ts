@@ -139,6 +139,33 @@ export interface InsertResult extends MutationResult {
   newNodeId: string;
 }
 
+/** One character's box on a page, in PDF page space. */
+export interface CodeBox {
+  /** The marked-content id whose span painted it. */
+  mcid: number;
+  /** Its index within that span, counting from 0. */
+  seq: number;
+  /** What it decodes to via /ToUnicode - usually one character, but a ligature can be more. */
+  text: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** Text render mode 3 - painted invisibly, as an OCR layer over a scan is. */
+  invisible: boolean;
+}
+
+/**
+ * `get_page_code_boxes()`'s result. `refusals` maps an mcid (as a string,
+ * since it crosses JSON) to why the engine declined to measure that span -
+ * such a span can still be selected whole, just not split.
+ */
+export interface PageCodeBoxes {
+  pageIndex: number;
+  boxes: CodeBox[];
+  refusals: Record<string, string>;
+}
+
 /**
  * `wrap_leaves()`'s result - the page preview's rectangle-select tagging.
  * `relabelled` is true when the selection turned out to be exactly one
