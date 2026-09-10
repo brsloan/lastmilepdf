@@ -197,26 +197,36 @@ function isSpanLikeRole(role) {
   return !!role && role.toLowerCase().includes('span');
 }
 
+// Roles Proofread Mode never stops on, whatever they contain. Lbl (a list
+// item's own bullet/number label) is auto-generated marker text rather than
+// prose, and a Figure's own text field is Alt Text, not Actual Text, so it's
+// not something this mode's Actual Text field has any business stepping onto
+// (a Figure that itself carries real Actual Text is the rare exception, not
+// worth keeping the general case around for). Both also absorb whatever
+// Span-like tags sit under them - see the spanCovered argument below.
+function isRoleExcludedFromProofread(node) {
+  return node.role === 'Lbl' || node.role === 'Figure';
+}
+
 // Proofread Mode's own tag - there's nothing meaningful to proofread on a
 // tag with neither Actual Text of its own nor real page content directly
 // inside it (a bare Div/Sect wrapper, say), so it's left out rather than
-// shown as an empty stop along the way. Lbl (a list item's own bullet/
-// number label) and any Span-like tag are excluded outright even when they
-// qualify otherwise - Lbl is auto-generated marker text rather than prose,
-// and a Span is normally just an inline run inside a paragraph that already
-// gets its own stop, so listing either separately would mostly be noise.
-// Figure is excluded too - its own text field is Alt Text, not Actual Text,
-// so it's not something this mode's Actual Text field has any business
-// stepping onto (a Figure that itself carries real Actual Text is the rare
-// exception, not worth keeping the general case around for).
+// shown as an empty stop along the way.
+// A Span-like tag is normally just an inline run inside a paragraph that
+// already gets its own stop, so listing it separately would mostly be
+// noise - but only when that other stop actually exists, which is what
+// spanCovered says (see collectProofreadNodes()). A generator that hangs an
+// LBody's entire text off a ParagraphSpan, with nothing on the LBody itself,
+// leaves the Span-like tag as the only place that text can be read, so it
+// becomes its own stop rather than dropping the item out of the read.
 // The hidden /Document wrapper (see findHiddenDocumentWrapperId()) is
 // excluded outright, on top of the checks above - it has no row in the
 // ordinary tree either, and (being purely a container) would rarely
 // qualify on its own merits anyway, but this keeps that guaranteed rather
 // than incidental.
-function nodeQualifiesForProofread(node) {
-  return node.type === 'element' && node.id !== state.hiddenDocumentId && node.role !== 'Lbl'
-    && node.role !== 'Figure' && !isSpanLikeRole(node.role)
+function nodeQualifiesForProofread(node, spanCovered) {
+  return node.type === 'element' && node.id !== state.hiddenDocumentId
+    && !isRoleExcludedFromProofread(node) && !(spanCovered && isSpanLikeRole(node.role))
     && (!!(node.actualText && node.actualText.trim()) || hasDirectContentLeaf(node));
 }
 
@@ -225,9 +235,17 @@ function nodeQualifiesForProofread(node) {
 // a Figure with its own Actual Text wrapping a Caption that has its own),
 // and proofreading is meant to visit both in document order, not just the
 // outermost one.
-function collectProofreadNodes(node, matches) {
-  if (nodeQualifiesForProofread(node)) matches.push(node);
-  for (const child of node.children || []) collectProofreadNodes(child, matches);
+// spanCovered tracks whether some ancestor already accounts for the text
+// under it - either because it's a stop of its own, or because it's a role
+// proofreading deliberately stays off (Lbl, Figure). Span-like tags below
+// such an ancestor stay out; ones with no ancestor covering them are all
+// that's holding their text, so they're kept.
+function collectProofreadNodes(node, matches, spanCovered = false) {
+  const qualifies = nodeQualifiesForProofread(node, spanCovered);
+  if (qualifies) matches.push(node);
+  const childrenCovered = spanCovered || qualifies
+    || (node.type === 'element' && isRoleExcludedFromProofread(node));
+  for (const child of node.children || []) collectProofreadNodes(child, matches, childrenCovered);
 }
 
 // The whole tree flattened down to just its proofread-worthy tags, each a
