@@ -14,6 +14,7 @@ Features:
 - Flatten button for removing extraneous span/div tags
 - Use AI to clean up OCR errors in Actual Text fields, highlighting changes for approval (configurable to use any AI provider)
 - Tag figures on scanned pages that were missed by auto-tagger
+- Select Content: drag a rectangle over the page preview to select the text under it and tag it with a single keystroke - the rectangle cuts leaves at its own edges, so you can tag half a paragraph as a heading, or a set of bullets as a real list with a Lbl/LBody per item, without touching the tag tree. Ctrl+L does the same for a reference list, whose entries are marked out by a hanging indent rather than by any character in the text
 - Easily filter to just figures for quick alt-text adding, tables for reviewing, etc.
 - Walk feature walks the tree automatically at the pace you set so you don't have to keep pressing the down key to walk the whole tree
 - Proofread mode allows quick comparison between OCR text and original image with AI fixes highlighted in yellow
@@ -24,7 +25,10 @@ Features:
 What it is not for and currently can't do:
 - It can't run OCR
 - It can't auto-tag
-- It does not currently support full manual tagging
+- It does not do full manual tagging from scratch. Select Content tags
+  content that is already on the page (aimed at scans that have had OCR
+  applied), but there is no way to author structure for a page that has no
+  text under it at all
 
 These are all things we may add for the future, but as said above the idea for now is to compliment the technologies people are most likely to already have: Adobe Acrobat, etc.
 
@@ -52,20 +56,30 @@ renderer/ (Chromium, no Node access)
   details.js      - the tag properties pane
   editing.js      - structural edits: move, delete, role changes, grouping, undo
   doc-io.js       - open / save / close
-  bookmarks.js verify.js table-preview.js table-editor.js
+  rect-select.js  - Select Content: the rubber-band rectangle, the glyph
+                    boxes it is measured against, and the cut offsets it
+                    hands the worker
+  bookmarks.js verify.js table-preview.js table-editor.js list-preview.js
   actual-text.js find-replace.js walk.js figure-draw.js ai-batch.js
-  actions.js scripts.js
+  split-content.js proofread.js actions.js scripts.js
                   - one feature each; see "Renderer module layout" below
 
 preload.js      - contextBridge: exposes window.api.{openPdf,updateNode,updateNodes,
                   shiftHeadingLevels,reorderNode,reorderMany,flattenTags,undo,redo,
-                  savePdf,saveToPath,onMenu*}
+                  savePdf,saveToPath,getPageCodeBoxes,tagRectContent,wrapLeaves,
+                  onMenu*}
 main.js         - BrowserWindow, native dialogs, owns the Python sidecar process
 
 python/
   tag_worker.py - long-running pikepdf sidecar, speaks JSON-lines over stdio
+  glyph_metrics.py       - places every character a page paints, in PDF page
+                           space, by replaying the content stream's text state
+  standard_fonts.py      - encoding + AFM width lookup for the standard 14
+  standard_fonts_data.py - generated tables behind it (see scripts/)
   requirements.txt
 
+scripts/         - typecheck, smoke test, and the generators for the
+                   standard-14 tables and the standard-14 fixture
 build/           - installer icon (icon.ico/icon.png)
 python-dist/      - PyInstaller output (tag_worker.exe), gitignored
 dist/             - electron-builder output (installer/portable exe), gitignored
@@ -134,7 +148,7 @@ Modules are layered, and the layering is what keeps the graph from tangling:
 | --- | --- | --- |
 | Leaves | `state`, `dom`, `util`, `pdfjs` | nothing |
 | Low-level | `shell`, `tree-index`, `page-content` | leaves |
-| Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `ai-batch`, `actions`, `scripts` | the above |
+| Features | `viewer`, `tree-view`, `details`, `bookmarks`, `table-preview`, `table-editor`, `list-preview`, `actual-text`, `editing`, `doc-io`, `verify`, `find-replace`, `walk`, `figure-draw`, `rect-select`, `split-content`, `proofread`, `ai-batch`, `actions`, `scripts` | the above |
 | Entry | `renderer.js` | everything |
 
 Two things are worth knowing before moving code between them:
@@ -154,6 +168,62 @@ Two things are worth knowing before moving code between them:
   action - a toolbar button, a Tools menu item, the Verify panel's inline
   "Repair" button, or `scripts.js`'s Tools > Scripts… runner - calls the
   same function, so it behaves identically no matter which one fired it.
+
+## Measuring glyphs (Select Content)
+
+Select Content asks a question the rest of the app never had to: *which
+characters does this rectangle cover?* Nothing in the struct tree answers
+that, so `python/glyph_metrics.py` works it out from the page itself -
+replaying enough of the content stream to track the text state, and placing
+every glyph the page paints in PDF page space.
+
+Two different jobs, with two different requirements, and separating them is
+what makes near-total coverage possible:
+
+| Job | Needs | Fallback when the font refuses |
+| --- | --- | --- |
+| Select a leaf | glyph *widths* (a box is enough) | pdf.js text-run geometry - still selectable, just indivisible |
+| Cut a leaf at an offset | `/ToUnicode` (naming a character boundary) | the leaf is taken whole, and its overhang is drawn dashed |
+
+Widths come from three places, in order: an embedded `Identity-H`
+CIDFont's `/W`, a simple font's `/Widths`, and - for a standard-14 face
+that legally carries no metrics at all - Adobe's AFM tables via
+`standard_fonts.py`, which needs two lookups (code -> glyph name via the
+font's encoding, glyph name -> width via the AFM table) and refuses rather
+than guessing at either. Those tables are *generated*, not transcribed:
+`scripts/generate-standard-fonts.mjs` lifts them out of `pdfjs-dist`, which
+is already a dependency, and checks the result against known AFM values
+before writing `standard_fonts_data.py`.
+
+Three behaviours worth knowing before touching this code:
+
+- **A refusal poisons its whole span.** A span can switch fonts partway
+  through; if the first font measures and the second doesn't, the glyphs
+  already emitted would come back looking like a complete span, and offsets
+  counted off them would index a string that stops short of the real text.
+- **`/Ascent 0 /Descent 0` counts as undeclared**, and falls back to nominal
+  values. Some subsetted faces declare exactly that, which otherwise
+  collapses every glyph box to zero height - zero area, so zero coverage, so
+  a leaf no rectangle could ever select.
+- **Never use pdf.js geometry to pick a split index**, only to select. It
+  agrees closely enough to draw a box and nowhere near well enough to name a
+  character boundary.
+
+Verified against pdf.js at 0.000pt agreement on every font path it
+exercises. Across a 22-file corpus of real course readings (645 pages,
+15,540 marked-content spans, 1.34M glyphs), every refusal names a reason,
+and after the standard-14 work the only reason left is a font with no
+`/ToUnicode` - which `split_leaf()` already declines too, so Select Content
+and Split Content now agree exactly on which leaves can be divided.
+
+Having the geometry pays off beyond cutting: `hangingIndentItems()` in
+`rect-select.js` finds the entries of a reference list purely from where
+each line begins, which is the only place that structure exists. It looks
+across the whole selection rather than within each run, because how a list
+is carved into leaves varies completely in the direction that matters - a
+born-digital page paints a whole reference list as one run, while an OCR'd
+scan gives every line its own, and working per run would find nothing at all
+on the scans this is mostly aimed at.
 
 ## Type checking
 
@@ -217,12 +287,24 @@ can see that. Nearly every test therefore has the same shape:
 An edit that only holds until you close the file is exactly the failure mode
 worth catching, and it is invisible from inside the running app.
 
-The suite runs against one checked-in fixture PDF (`test-complex-generated.pdf`),
-covering alt text and Actual Text, document title/author/language, role
-changes, delete, insert, reorder, undo/redo, flatten, figure-from-rectangle,
-list grouping, table scoping and structure, bookmarks, and rejection of bad
-input. The fixture is opened read-only; every save goes to a temp directory
-that is removed afterwards.
+The suite runs against two checked-in fixture PDFs. `test-complex-generated.pdf`
+carries the bulk of it: alt text and Actual Text, document title/author/language,
+role changes, delete, insert, reorder, undo/redo, flatten,
+figure-from-rectangle, list grouping, table scoping and structure, bookmarks,
+rejection of bad input, glyph placement, leaf splitting, and the whole
+Select Content path (tagging a whole tag's content, part of one,
+a run across several, list items and their labels, and the cut ordering that
+keeps offsets valid). `test-standard14.pdf` exists because no other fixture
+could reach the standard-14 AFM path - every font in the complex fixture
+embeds its own metrics - and is regenerated by
+`scripts/make-standard14-fixture.py`. Both fixtures are opened read-only;
+every save goes to a temp directory that is removed afterwards.
+
+Two checks are worth singling out, because they guard the property that
+matters most for a tool that rewrites content streams: the engine's glyph
+positions are asserted to match what `split_leaf()` independently decodes,
+and a rectangle's cuts are asserted to leave every glyph on the page exactly
+where it was.
 
 Tests **skip** rather than fail when the fixture lacks suitable input for a
 given check. Skips are reported so a fixture change that silently stops
@@ -333,6 +415,14 @@ Things this scaffold deliberately does not solve yet:
 - **Whole-file IPC transfer.** The opened PDF is read into memory and
   passed to the renderer as base64 in one shot. Fine for typical
   documents; a very large PDF would benefit from streaming instead.
+- **A leaf can only be cut where the font can be read.** Selecting content
+  needs glyph widths, but *dividing* a leaf needs its `/ToUnicode` to name a
+  character boundary. A font without one (some OCR output, notably) leaves
+  its text selectable but indivisible: the rectangle takes the whole leaf and
+  draws the overhang dashed rather than guessing where to cut. Same for a
+  rectangle down a vertical slice of a wrapped paragraph, where the covered
+  characters aren't one unbroken run - no single pair of cuts keeps those and
+  only those.
 - **Single document at a time.** No tabs/multi-document support.
 
 ## Contributing
