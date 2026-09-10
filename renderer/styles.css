@@ -2,24 +2,117 @@
   Design notes:
   PDF structure roles (/H1, /P, /Table, /Figure...) are literal spec tokens,
   the same way HTML tags are - so tag names are set in monospace and treated
-  as the one deliberately colorful element in an otherwise quiet, dark
-  workbench UI meant for long focused editing sessions. Categories of role
-  (heading / container / list / table / figure / inline / content-leaf) get
-  distinct hues so the tree is scannable at a glance without reading every
-  label.
+  as the one deliberately colorful element in an otherwise quiet workbench UI
+  meant for long focused editing sessions. Categories of role (heading /
+  container / list / table / figure / inline / content-leaf) get distinct
+  hues so the tree is scannable at a glance without reading every label.
+
+  Two themes, selected by a data-theme attribute on <html> (File > Settings
+  > Preferences > Appearance):
+
+    (none) / "dark"  the original workbench palette, corrected to WCAG 2.1
+                     AA - every foreground clears 4.5:1 on every surface it
+                     is used on
+    "light"          light-polarity, and deliberately stronger: it targets
+                     7:1 (AAA) for text, for the zoom / glare / low-vision
+                     conditions where a 4.5:1 theme starts to fail
+
+  Dark lives in the bare :root rather than behind its own attribute, so the
+  app is still fully styled if the attribute is missing or arrives late -
+  the failure mode is "you get dark", not "you get unstyled". A saved
+  preference of "auto" is resolved to dark or light in main.js and never
+  reaches CSS.
+
+  Both themes meet AA; neither is "the accessible one". There was briefly a
+  third - a 4.5:1 light theme alongside a 7:1 high-contrast one - but the two
+  landed close enough that keeping both was not worth the extra palette, so
+  the stronger one became the light theme outright. main.js still maps a
+  saved "accessible" onto "light" for anyone who had picked it.
+
+  When adding a color: put it in the theme-invariant section only if the
+  surface behind it is theme-invariant too (the rendered PDF page is; app
+  chrome is not). Otherwise it needs a value in both blocks, and `npm test`
+  will tell you if it does not clear its contrast target.
 */
 
 :root {
+  /* --- theme-invariant: the on-page overlays ---------------------------
+     The rendered PDF page stays white whichever theme the chrome wears, so
+     everything drawn on top of it is measured against --page-ground and
+     must NOT be swapped with the palette below. Reusing --accent here was
+     the bug this group exists to fix: those outlines measured 1.65-2.48:1
+     against the page, and any future accent change would have silently
+     moved them again.
+
+     Two kinds of token, because the outline and the fill have different
+     jobs. The OUTLINE is the boundary of a graphical object you need in
+     order to understand the content, so WCAG 1.4.11 asks 3:1 against the
+     page. The FILL is a wash laid over the page's own glyphs, and making it
+     satisfy 3:1 too would just dim the text you are trying to read - so the
+     washes stay deliberately pale, and are pinned here at the values the
+     dark theme already used. */
+  --page-ground: #ffffff;
+
+  /* outlines - ratio against --page-ground in the comment */
+  --overlay-primary: #00695c;      /* 6.61 - selected tag, and rect-select runs */
+  --overlay-secondary: #0f8a76;    /* 4.27 - others in a multi-tag selection */
+  --overlay-draw: #a35a00;         /* 5.22 - Add Figure rubber band */
+  --overlay-warn: #9a4a00;         /* 6.26 - rect-select overhang warning */
+
+  /* Left as plain red on purpose. It already clears 1.4.11 on the page
+     (4.00:1), and unlike the outlines above, the reticle's whole job is to
+     run the full width and height of the page - straight across figures.
+     Darkening it to match the others would read better on paper and worse
+     on a dark image (4.35:1 -> 2.75:1 over #1a1a1a), which is the opposite
+     of what this particular graphic needs. */
+  --overlay-crosshair: #ff0000;  /* 4.00 on the page, 4.35 over a dark figure */
+
+  /* An inner hairline on the outlined boxes. A dark outline is the right
+     call on paper but drops to 2.63:1 over a dark figure, so a flat swap
+     would just trade one failing case for another; this keeps the box edge
+     unmistakable over dark content too. Inset rather than outer, so
+     adjacent boxes - rect-select draws one per text run - cannot paint
+     halos across each other's borders. */
+  --overlay-halo: #ffffff;
+
+  /* washes - pale by design, see above */
+  --overlay-wash: #86d9c7;
+  --overlay-wash-alt: #5fb3a3;
+  --overlay-wash-draw: #ffb020;
+  --overlay-wash-warn: #e3b578;
+
+  --surface-subtle: rgba(127, 127, 127, 0.1);  /* reads on either polarity */
+
+  --font-ui: -apple-system, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+  --radius: 6px;
+
+  /* --- dark theme (the default) ---------------------------------------- */
+  color-scheme: dark;
+
   --bg: #1b1c21;
   --panel: #24262d;
   --panel-alt: #2b2e37;
+  --panel-sunken: #14151a;   /* table header rows, sunk below --panel-alt */
+  --canvas-ground: #131418;  /* the trough the PDF page floats in */
+
+  /* Two border tokens because WCAG 1.4.11 asks two different things of
+     them: a control's boundary is what tells you the control is there, so
+     it needs 3:1 against its surroundings, while a panel seam or a rule
+     between rows is decorative and explicitly exempt. Keeping them apart is
+     what lets the light theme have visible control edges without every
+     panel seam having to shout. */
   --border: #383b46;
+  --border-control: #727889;
+
   --text: #e8e9ec;
   --text-dim: #9a9ea9;
-  --text-faint: #6d717c;
+  --text-faint: #9096a1;
 
   --accent: #5fb3a3;
   --accent-strong: #86d9c7;
+  --btn-ink: #10201c;        /* text drawn on top of an --accent fill */
 
   --cat-heading: #6fc7b6;
   --cat-container: #7d97d9;
@@ -27,7 +120,7 @@
   --cat-table: #d9a24a;
   --cat-figure: #d97a94;
   --cat-inline: #9bb0c9;
-  --cat-leaf: #6d717c;
+  --cat-leaf: #9096a1;
 
   --warn-bg: #3a2c1c;
   --warn-border: #6b4a24;
@@ -37,15 +130,88 @@
   --ai-highlight-ink: #241f00;  /* text color drawn on top of --ai-highlight-bg */
   --ai-highlight-border: #8a7418;
   --ai-highlight-text: #e6cf6a;
+  /* The review bar's backing. Was color-mix(--ai-highlight-bg 12%,
+     --panel-alt), which is exactly this value on a dark panel - but mixing
+     12% of a pale yellow into an already-pale panel barely moves it, so on
+     the light grounds the same expression came out at 1.02:1 against the
+     panel and the yellow cue vanished. Stated per theme instead. */
+  --ai-highlight-tint: #434237;
 
   --pass-text: #7fd9a8;
-  --fail-text: #e2707a;
+  --fail-text: #e8848c;
+  /* An alias, not a color: var() in a custom property is substituted on the
+     element the property is declared on, so this picks up whichever
+     --text-faint won there. Declared once and correct in both themes. */
   --na-text: var(--text-faint);
 
-  --font-ui: -apple-system, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  /* Chrome depth: shadows and modal backdrops are stated as tokens because
+     a fixed rgba(0,0,0,...) reads as grime on a light ground. */
+  --backdrop: rgba(0, 0, 0, 0.55);
+  --shadow-page: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
 
-  --radius: 6px;
+/* --- light theme -------------------------------------------------------
+   Targets 7:1 for text rather than the 4.5:1 AA minimum, and panels are
+   separated from the ground by their border rather than by a fill.
+
+   There were briefly two light themes - a 4.5:1 one and this 7:1 one - but
+   they landed close enough in practice that keeping both was not worth the
+   second palette to maintain. This is the one that survived, which is why
+   the app's light theme aims higher than its stated AA target.
+
+   One consequence worth knowing about: forcing seven category hues to 7:1
+   on white compresses them all into dark, desaturated territory, and
+   --cat-heading lands on the same value as --accent. Telling teal from navy
+   from plum is genuinely harder here. That is survivable only because the
+   tag chips print the role as text (see appendElementChipAndFlag() in
+   tree-view.js), so the hue has always been redundant rather than
+   load-bearing - do not add anything to this theme that depends on hue
+   alone to be understood. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-alt: #eef0f4;
+  --panel-sunken: #e4e7ed;
+  --canvas-ground: #7a818d;  /* darker than light's, to define the page edge on white */
+
+  --border: #4a5060;
+  --border-control: #4a5060;
+
+  --text: #000000;
+  --text-dim: #2b303a;
+  --text-faint: #3d434f;
+
+  --accent: #00544a;
+  --accent-strong: #004037;
+  --btn-ink: #ffffff;
+
+  --cat-heading: #00544a;
+  --cat-container: #123a94;
+  --cat-list: #552a91;
+  --cat-table: #6b3d00;
+  --cat-figure: #8c0f36;
+  --cat-inline: #26425e;
+  --cat-leaf: #3d434f;
+
+  --warn-bg: #fff4e0;
+  --warn-border: #8a5000;
+  --warn-text: #5c3600;
+
+  --ai-highlight-bg: #f0d43a;
+  --ai-highlight-ink: #000000;
+  --ai-highlight-border: #4a3800;
+  --ai-highlight-text: #4a3800;
+  --ai-highlight-tint: #efe3a0;
+
+  --pass-text: #005230;
+  --fail-text: #8a0016;
+
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --shadow-page: 0 4px 20px rgba(0, 0, 0, 0.3);
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -135,7 +301,7 @@ body.busy * {
 .btn {
   background: var(--panel-alt);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   padding: 6px 12px;
   font-size: 12.5px;
@@ -154,7 +320,7 @@ body.busy * {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #10201c;
+  color: var(--btn-ink);
   font-weight: 600;
 }
 
@@ -170,7 +336,7 @@ body.busy * {
 .btn-walk-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #10201c;
+  color: var(--btn-ink);
   font-weight: 600;
 }
 
@@ -183,7 +349,7 @@ body.busy * {
 .btn-rect-select-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #10201c;
+  color: var(--btn-ink);
   font-weight: 600;
 }
 
@@ -273,7 +439,7 @@ body.proofread-mode .tree-pane {
 .tree-filter {
   background: var(--panel-alt);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   padding: 3px 6px;
   font-size: 11.5px;
@@ -332,7 +498,7 @@ body.proofread-mode .tree-pane {
   position: relative;
   flex: 1;
   overflow: auto;
-  background: #131418;
+  background: var(--canvas-ground);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -353,8 +519,8 @@ body.proofread-mode .tree-pane {
 }
 
 #pdf-canvas {
-  background: white;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  background: var(--page-ground);
+  box-shadow: var(--shadow-page);
   max-width: 100%;
   height: auto;
   cursor: pointer;
@@ -365,14 +531,28 @@ body.proofread-mode .tree-pane {
   cursor: crosshair;
 }
 
+/* The message sits on --canvas-ground, which is the one chrome surface that
+   has to stay mid-to-dark in every theme so the white page reads as a page.
+   That leaves no room for --text-faint to clear 4.5:1 on top of it - and in
+   the light theme it is arithmetically impossible, since a trough dark
+   enough to define the page edge at 3:1 cannot also carry 7:1 text. So the
+   text gets its own panel backing instead of floating on the trough, which
+   puts it back on a surface its contrast is already verified against. */
 .viewer-placeholder {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-faint);
   font-size: 13px;
+}
+
+.viewer-placeholder span {
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
 }
 
 /* `.viewer-placeholder`'s own `display: flex` otherwise outranks the
@@ -393,24 +573,25 @@ body.proofread-mode .tree-pane {
 
 .highlight-box {
   position: absolute;
-  background: color-mix(in srgb, var(--accent-strong) 28%, transparent);
-  border: 1.5px solid var(--accent-strong);
+  background: color-mix(in srgb, var(--overlay-wash) 28%, transparent);
+  border: 1.5px solid var(--overlay-primary);
+  box-shadow: inset 0 0 0 1px var(--overlay-halo);
   border-radius: 2px;
 }
 
 /* Other members of a multi-tag selection - a lighter tint than the active
    tag's box, mirroring .tree-row.multi-selected in the tag tree. */
 .highlight-box.secondary {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--overlay-wash-alt) 16%, transparent);
+  border-color: var(--overlay-secondary);
 }
 
 /* Reticle lines helping locate small figures - run from the highlighted
    box's center out to the page edges, absent inside the box itself. */
 .highlight-crosshair {
   position: absolute;
-  background: red;
-  box-shadow: 0 0 0 0.5px red;
+  background: var(--overlay-crosshair);
+  box-shadow: 0 0 0 0.5px var(--overlay-crosshair);
 }
 
 /* Selected tag's role, shown resting on its highlight box (File > Settings >
@@ -426,6 +607,14 @@ body.proofread-mode .tree-pane {
   font-weight: 600;
   white-space: nowrap;
   background: var(--panel);
+  /* The fill is a chrome color but the surface behind it is the white PDF
+     page, so in the light theme the chip's edge disappears into the paper
+     (--panel is #ffffff there, on a white page). The label text stays
+     readable either way - it is a --cat-* hue on --panel, which is verified -
+     but without an edge you cannot tell the chip from the page it covers.
+     currentColor is already the category hue, and box-shadow costs no layout,
+     so the chip keeps its exact geometry in both themes. */
+  box-shadow: 0 0 0 1px currentColor;
   pointer-events: none;
 }
 .highlight-label.above {
@@ -448,8 +637,9 @@ body.proofread-mode .tree-pane {
 
 .draw-box {
   position: absolute;
-  background: color-mix(in srgb, #ffb020 22%, transparent);
-  border: 1.5px dashed #ffb020;
+  background: color-mix(in srgb, var(--overlay-wash-draw) 22%, transparent);
+  border: 1.5px dashed var(--overlay-draw);
+  box-shadow: inset 0 0 0 1px var(--overlay-halo);
   border-radius: 2px;
 }
 
@@ -458,8 +648,9 @@ body.proofread-mode .tree-pane {
    rectangle and is taken as-is. */
 .select-box {
   position: absolute;
-  background: color-mix(in srgb, var(--accent) 26%, transparent);
-  border: 1px solid var(--accent-strong);
+  background: color-mix(in srgb, var(--overlay-wash-alt) 26%, transparent);
+  border: 1px solid var(--overlay-primary);
+  box-shadow: inset 0 0 0 1px var(--overlay-halo);
   border-radius: 1px;
   pointer-events: none;
 }
@@ -471,8 +662,8 @@ body.proofread-mode .tree-pane {
    dragged over is the one way this tool can quietly damage a document's
    reading order. */
 .select-overhang {
-  background: color-mix(in srgb, var(--warn-text) 20%, transparent);
-  border: 1.5px dashed var(--warn-text);
+  background: color-mix(in srgb, var(--overlay-wash-warn) 20%, transparent);
+  border: 1.5px dashed var(--overlay-warn);
 }
 
 /* --- tag tree --- */
@@ -580,7 +771,7 @@ body.proofread-mode .tree-pane {
   font-size: 11px;
   line-height: 1;
   color: var(--text-faint);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 3px;
   cursor: pointer;
   user-select: none;
@@ -685,7 +876,7 @@ body.proofread-mode .tree-pane {
 .pane-tab.active {
   color: var(--text);
   background: var(--panel-alt);
-  border-color: var(--border);
+  border-color: var(--border-control);
 }
 
 .details-panel {
@@ -854,7 +1045,7 @@ body.proofread-mode .tree-pane {
   inset: 0;
   margin: 0;
   padding: 6px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   font-family: inherit;
   font-size: 12.5px;
@@ -910,7 +1101,7 @@ body.proofread-mode .tree-pane {
   padding: 6px 8px;
   border: 1px solid var(--ai-highlight-border);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--ai-highlight-bg) 12%, var(--panel-alt));
+  background: var(--ai-highlight-tint);
 }
 
 /* Same [hidden]-vs-flex gotcha as .field-row/.field above. */
@@ -987,7 +1178,7 @@ body.proofread-mode .tree-pane {
 .field-label-btn {
   background: transparent;
   color: var(--text-dim);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   padding: 2px 7px;
   font-size: 10.5px;
@@ -1010,7 +1201,7 @@ body.proofread-mode .tree-pane {
 .field select,
 .field textarea {
   background: var(--panel-alt);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   color: var(--text);
   padding: 6px 8px;
@@ -1073,7 +1264,7 @@ body.proofread-mode .tree-pane {
 }
 
 .generated-table th {
-  background: #14151a;
+  background: var(--panel-sunken);
   color: var(--text);
   font-weight: 600;
 }
@@ -1085,7 +1276,7 @@ body.proofread-mode .tree-pane {
 }
 
 .scope-icon.scope-none {
-  color: #e2554f;
+  color: var(--fail-text);
 }
 
 .scope-icon.scope-col,
@@ -1175,7 +1366,7 @@ body.proofread-mode .tree-pane {
 }
 
 .table-preview-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .table-preview-dialog-body {
@@ -1214,7 +1405,7 @@ body.proofread-mode .tree-pane {
 }
 
 .editor-table th {
-  background: #14151a;
+  background: var(--panel-sunken);
   color: var(--text);
   font-weight: 600;
 }
@@ -1339,7 +1530,7 @@ body.proofread-mode .tree-pane {
 }
 
 .shortcuts-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .shortcuts-header {
@@ -1427,7 +1618,7 @@ body.proofread-mode .tree-pane {
 }
 
 .help-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .help-body {
@@ -1529,7 +1720,7 @@ kbd {
 }
 
 .ai-batch-progress-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
   cursor: wait;
 }
 
@@ -1589,7 +1780,7 @@ body.busy-cursor * {
 }
 
 .about-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .about-body {
@@ -1659,7 +1850,7 @@ body.busy-cursor * {
 }
 
 .settings-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .settings-body {
@@ -1701,6 +1892,41 @@ body.busy-cursor * {
   flex: none;
   width: 15px;
   height: 15px;
+}
+
+/* Preferences > Appearance > Color theme. A real fieldset/legend rather than
+   a styled div and a <p>, so the four radios are announced as one named
+   group - this is the theme picker in an accessibility tool, and it would be
+   a poor look for the control itself to be the unlabelled one. The UA's own
+   fieldset border and padding are cleared; the legend just reads as another
+   settings sub-heading. */
+.field-radio-group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+}
+
+.field-radio-group legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.field-radio {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.field-radio input[type='radio'] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
 }
 
 /* Preferences dialog extra-Delete-key recorder row - the label stacks above
@@ -1745,7 +1971,7 @@ body.busy-cursor * {
   width: 60px;
   text-align: center;
   background: var(--panel-alt);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   color: var(--text-dim);
   padding: 3px 4px;
@@ -1798,7 +2024,7 @@ body.busy-cursor * {
   border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-dialog);
 }
 
 .find-replace-dialog[open] {
@@ -1832,7 +2058,7 @@ body.busy-cursor * {
 }
 
 .scripts-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .scripts-body {
@@ -1932,7 +2158,7 @@ body.busy-cursor * {
   width: 120px;
   background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   padding: 4px 6px;
   font-size: 12px;
@@ -1987,7 +2213,7 @@ body.busy-cursor * {
 }
 
 .verify-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 
 .verify-notice {
@@ -1996,7 +2222,7 @@ body.busy-cursor * {
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-dim);
-  background: rgba(127, 127, 127, 0.1);
+  background: var(--surface-subtle);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2051,19 +2277,46 @@ body.busy-cursor * {
   gap: 8px;
 }
 
+/* Was an 8x8 colored circle with no text, no glyph and no accessible name,
+   which made pass/fail/warn/na distinguishable by hue alone - a WCAG 1.4.1
+   failure, and silent to a screen reader. In the output of this app's own
+   accessibility checker, of all places.
+
+   Now a glyph carries the state and the color only reinforces it (see
+   VERIFY_STATUS in verify.js, which also supplies the visually-hidden
+   name). Drawing it as text rather than as a filled dot is deliberate: the
+   status colors are already verified as text against --panel, so there is
+   no new fill/glyph pair to keep above 4.5:1. */
 .verify-status {
   flex: none;
-  width: 8px;
-  height: 8px;
-  margin-top: 3px;
-  border-radius: 50%;
-  background: var(--text-faint);
+  width: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--na-text);
 }
 
-.verify-status-pass { background: var(--pass-text); }
-.verify-status-fail { background: var(--fail-text); }
-.verify-status-warn { background: var(--warn-text); }
-.verify-status-na { background: var(--na-text); }
+.verify-status-pass { color: var(--pass-text); }
+.verify-status-fail { color: var(--fail-text); }
+.verify-status-warn { color: var(--warn-text); }
+.verify-status-na { color: var(--na-text); }
+
+/* Removed from the page visually but left in the accessibility tree. Uses
+   the clip-rect idiom rather than display:none or visibility:hidden, both of
+   which would take it out of the tree along with the layout. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 .verify-check-fix-btn {
   flex: none;

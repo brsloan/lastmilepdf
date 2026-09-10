@@ -1,15 +1,60 @@
 :root {
-  --bg: #14141f;
-  --bg-alt: #1b1b2c;
-  --panel: #20213380;
-  --border: #33344a;
-  --text: #e8e8f0;
-  --text-dim: #a9aac0;
-  --accent: #8b7bf0;
-  --accent-2: #4fd1c5;
-  --accent-warn: #e0a544;
+  /* The app's own two palettes, so the site and the product it is selling
+     agree - see the header comment in renderer/styles.css for how they were
+     chosen and what each token is measured against. Token names match that
+     file deliberately: the same name means the same job in both places.
+
+     The site has no preference of its own to store, so it follows the
+     visitor's system setting: dark here, light in the prefers-color-scheme
+     block below. Dark is the base for the same reason it is in the app - a
+     browser that reports nothing still gets a complete palette. */
+  color-scheme: dark;
+
+  --bg: #1b1c21;
+  --panel: #24262d;       /* why-cards, download panel */
+  --panel-alt: #2b2e37;   /* feature cards */
+  --border: #383b46;      /* section rules and card edges - decorative */
+  --border-control: #727889;  /* .btn-secondary's edge, which needs 3:1 */
+
+  --text: #e8e9ec;
+  --text-dim: #9a9ea9;
+
+  --accent: #5fb3a3;        /* fills: nav CTA, primary button */
+  --accent-strong: #86d9c7; /* text: links, eyebrows, the headline highlight */
+  --btn-ink: #10201c;       /* text on an --accent fill */
+  --warn-text: #e3b578;     /* the "what it can't do" column */
+
+  /* Translucent so the sticky nav frosts what scrolls under it; kept as a
+     whole rgba rather than a color-mix because backdrop-filter needs the
+     alpha in the background itself. */
+  --nav-bg: rgba(27, 28, 33, 0.9);
+  --shadow-screenshot: 0 30px 80px -20px rgba(0, 0, 0, 0.6);
+
   --max-width: 1120px;
   --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #ffffff;
+    --panel: #eef0f4;
+    --panel-alt: #e4e7ed;
+    --border: #4a5060;
+    --border-control: #4a5060;
+
+    --text: #000000;
+    --text-dim: #2b303a;
+
+    --accent: #00544a;
+    --accent-strong: #004037;
+    --btn-ink: #ffffff;
+    --warn-text: #5c3600;
+
+    --nav-bg: rgba(255, 255, 255, 0.9);
+    --shadow-screenshot: 0 24px 60px -20px rgba(20, 24, 30, 0.25);
+  }
 }
 
 * {
@@ -29,11 +74,18 @@ body {
 }
 
 a {
-  color: var(--accent-2);
+  color: var(--accent-strong);
 }
 
 img {
   max-width: 100%;
+  /* Required now the screenshots carry width/height attributes. Those are
+     worth having - the browser derives an aspect ratio from them and reserves
+     the right space before the image loads, so nothing jumps - but they also
+     set a used height, and max-width scales every one of these 1920px shots
+     down. Without height: auto the width shrinks and the height stays at
+     1008px, squashing the image. */
+  height: auto;
   display: block;
 }
 
@@ -49,7 +101,7 @@ header.site-nav {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(20, 20, 31, 0.9);
+  background: var(--nav-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
@@ -94,7 +146,7 @@ header.site-nav {
 
 .nav-cta {
   background: var(--accent);
-  color: #100f1a !important;
+  color: var(--btn-ink) !important;
   font-weight: 600;
   padding: 8px 16px;
   border-radius: 8px;
@@ -107,7 +159,7 @@ header.site-nav {
   padding: 76px 0 56px;
   text-align: center;
   background:
-    radial-gradient(ellipse 60% 50% at 50% 0%, rgba(139, 123, 240, 0.18), transparent),
+    radial-gradient(ellipse 60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent),
     var(--bg);
 }
 
@@ -116,9 +168,9 @@ header.site-nav {
   font-size: 0.8rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--accent-2);
-  background: rgba(79, 209, 197, 0.1);
-  border: 1px solid rgba(79, 209, 197, 0.35);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-strong) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 35%, transparent);
   border-radius: 999px;
   padding: 5px 14px;
   margin-bottom: 20px;
@@ -132,7 +184,7 @@ header.site-nav {
 }
 
 .hero h1 .accent {
-  color: var(--accent-2);
+  color: var(--accent-strong);
 }
 
 .hero p.lede {
@@ -165,22 +217,22 @@ header.site-nav {
 
 .btn-primary {
   background: var(--accent);
-  color: #100f1a;
+  color: var(--btn-ink);
 }
 
 .btn-primary:hover {
-  background: #9c8ef5;
+  background: var(--accent-strong);
 }
 
 .btn-secondary {
   background: transparent;
-  border-color: var(--border);
+  border-color: var(--border-control);
   color: var(--text);
 }
 
 .btn-secondary:hover {
-  border-color: var(--accent-2);
-  color: var(--accent-2);
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
 }
 
 .btn small {
@@ -188,11 +240,60 @@ header.site-nav {
   opacity: 0.75;
 }
 
-.screenshot-frame {
+/* ---------- Screenshots ---------- */
+
+/* The frame is separate from any width, so the same border/radius/shadow
+   serves a single full-width shot and each half of the theme pair. */
+.shot-frame {
   border-radius: 12px;
   border: 1px solid var(--border);
   overflow: hidden;
-  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-screenshot);
+}
+
+.shot {
+  margin: 0;
+  min-width: 0; /* a grid item must be allowed to shrink under its image */
+}
+
+.shot-caption {
+  color: var(--text-dim);
+  font-size: 0.92rem;
+  margin-top: 14px;
+  text-align: center;
+  max-width: 62ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.shot-caption strong {
+  color: var(--text);
+}
+
+/* The hero's dark/light pair. Wider than the 980px a single shot gets, since
+   it is carrying two. Captions here are just the theme name, so they sit
+   tight under each frame rather than reading as prose. */
+.theme-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.theme-pair .shot-caption {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 12px;
+}
+
+/* The feature gallery: full-width shots stacked, because a 1920px-wide
+   screenshot in a three-column grid is unreadable. */
+.shot-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 52px;
   max-width: 980px;
   margin: 0 auto;
 }
@@ -233,7 +334,7 @@ section {
 }
 
 .why-card {
-  background: var(--bg-alt);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 26px;
@@ -264,7 +365,7 @@ section {
 }
 
 .feature {
-  background: var(--panel);
+  background: var(--panel-alt);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 22px 22px 20px;
@@ -281,9 +382,13 @@ section {
 .feature h3 .tag-pill {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.72rem;
-  background: rgba(139, 123, 240, 0.18);
-  color: var(--accent);
-  border: 1px solid rgba(139, 123, 240, 0.4);
+  /* --accent-strong, not --accent: putting a color as text on an 18% tint of
+     itself pulls the ground toward the text and left this at 3.99:1 in dark.
+     It also restores the split the rest of the site keeps to - --accent is a
+     fill, --accent-strong is text. */
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 6px;
   padding: 2px 6px;
 }
@@ -301,6 +406,15 @@ section {
   color: var(--text-dim);
   font-size: 0.92rem;
   margin-top: 18px;
+  max-width: 68ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* The same note, but introducing what follows rather than captioning it. */
+.gallery-note-lead {
+  margin-top: 0;
+  margin-bottom: 24px;
 }
 
 /* ---------- Honesty / scope section ---------- */
@@ -318,13 +432,13 @@ section {
 }
 
 .scope-box.good {
-  background: rgba(79, 209, 197, 0.06);
-  border-color: rgba(79, 209, 197, 0.3);
+  background: color-mix(in srgb, var(--accent-strong) 6%, transparent);
+  border-color: color-mix(in srgb, var(--accent-strong) 30%, transparent);
 }
 
 .scope-box.limit {
-  background: rgba(224, 165, 68, 0.06);
-  border-color: rgba(224, 165, 68, 0.3);
+  background: color-mix(in srgb, var(--warn-text) 6%, transparent);
+  border-color: color-mix(in srgb, var(--warn-text) 30%, transparent);
 }
 
 .scope-box h3 {
@@ -348,7 +462,7 @@ section {
 .download-panel {
   max-width: 780px;
   margin: 0 auto;
-  background: var(--bg-alt);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 40px;
@@ -403,7 +517,7 @@ footer a {
 }
 
 footer a:hover {
-  color: var(--accent-2);
+  color: var(--accent-strong);
 }
 
 .footer-links {
@@ -417,6 +531,16 @@ footer a:hover {
   .why-grid,
   .feature-grid {
     grid-template-columns: 1fr 1fr;
+  }
+  /* Two 1920px shots side by side stop being legible well before the layout
+     runs out of room, so the pair stacks earlier than the card grids do. */
+  .theme-pair {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    max-width: 620px;
+  }
+  .shot-stack {
+    gap: 40px;
   }
   .scope-columns {
     grid-template-columns: 1fr;

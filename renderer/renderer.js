@@ -235,6 +235,18 @@ el.btnRevertAiFix.addEventListener('click', async () => {
 // settings.json via main.js (not localStorage) so it's remembered between
 // sessions; this loads the renderer's copy at startup and the Preferences
 // dialog below keeps it in sync when the user changes it.
+// The theme itself is already applied by then - theme-boot.js stamps
+// data-theme on <html> before the first paint, so this only catches up the
+// copy the Preferences radio group reads. Note it holds the *preference*
+// ('auto' included), not the resolved theme on the attribute.
+window.api.getTheme().then((value) => { state.theme = value; });
+
+// Only arrives while the preference is 'auto': the OS was switched between
+// light and dark, so the resolved theme changed underneath us.
+window.api.onThemeChanged((_event, resolved) => {
+  applyResolvedTheme(resolved);
+});
+
 window.api.getShowTagTypeLabel().then((value) => {
   state.showTagTypeLabel = value;
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
@@ -553,6 +565,10 @@ function renderExtraDeleteKeyRow(container) {
 }
 
 window.api.onMenuPreferences(() => {
+  for (const radio of el.preferencesThemeGroup.querySelectorAll('input[name="preferences-theme"]')) {
+    const input = /** @type {HTMLInputElement} */ (radio);
+    input.checked = input.value === state.theme;
+  }
   el.preferencesShowTagTypeLabel.checked = state.showTagTypeLabel;
   el.preferencesAutoSave.checked = state.autoSaveEnabled;
   el.preferencesAutoCheckUpdates.checked = state.autoCheckUpdates;
@@ -568,6 +584,40 @@ el.btnClosePreferences.addEventListener('click', () => el.preferencesDialog.clos
 
 el.preferencesDialog.addEventListener('click', (e) => {
   if (e.target === el.preferencesDialog) el.preferencesDialog.close();
+});
+
+/** Puts a resolved theme ('dark' | 'light') onto <html>.
+ *  Mirrors theme-boot.js, which does the same thing before the first paint:
+ *  dark is the bare :root block, so it is represented by the absence of the
+ *  attribute rather than by data-theme="dark". Switching needs no reload -
+ *  every color in the app resolves through a custom property, so changing
+ *  the attribute re-cascades the whole UI, canvas overlays included. */
+function applyResolvedTheme(resolved) {
+  if (resolved === 'dark') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = resolved;
+}
+
+/** The Appearance radio values, kept in step with index.html and with THEMES
+ *  in main.js. Checked rather than cast, so a typo in the markup fails here
+ *  instead of silently persisting a theme name no palette block matches. */
+const THEME_PREFERENCES = /** @type {const} */ (['auto', 'dark', 'light']);
+
+el.preferencesThemeGroup.addEventListener('change', async (e) => {
+  const input = /** @type {HTMLInputElement} */ (e.target);
+  if (!input || input.name !== 'preferences-theme') return;
+  const value = THEME_PREFERENCES.find((t) => t === input.value);
+  if (!value) {
+    reportError('Unknown color theme', new Error(`"${input.value}" is not a theme`));
+    return;
+  }
+  state.theme = value;
+  try {
+    // main.js does the resolving, so 'auto' is answered with the theme the
+    // OS is currently asking for rather than the string 'auto'.
+    applyResolvedTheme(await window.api.setTheme(value));
+  } catch (err) {
+    reportError('Could not save the color theme', err);
+  }
 });
 
 el.preferencesShowTagTypeLabel.addEventListener('change', () => {

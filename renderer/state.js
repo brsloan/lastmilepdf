@@ -129,6 +129,7 @@ export const state = {
   showAtChanges: false, // Tools > Show AT Changes toggle - see computeAtChangeFlags()
   proofreadMode: false, // View > Proofread toggle - see proofread.js
   pendingPulledActualTextNodeId: null, // nodeId whose Actual Text field currently shows an unconfirmed Proofread Mode content-pull (real value, but not yet applied) - see updateActualTextPlaceholder() in details.js
+  theme: 'auto', // File > Settings > Preferences > Appearance > Color theme - the stored *preference*, so 'auto' | 'dark' | 'light'. The theme actually in force is the data-theme attribute on <html>, stamped before first paint by theme-boot.js; this is only what the radio group shows. Overwritten from the persisted value shortly after startup, see the window.api.getTheme() call below
   showTagTypeLabel: true, // File > Settings > Preferences > Show Tag Type Label - overwritten from the persisted value shortly after startup, see the window.api.getShowTagTypeLabel() call below
   notifyDesktop: true, // File > Settings > Preferences > Desktop Notification - overwritten from the persisted value shortly after startup, see the window.api.getNotifyDesktop() call below
   notifyChime: true, // File > Settings > Preferences > Play Chime - overwritten from the persisted value shortly after startup, see the window.api.getNotifyChime() call below

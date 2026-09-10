@@ -131,6 +131,7 @@ export const el = {
   settingsCustomApiKeyStatus: asElement('settings-custom-api-key-status'),
   preferencesDialog: asDialog('preferences-dialog'),
   btnClosePreferences: asButton('btn-close-preferences'),
+  preferencesThemeGroup: asElement('preferences-theme-group'),
   preferencesShowTagTypeLabel: asInput('preferences-show-tag-type-label'),
   preferencesNotifyDesktop: asInput('preferences-notify-desktop'),
   preferencesNotifyChime: asInput('preferences-notify-chime'),

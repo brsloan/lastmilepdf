@@ -200,6 +200,10 @@ export interface AppState {
   filter: 'all' | 'headings' | 'figures' | 'table';
   /** nodeId -> explicit user toggle; absence means the role-based default. */
   collapseOverrides: Map<string, boolean>;
+  /** The stored Appearance preference, which is why 'auto' is in here. The
+   *  theme actually in force is the data-theme attribute on <html>; this is
+   *  what the Preferences radio group reflects. */
+  theme: 'auto' | 'dark' | 'light';
   showTagTypeLabel: boolean;
 
   // --- the Table Editor dialog -----------------------------------------
