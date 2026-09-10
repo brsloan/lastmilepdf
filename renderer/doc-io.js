@@ -39,6 +39,11 @@ function resetPerDocumentNodeState() {
   state.collapseOverrides.clear();
   state.findReplaceLastMatchId = null;
   state.pendingPulledActualTextNodeId = null;
+  // The rubber-band tool doesn't survive a document change either: its
+  // pending selection is a list of node ids, and leaving the mode armed
+  // would keep the canvas in crosshair mode behind a button the incoming
+  // document may have disabled.
+  setRectSelectActive(false);
 }
 
 /**
@@ -268,10 +273,6 @@ export async function performClose() {
   applyFreshOutline([]);
   setFileName(null);
   markDirty(false);
-
-  // Leaves the rubber-band tool armed-but-empty otherwise: its pending
-  // selection names node ids from the document being closed.
-  setRectSelectActive(false);
 
   el.btnFlatten.disabled = true;
   el.btnScopeTables.disabled = true;

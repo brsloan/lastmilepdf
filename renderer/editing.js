@@ -11,7 +11,6 @@ import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
 import { isListLabelLeaf } from './page-content.js';
-import { clearRectSelect } from './rect-select.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
@@ -303,9 +302,12 @@ export async function tagRectSelection(role) {
 
   try {
     const result = await window.api.wrapLeaves(state.docId, ids, role);
+    // applyFreshTree() drops the pending selection and its overlay as part
+    // of rebuilding the tree, so there's nothing to clear separately here.
+    // On failure it never runs, which leaves the selection in place for the
+    // user to retry - which is what we want.
     applyFreshTree(result.tree);
     applyUndoState(result);
-    clearRectSelect();
 
     if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
     else closeDetails();

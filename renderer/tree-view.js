@@ -22,6 +22,7 @@ import { pruneStaleAiProposals } from './actual-text.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
 import { getPageMcidGraphicsInfo, getPageMcidTextMap, hasDirectContentLeaf } from './page-content.js';
+import { clearRectSelect } from './rect-select.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { buildMcidIndex, findHiddenDocumentWrapperId, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
@@ -673,6 +674,15 @@ export function applyFreshTree(tree) {
   state.hiddenDocumentId = findHiddenDocumentWrapperId(tree);
   state.mcidIndex = tree ? buildMcidIndex(tree) : new Map();
   pruneStaleAiProposals();
+  // A pending rectangle selection is a list of node ids, and every rebuild
+  // reassigns those (see the note above pruneStaleAiProposals) - so after
+  // any edit, undo, or document swap, those ids name different tags than
+  // the user picked out on the page. Dropping the selection here covers
+  // every rebuild at once; leaving it would let the next tagging shortcut
+  // silently retag whatever inherited those ids. Its overlay goes with it,
+  // which is also what stops the boxes from an old document lingering over
+  // a newly opened one.
+  clearRectSelect();
 
   if (state.selectedNodeIds.size > 0) {
     state.selectedNodeIds = new Set(Array.from(state.selectedNodeIds).filter((id) => state.nodesById.has(id)));
