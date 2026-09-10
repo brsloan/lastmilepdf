@@ -2696,15 +2696,23 @@ def reorder_many(doc_id, node_ids, new_parent_id, new_index):
 
 def _is_organizational_role(role):
     """True for the PDF standard grouping/organizational struct types (Div,
-    Sect, Part, Span) - tags that exist purely to wrap other content rather
-    than to describe it - plus any custom type whose name contains "span"
-    (to catch vendor-specific inline-span variants some generators emit
-    under their own namespaced names). Matched case-insensitively since
-    casing on custom types isn't guaranteed."""
+    Sect, Part, Span, Sub) - tags that exist purely to wrap other content
+    rather than to describe it - plus any custom type whose name contains
+    "span" (to catch vendor-specific inline-span variants some generators
+    emit under their own namespaced names). Matched case-insensitively since
+    casing on custom types isn't guaranteed.
+
+    Sub is PDF 2.0's "subdivision" grouping element, most often the subtitle
+    half of a Title. Despite the name it is not subscript - PDF 2.0 added no
+    matching Sup, and subscript is a Span with layout attributes - and no
+    screen reader announces it, so dissolving one costs a reader nothing.
+    Unlike "span" it is matched exactly rather than as a substring: custom
+    names like Subtitle, Subsection and especially Subscript would otherwise
+    be swept up with it, and the last of those does carry semantics."""
     if not role:
         return False
     lowered = role.lower()
-    if lowered in ("div", "sect", "part", "span"):
+    if lowered in ("div", "sect", "part", "span", "sub"):
         return True
     return "span" in lowered
 
@@ -2809,7 +2817,7 @@ def _flatten_organizational_tags(doc, struct_obj, inherited_page):
 
 def flatten_tags(doc_id, node_ids):
     """For each selected tag, recursively removes organizational tags (Div,
-    Sect, Part, Span, and Span-like custom types - see
+    Sect, Part, Span, Sub, and Span-like custom types - see
     _is_organizational_role) found within its subtree, keeping every
     content leaf and non-organizational struct element in place, just
     un-nested by however many wrapping levels get removed. A selected tag

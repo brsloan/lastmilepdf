@@ -190,12 +190,13 @@ function parentOf(tree, id) {
 
 /**
  * Tags that exist only to wrap other content, as flatten_tags() defines them:
- * Div, Sect, Part, Span, and any custom role with "span" in the name.
+ * Div, Sect, Part, Span, Sub, and any custom role with "span" in the name.
+ * "sub" is exact-match only, unlike "span" - see _is_organizational_role().
  */
 function isOrganizational(role) {
   if (!role) return false;
   const lowered = role.toLowerCase();
-  return ['div', 'sect', 'part', 'span'].includes(lowered) || lowered.includes('span');
+  return ['div', 'sect', 'part', 'span', 'sub'].includes(lowered) || lowered.includes('span');
 }
 
 function countOrganizational(tree) {

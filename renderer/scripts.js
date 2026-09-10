@@ -24,7 +24,7 @@ export const ACTION_DEFS = [
   { type: 'smartifact', label: 'Smartifact', hint: 'Artifact full-page image leaves that are the same size as their page' },
   { type: 'repair-orphaned-content', label: 'Repair Orphaned Content', hint: "Turn marked content that's neither tagged nor a real artifact into one, so Acrobat's accessibility checker stops flagging it" },
   { type: 'scope-tables', label: 'Scope Tables', hint: "Set Row/Column/Both scope on every table's TH cells based on its header shape" },
-  { type: 'flatten-all', label: 'Flatten All', hint: 'Remove organizational tags (Div/Sect/Part/Span) from the whole document' },
+  { type: 'flatten-all', label: 'Flatten All', hint: 'Remove organizational tags (Div/Sect/Part/Span/Sub) from the whole document' },
   { type: 'find-replace', label: 'Find/Replace', hint: 'Relabel every tag of one type to another' },
   { type: 'fix-actual-text-ai', label: 'Fix All Actual Text (AI)', hint: "Send every tag's Actual Text to AI together for document-wide consistency" },
 ];

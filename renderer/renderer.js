@@ -2009,7 +2009,7 @@ window.api.onMenuSaveAndClose(async () => {
   }
 });
 
-// Flattens organizational tags (Div/Sect/Part/Span and Span-like custom
+// Flattens organizational tags (Div/Sect/Part/Span/Sub and Span-like custom
 // types - see flatten_tags() in tag_worker.py) found within each selected
 // tag's subtree, keeping their contents in place. Falls back to the whole
 // document (root) when nothing is selected, so the button still does
