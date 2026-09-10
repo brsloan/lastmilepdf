@@ -27,7 +27,7 @@ const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
 
-const FIXTURES = ['test-complex-generated.pdf'];
+const FIXTURES = ['test-complex.pdf'];
 
 // Run only against the tests that need them, not the whole suite - each is
 // here for one specific shape the main fixture doesn't have.

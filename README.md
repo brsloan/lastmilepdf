@@ -350,7 +350,7 @@ can see that. Nearly every test therefore has the same shape:
 An edit that only holds until you close the file is exactly the failure mode
 worth catching, and it is invisible from inside the running app.
 
-The suite runs against three checked-in fixture PDFs. `test-complex-generated.pdf`
+The suite runs against three checked-in fixture PDFs. `test-complex.pdf`
 carries the bulk of it: alt text and Actual Text, document title/author/language,
 role changes, delete, insert, reorder, undo/redo, flatten,
 figure-from-rectangle, list grouping, table scoping and structure, bookmarks,

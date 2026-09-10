@@ -2,7 +2,7 @@
 standard-14 face carrying no /Widths.
 
 That combination is what standard_fonts.py exists for, and none of the other
-fixtures have it: every font in test-complex-generated.pdf embeds its own
+fixtures have it: every font in test-complex.pdf embeds its own
 metrics. Without this the AFM path would only ever be exercised by documents
 outside the repo.
 

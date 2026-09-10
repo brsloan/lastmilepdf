@@ -10,7 +10,7 @@ the content under it silently repoints at another page's marked content.
 MCIDs restart per page, so "another page's MCID 0" is real content owned by
 some other tag, not a blank.
 
-test-complex-generated.pdf has plenty of organizational tags but none that
+test-complex.pdf has plenty of organizational tags but none that
 straddle a page break, so the recovery paths in
 _flatten_organizational_tags() would otherwise go untested. This fixture is
 built to hit all three of them, and its MCID numbers deliberately collide
