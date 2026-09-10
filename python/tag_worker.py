@@ -597,7 +597,7 @@ def _highest_fully_selected_ancestor(doc, leaf_id, selected_ids, stop_ids):
     return best
 
 
-def wrap_leaves(doc_id, node_ids, role):
+def wrap_leaves(doc_id, node_ids, role, use_label=False):
     """Groups the content leaves in `node_ids` - which, unlike
     _group_into_container()'s input, may sit under several different parents
     - into one new struct element with role `role`, and discards any source
@@ -621,7 +621,7 @@ def wrap_leaves(doc_id, node_ids, role):
     doc = documents[doc_id]
     _validate_leaf_selection(doc, node_ids)
     _push_undo_snapshot(doc)
-    return _wrap_leaves_impl(doc_id, node_ids, role)
+    return _wrap_leaves_impl(doc_id, node_ids, role, use_label)
 
 
 def _validate_leaf_selection(doc, node_ids):
@@ -656,6 +656,21 @@ _POSITION_CONSTRAINED_ROLES = {
 # the whole original passage and would be wrong on a fragment, and an /ID
 # has to stay unique.
 _DIVIDED_TAG_KEYS = ("/S", "/Pg", "/Lang")
+
+
+def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label):
+    """Fills a freshly built tag's /K with the leaves the rectangle picked.
+
+    An LI is the exception: its content is always the Lbl/LBody pair, never
+    bare leaves, so it goes through the same _set_li_content() the 'I'
+    shortcut uses rather than getting the leaves directly."""
+    if role == "LI":
+        _set_li_content(doc, elem, leaf_ids, use_label)
+        return
+    for leaf_obj in leaf_objs:
+        if isinstance(leaf_obj, pikepdf.Dictionary):
+            leaf_obj["/P"] = elem
+    elem["/K"] = pikepdf.Array(leaf_objs)
 
 
 def _sibling_split_plan(doc, ordered_ids, stop_ids):
@@ -696,7 +711,7 @@ def _sibling_split_plan(doc, ordered_ids, stop_ids):
     return parent_id, before, after
 
 
-def _split_container_around(doc_id, plan, ordered_ids, role, page_index):
+def _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_label=False):
     """Divides a tag so the selected run becomes its sibling rather than its
     child: [before] [new tag] [after], dropping either outer piece when the
     selection sits at that end. The original element keeps the leading half
@@ -724,10 +739,8 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index):
     for node_id in ordered_ids:
         leaf_obj = doc["elements"][node_id]
         _remove_kid(parent_obj, leaf_obj)
-        if isinstance(leaf_obj, pikepdf.Dictionary):
-            leaf_obj["/P"] = new_elem
         moved.append(leaf_obj)
-    new_elem["/K"] = pikepdf.Array(moved)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label)
 
     # The original element is always kept, holding whichever half is left,
     # so its own attributes stay with text they were written for. A fresh
@@ -769,7 +782,7 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index):
     }
 
 
-def _wrap_leaves_impl(doc_id, node_ids, role):
+def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False):
     """wrap_leaves() without the undo snapshot, so tag_rect_content() can run
     its cuts and this under a single one."""
     doc = documents[doc_id]
@@ -806,7 +819,7 @@ def _wrap_leaves_impl(doc_id, node_ids, role):
     # not inside it (see _sibling_split_plan).
     plan = _sibling_split_plan(doc, ordered_ids, stop_ids)
     if plan is not None:
-        return _split_container_around(doc_id, plan, ordered_ids, role, page_index)
+        return _split_container_around(doc_id, plan, ordered_ids, role, page_index, use_label)
 
     # Where the new tag goes, decided against the tree as it stands now -
     # before anything is unlinked and the positions move.
@@ -839,8 +852,6 @@ def _wrap_leaves_impl(doc_id, node_ids, role):
             _remove_kid(source_parent_obj, leaf_obj)
             source_parent_ids.append(source_parent_id)
         moved.append(leaf_obj)
-        if isinstance(leaf_obj, pikepdf.Dictionary):
-            leaf_obj["/P"] = new_elem
     new_elem["/K"] = pikepdf.Array(moved)
 
     _insert_kid(anchor_parent_obj, new_elem, insert_index)
@@ -854,7 +865,7 @@ def _wrap_leaves_impl(doc_id, node_ids, role):
     }
 
 
-def tag_rect_content(doc_id, page_index, selections, role):
+def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     """The page preview's rectangle selection, when the rectangle cuts
     through content rather than only around it: divides each partially
     covered leaf at the rectangle's edges, then groups everything the
@@ -957,7 +968,7 @@ def tag_rect_content(doc_id, page_index, selections, role):
             raise ValueError("Lost track of a content leaf after splitting it")
         kept_ids.append(leaf_id)
 
-    result = _wrap_leaves_impl(doc_id, kept_ids, role)
+    result = _wrap_leaves_impl(doc_id, kept_ids, role, use_label)
     result["cutCount"] = cuts_made
     # The one command here besides split_leaf() that rewrites a page's
     # content stream, so the renderer's pdf.js copy needs the new bytes -
@@ -4499,11 +4510,13 @@ def main():
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
             elif cmd == "wrap_leaves":
-                result = wrap_leaves(request["docId"], request["nodeIds"], request["role"])
+                result = wrap_leaves(request["docId"], request["nodeIds"], request["role"],
+                                     request.get("useLabel", False))
             elif cmd == "tag_rect_content":
                 result = tag_rect_content(
                     request["docId"], request["pageIndex"],
-                    request["selections"], request["role"])
+                    request["selections"], request["role"],
+                    request.get("useLabel", False))
             elif cmd == "add_table_row":
                 result = add_table_row(request["docId"], request["tableId"])
             elif cmd == "add_table_column":

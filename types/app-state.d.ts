@@ -120,6 +120,8 @@ export interface RectSelectHit {
   splittable: boolean;
   /** Per-character geometry, when the worker could measure this leaf's font. */
   glyphs: GlyphBox[] | null;
+  /** The text the rectangle covers, where it can be known. */
+  runText: string | null;
   /** The covered run, as offsets into the leaf's decoded text; null when there's nothing to cut by. */
   run: { startIndex: number; endIndex: number } | null;
 }

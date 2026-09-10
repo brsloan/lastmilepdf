@@ -134,10 +134,11 @@ const api = {
    * @param {number} pageIndex 0-based
    * @param {import('./types/domain').RectSelection[]} selections
    * @param {string} role
+   * @param {boolean} [useLabel] For an LI, split its first piece into a Lbl.
    * @returns {Promise<import('./types/domain').TagRectContentResult>}
    */
-  tagRectContent: (docId, pageIndex, selections, role) =>
-    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role }),
+  tagRectContent: (docId, pageIndex, selections, role, useLabel = false) =>
+    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role, useLabel }),
   /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}

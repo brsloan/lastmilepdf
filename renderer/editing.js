@@ -10,7 +10,7 @@
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
-import { isListLabelLeaf } from './page-content.js';
+import { isListLabelLeaf, looksLikeListLabel } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
@@ -312,8 +312,25 @@ export async function tagRectSelection(role) {
   }));
   const pageIndex = state.currentPage - 1;
 
+  // An LI splits into Lbl + LBody when its first piece is a bare marker,
+  // and into a single LBody otherwise - the same question the tree's own
+  // 'I' shortcut asks, answered from the text the rectangle covered rather
+  // than from a leaf's full text, since a cut may have taken only part of
+  // one. "First" here is reading order down the page, which is where a
+  // bullet sits relative to the words it introduces.
+  let useLabel = false;
+  if (role === 'LI') {
+    const inReadingOrder = [...hits].sort((a, b) => {
+      const ay = Math.min(...a.rects.map((r) => r.y));
+      const by = Math.min(...b.rects.map((r) => r.y));
+      if (Math.abs(ay - by) > 1) return ay - by;
+      return Math.min(...a.rects.map((r) => r.x)) - Math.min(...b.rects.map((r) => r.x));
+    });
+    useLabel = inReadingOrder.length > 1 && looksLikeListLabel(inReadingOrder[0].runText);
+  }
+
   try {
-    const result = await window.api.tagRectContent(state.docId, pageIndex, selections, role);
+    const result = await window.api.tagRectContent(state.docId, pageIndex, selections, role, useLabel);
     // A cut rewrites the page's content stream, so pdf.js is now holding
     // bytes that no longer describe the page. Re-feed it before the tree
     // update below asks it to draw a highlight against those positions.

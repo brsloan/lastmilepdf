@@ -1765,7 +1765,8 @@ function findTagShortcutAction(key) {
 // to their normal behaviour (see the handler below).
 const RECT_SELECT_ROLES = {
   h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
-  paragraph: 'P', td: 'TD', th: 'TH', caption: 'Caption', figure: 'Figure',
+  paragraph: 'P', listItem: 'LI', td: 'TD', th: 'TH',
+  caption: 'Caption', figure: 'Figure',
 };
 
 window.addEventListener('keydown', (e) => {
@@ -1779,13 +1780,24 @@ window.addEventListener('keydown', (e) => {
 
   // A rectangle selection takes priority over whatever is selected in the
   // tree: the user just drew a box and is answering "as what?".
+  //
+  // Every tagging shortcut is answered here, including the ones a fresh
+  // selection can't do - falling through to the tree meant a keystroke aimed
+  // at the box silently restructured whichever tag happened to be selected
+  // in the tree instead, which is about the least helpful thing it could do.
   if (state.rectSelectPending && state.rectSelectPending.length > 0) {
+    e.preventDefault();
     const role = RECT_SELECT_ROLES[action];
     if (role) {
-      e.preventDefault();
       tagRectSelection(role);
-      return;
+    } else {
+      // list/table/tr/join all regroup tags that already exist, which isn't
+      // something a rectangle full of content can be turned into in one step.
+      const label = TAG_SHORTCUT_ACTIONS.find((a) => a.id === action)?.label || action;
+      setStatus(`"${label}" works on tags in the tree, not on a selection from the page.`
+        + ' Tag the selection first, or press Esc to drop it.');
     }
+    return;
   }
 
   if (state.selectedNodeIds.size === 0) return;

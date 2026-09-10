@@ -596,14 +596,21 @@ function firstLeafNode(nodeId) {
 // at all both simply fail the test. Backs the 'L' and 'I' shortcuts -
 // tag_worker.py has no text extraction of its own, so this decision has to
 // be made here and passed down as a plain boolean per node id.
+// The same test against text the caller already has. The rectangle tool
+// knows its selected run's text from the glyph boxes, so it has no node to
+// look up - but the question, and the answer, must stay identical to the
+// tree's own 'I' shortcut.
+export function looksLikeListLabel(text) {
+  return LIST_LABEL_RE.test((text || '').trim());
+}
+
 export async function isListLabelLeaf(nodeId) {
   const leaf = firstLeafNode(nodeId);
   if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined
       || leaf.page === null || leaf.page === undefined) {
     return false;
   }
-  const text = await resolveMcidText(leaf.page, leaf.mcid);
-  return LIST_LABEL_RE.test((text || '').trim());
+  return looksLikeListLabel(await resolveMcidText(leaf.page, leaf.mcid));
 }
 
 // Collects a tag's own content text (its content-leaf descendants' text,

@@ -181,6 +181,10 @@ export function hitsForRect(box, leafRects, leafIndex, pageGlyphs = null) {
       coverage,
       full,
       glyphs: glyphs || null,
+      // The text the rectangle actually covers, where it can be known.
+      // Tagging as a list item needs it, to tell a bare bullet apart from
+      // ordinary body text the same way the tree's 'I' shortcut does.
+      runText: glyphs ? textOfRun(glyphs, run) : null,
       // The run to keep, as character offsets into this leaf's own decoded
       // text. Null when there's nothing to cut (the leaf is fully covered)
       // or nothing we can cut by (its font wasn't measurable, or the
@@ -248,6 +252,20 @@ export function splitIndexAtX(glyphs, edgeX) {
     index += glyph.text.length;
   }
   return index;
+}
+
+// The text a run covers, or the whole leaf's text when there's no run to
+// narrow it to (a fully covered leaf).
+function textOfRun(glyphs, run) {
+  if (!run) return glyphs.map((g) => g.text).join('');
+  let offset = 0;
+  let out = '';
+  for (const g of glyphs) {
+    const start = offset;
+    offset += g.text.length;
+    if (start >= run.startIndex && start < run.endIndex) out += g.text;
+  }
+  return out;
 }
 
 // The glyph boxes a run covers, merged into one rect per line so the overlay

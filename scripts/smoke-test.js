@@ -727,6 +727,57 @@ async function editTests(fixture) {
     assertEqual(holder.role, 'LBody', 'the run escaped its list body');
   }));
 
+  await test('tagging a selection as a list item builds the LBody', () => withDoc(fixture, async (doc) => {
+    // An LI's content is always the Lbl/LBody pair, never bare leaves -
+    // the rectangle path goes through the same _set_li_content() the tree's
+    // 'I' shortcut uses, rather than dropping the leaves straight in.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, offsets } = target;
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: null }],
+      role: 'LI',
+      useLabel: false,
+    });
+
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.role, 'LI', 'the new tag is not an LI');
+    assertEqual(li.children.length, 1, 'an unlabelled LI should hold one LBody');
+    assertEqual(li.children[0].role, 'LBody', 'the LI holds bare content, not an LBody');
+    assert(li.children[0].children.length > 0, 'the LBody came out empty');
+
+    await saveAndReopen(doc.docId, 'rect-list-item', (reopened) => {
+      const items = byRole(reopened.tree, 'LI');
+      assert(items.some((n) => n.children.some((c) => c.role === 'LBody')),
+        'the LI/LBody shape did not survive save');
+    });
+  }));
+
+  await test('a labelled list item splits into Lbl and LBody', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, offsets } = target;
+
+    // Two selections from one leaf: the first stands in for a bullet, so
+    // useLabel splits them into Lbl + LBody rather than one LBody.
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [
+        { nodeId: leaf.id, startIndex: 0, endIndex: offsets[2] },
+      ],
+      role: 'LI',
+      useLabel: true,
+    });
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 2, 'a labelled LI should hold a Lbl and an LBody');
+    assertEqual(li.children[0].role, 'Lbl', 'the first child should be the Lbl');
+    assertEqual(li.children[1].role, 'LBody', 'the second child should be the LBody');
+  }));
+
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
     const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
     if (!leaf) skip('fixture has no placed content leaves');
