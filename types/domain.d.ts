@@ -140,6 +140,86 @@ export interface InsertResult extends MutationResult {
 }
 
 /**
+ * What the 'L' and 'I' shortcuts return. `pdfBase64` is present only when a
+ * list marker had to be cut off the text it shared a leaf with, since that -
+ * unlike relabelling - rewrites the page's content stream and leaves pdf.js
+ * holding stale bytes.
+ */
+export interface ListResult extends MutationResult {
+  pdfBase64?: string;
+}
+
+/** One character's box on a page, in PDF page space. */
+export interface CodeBox {
+  /** The marked-content id whose span painted it. */
+  mcid: number;
+  /** Its index within that span, counting from 0. */
+  seq: number;
+  /** What it decodes to via /ToUnicode - usually one character, but a ligature can be more. */
+  text: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** Text render mode 3 - painted invisibly, as an OCR layer over a scan is. */
+  invisible: boolean;
+}
+
+/**
+ * `get_page_code_boxes()`'s result. `refusals` maps an mcid (as a string,
+ * since it crosses JSON) to why the engine declined to measure that span -
+ * such a span can still be selected whole, just not split.
+ */
+export interface PageCodeBoxes {
+  pageIndex: number;
+  boxes: CodeBox[];
+  refusals: Record<string, string>;
+}
+
+/**
+ * `wrap_leaves()`'s result - the page preview's rectangle-select tagging.
+ * `relabelled` is true when the selection turned out to be exactly one
+ * tag's whole content, so that tag's own /S was retyped in place instead of
+ * a new tag being built around it; `newNodeId` then names that same tag.
+ * `removedTagCount` is how many source tags the move left empty and the
+ * worker therefore discarded (including ancestors emptied in turn).
+ */
+export interface WrapLeavesResult extends InsertResult {
+  relabelled: boolean;
+  removedTagCount: number;
+}
+
+/**
+ * One leaf a rectangle covered, and which run of its text. Offsets index the
+ * leaf's own decoded text - the same string `get_leaf_text()` returns.
+ */
+export interface RectSelection {
+  nodeId: string;
+  /** First covered character; 0 means the run starts at the leaf's start. */
+  startIndex: number;
+  /** One past the last covered character; null means it runs to the end. */
+  endIndex: number | null;
+  /** Where this run's own leading list marker ends, when it has one. */
+  labelSplit?: number | null;
+  /**
+   * Which list item this run belongs to. Runs sharing one become a single
+   * LI - how an entry spanning several lines, or several leaves, stays one
+   * item. Absent means one item per run.
+   */
+  itemIndex?: number | null;
+}
+
+/**
+ * `tag_rect_content()`'s result. `cutCount` is how many content-stream cuts
+ * it made; `pdfBase64` is present only when that is non-zero, since only a
+ * cut changes the bytes pdf.js is showing.
+ */
+export interface TagRectContentResult extends WrapLeavesResult {
+  cutCount: number;
+  pdfBase64?: string;
+}
+
+/**
  * `figure_from_rect()`'s result. `method` records which of the two tagging
  * strategies the worker picked for the drawn rectangle - see the section
  * comment above figure_from_rect() in tag_worker.py.
@@ -250,6 +330,13 @@ export interface UndoRedoResult extends UndoState {
   tree: TagNode | null;
   outline: BookmarkNode[];
   docInfo: DocInfo;
+  /**
+   * The restored document's bytes, present only when stepping here changes
+   * what a page paints - a split or an artifacting delete rewrites a content
+   * stream, and pdf.js has to be re-fed or it keeps parsing the bytes from
+   * the other side of the edit. Absent for the ordinary tag-only edit.
+   */
+  pdfBase64?: string;
 }
 
 /** What the outline-mutating commands return. */

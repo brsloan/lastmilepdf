@@ -110,6 +110,18 @@ except ImportError:
     sys.stdout.flush()
     sys.exit(1)
 
+# The font and matrix primitives this file used to define itself. They moved
+# to glyph_metrics.py so that module and this one can both use them without
+# importing each other, and are aliased back to their original private names
+# here so every call site in this file reads as it always did.
+from glyph_metrics import (  # noqa: E402
+    font_tounicode as _font_tounicode,
+    mat_apply as _mat_apply,
+    mat_mult as _mat_mult,
+    resolve_inherited as _resolve_inherited,
+)
+import glyph_metrics  # noqa: E402
+
 
 # doc_id -> {"pdf": pikepdf.Pdf, "elements": {node_id: Dictionary}, "parent_map": {node_id: parent_id}, "counter": int}
 documents = {}
@@ -524,6 +536,539 @@ def set_role_or_wrap(doc_id, node_ids, role):
             _wrap_leaf(doc, node_id, role)
 
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+
+
+def _prune_emptied(doc, candidate_ids, protected_ids):
+    """Unlinks every struct element in `candidate_ids` that a just-completed
+    move left with no /K at all, then repeats upward: removing an emptied
+    <P> can empty the <Div> that held it. Returns how many were removed.
+
+    Safe precisely because an empty element owns no marked content - so
+    unlinking one can't orphan an MCID, and none of delete_nodes()'s
+    _artifact_leaves() machinery applies here (that exists for removing tags
+    that still *own* content; this content moved rather than being deleted).
+
+    `protected_ids` never gets pruned however empty it looks - the caller
+    passes the /Document wrapper, since a document with no /Document element
+    is worse than one with an empty one. Mirrors what join_tags() already
+    does to its emptied source tags, so the editor has one convention for
+    this rather than two."""
+    removed = 0
+    pending = list(candidate_ids)
+    while pending:
+        node_id = pending.pop()
+        if node_id is None or node_id == "root" or node_id in protected_ids:
+            continue
+        if doc["node_kind"].get(node_id) != "element":
+            continue
+        obj = doc["elements"].get(node_id)
+        if obj is None or _iter_kids(obj):
+            continue
+        parent_id = doc["parent_map"].get(node_id)
+        parent_obj = doc["elements"].get(parent_id) if parent_id is not None else None
+        if parent_obj is None:
+            continue
+        _remove_kid(parent_obj, obj)
+        removed += 1
+        pending.append(parent_id)  # may itself be empty now
+    return removed
+
+
+def _highest_fully_selected_ancestor(doc, leaf_id, selected_ids, stop_ids):
+    """Walking up from `leaf_id`, the highest ancestor whose every content
+    leaf is in `selected_ids` - i.e. the largest existing tag the selection
+    completely consumes. `leaf_id` itself when no ancestor qualifies.
+
+    This is what decides where wrap_leaves() puts its new tag. Dragging a
+    rectangle over a whole paragraph should leave <H2> exactly where <P>
+    was, not <P><H2>...</H2></P> - which is what anchoring to the leaf's own
+    slot (the way _wrap_leaf does, correctly, for a single hand-picked leaf)
+    would produce here."""
+    best = leaf_id
+    walker = doc["parent_map"].get(leaf_id)
+    while walker is not None and walker not in stop_ids and walker != "root":
+        if doc["node_kind"].get(walker) != "element":
+            break
+        leaves = _collect_leaf_ids(doc, walker)
+        if not leaves or any(lid not in selected_ids for lid in leaves):
+            break
+        best = walker
+        walker = doc["parent_map"].get(walker)
+    return best
+
+
+def wrap_leaves(doc_id, node_ids, role, use_label=False, label_split=None):
+    """Groups the content leaves in `node_ids` - which, unlike
+    _group_into_container()'s input, may sit under several different parents
+    - into one new struct element with role `role`, and discards any source
+    tag the move leaves empty. Backs the page preview's rectangle-select
+    tagging (see rect-select.js).
+
+    Two shapes, because the common case deserves the better answer:
+      - The selection is exactly one element's entire leaf set: relabel that
+        element's /S in place, the same as set_role_or_wrap() does for an
+        element. Nothing moves, and the tag keeps its own /Alt, /Lang and
+        /ActualText - which a wrap-then-discard would throw away.
+      - Otherwise: build a new element, move every selected leaf into it in
+        document order, and slot it where the highest fully-consumed tag
+        used to sit (see _highest_fully_selected_ancestor).
+
+    Every leaf must be on one page. A rectangle is per-page by construction,
+    so this only ever fires on a malformed request - but a bare MCID leaf
+    inherits its page from its containing element (see the module
+    docstring), so grouping across pages would silently relabel which page
+    the content points at, exactly as reorder_many() refuses to."""
+    doc = documents[doc_id]
+    _validate_leaf_selection(doc, node_ids)
+    _push_undo_snapshot(doc)
+    return _wrap_leaves_impl(doc_id, node_ids, role, use_label, label_split)
+
+
+def _validate_leaf_selection(doc, node_ids):
+    """Checks a rectangle selection before anything is mutated, and returns
+    the page every leaf sits on."""
+    if not node_ids:
+        raise ValueError("No content selected")
+    for node_id in node_ids:
+        if node_id not in doc["elements"]:
+            raise ValueError(f"Unknown node id: {node_id}")
+        if doc["node_kind"].get(node_id) not in ("content-int", "content-dict"):
+            raise ValueError("Rectangle selection can only group content, not tags")
+    pages = {doc["node_pages"].get(nid) for nid in node_ids}
+    if len(pages) != 1:
+        raise ValueError("Can't group content from more than one page into a single tag")
+    return next(iter(pages))
+
+
+# Roles whose place among their siblings is fixed by their parent's own
+# structure: a TR's siblings are TRs, a TD's are cells, an LI's are list
+# items. Dividing one of these into two siblings would be structurally wrong,
+# so a selection inside one nests as before - which is correct there anyway,
+# since a P inside a TD or an LBody is ordinary.
+_POSITION_CONSTRAINED_ROLES = {
+    "Table", "THead", "TBody", "TFoot", "TR", "TD", "TH",
+    "L", "LI", "Lbl", "LBody", "TOC", "TOCI",
+}
+
+# Copied onto the trailing half when a tag is divided. /S and /Pg identify
+# what the half *is*; /Lang is a property of any subset of the text. /Alt,
+# /ActualText and /ID deliberately don't come along: the first two describe
+# the whole original passage and would be wrong on a fragment, and an /ID
+# has to stay unique.
+_DIVIDED_TAG_KEYS = ("/S", "/Pg", "/Lang")
+
+
+def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label,
+                         label_split=None, li_items=None):
+    """Fills a freshly built tag's /K with the leaves the rectangle picked.
+
+    Two roles never hold bare leaves. An LI's content is always the
+    Lbl/LBody pair, so it goes through the same _set_li_content() the 'I'
+    shortcut uses; and a list holds LI elements, one per run the rectangle
+    covered, rather than the runs themselves."""
+    if role == "LI":
+        _set_li_content(doc, elem, leaf_ids, use_label, label_split)
+        return
+    if role == "L" and li_items:
+        _fill_list(doc, elem, li_items)
+        return
+    for leaf_obj in leaf_objs:
+        if isinstance(leaf_obj, pikepdf.Dictionary):
+            leaf_obj["/P"] = elem
+    elem["/K"] = pikepdf.Array(leaf_objs)
+
+
+def _fill_list(doc, list_elem, li_items):
+    """Populates a new /L with one /LI per item - each item being the leaves
+    of one run the rectangle covered, already cut so that a labelled one
+    leads with its marker."""
+    lis = []
+    for item in li_items:
+        li = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/S": pikepdf.Name("/LI"),
+            "/P": list_elem,
+        }))
+        _set_li_content(doc, li, item["leafIds"], item["useLabel"])
+        lis.append(li)
+    list_elem["/K"] = pikepdf.Array(lis)
+
+
+def _sibling_split_plan(doc, ordered_ids, stop_ids):
+    """(parent_id, before, after) when `ordered_ids` is a contiguous run of
+    one tag's own children and that tag can be divided - otherwise None.
+
+    Tagging part of a paragraph as a paragraph should leave two paragraphs
+    side by side, not one nested in the other. Anchoring the new tag at the
+    selected leaf's own slot (which is right for a single hand-picked leaf,
+    as _wrap_leaf does) produces the nested shape instead, so this detects
+    the case and _split_container_around() rebuilds it as siblings.
+    """
+    parent_ids = {doc["parent_map"].get(nid) for nid in ordered_ids}
+    if len(parent_ids) != 1:
+        return None
+    parent_id = next(iter(parent_ids))
+    if parent_id is None or parent_id in stop_ids:
+        return None
+    if doc["node_kind"].get(parent_id) != "element":
+        return None
+    role = str(doc["elements"][parent_id].get("/S", "")).lstrip("/")
+    if role in _POSITION_CONSTRAINED_ROLES:
+        return None
+    # The parent itself needs a parent to become a sibling within.
+    if doc["parent_map"].get(parent_id) is None:
+        return None
+
+    kids = _direct_child_ids(doc, parent_id)
+    positions = [i for i, kid in enumerate(kids) if kid in set(ordered_ids)]
+    if not positions or len(positions) != len(ordered_ids):
+        return None
+    if positions[-1] - positions[0] + 1 != len(positions):
+        return None  # not one unbroken run of the parent's children
+    before = kids[:positions[0]]
+    after = kids[positions[-1] + 1:]
+    if not before and not after:
+        return None  # the whole tag: the relabel-in-place path handles it
+    return parent_id, before, after
+
+
+def _split_container_around(doc_id, plan, ordered_ids, role, page_index,
+                            use_label=False, label_split=None, li_items=None):
+    """Divides a tag so the selected run becomes its sibling rather than its
+    child: [before] [new tag] [after], dropping either outer piece when the
+    selection sits at that end. The original element keeps the leading half
+    (so its own attributes stay with the text they were written for); only a
+    trailing half needs a fresh element, built by _DIVIDED_TAG_KEYS."""
+    doc = documents[doc_id]
+    parent_id, before, after = plan
+    parent_obj = doc["elements"][parent_id]
+    grandparent_id = doc["parent_map"][parent_id]
+    grandparent_obj = doc["elements"][grandparent_id]
+
+    at = _kid_index(grandparent_obj, parent_obj)
+    if at == -1:
+        raise ValueError("Could not locate the containing tag in its parent")
+
+    new_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+        "/P": grandparent_obj,
+    }))
+    if page_index is not None:
+        new_elem["/Pg"] = doc["pdf"].pages[page_index].obj
+
+    moved = []
+    for node_id in ordered_ids:
+        leaf_obj = doc["elements"][node_id]
+        _remove_kid(parent_obj, leaf_obj)
+        moved.append(leaf_obj)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
+
+    # The original element is always kept, holding whichever half is left,
+    # so its own attributes stay with text they were written for. A fresh
+    # element is only needed when the selection came out of the middle and
+    # there are two halves to hold.
+    if before and after:
+        tail_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/P": grandparent_obj,
+        }))
+        for key in _DIVIDED_TAG_KEYS:
+            if key in parent_obj:
+                tail_elem[key] = parent_obj[key]
+        tail_kids = []
+        for node_id in after:
+            kid_obj = doc["elements"][node_id]
+            _remove_kid(parent_obj, kid_obj)
+            if isinstance(kid_obj, pikepdf.Dictionary):
+                kid_obj["/P"] = tail_elem
+            tail_kids.append(kid_obj)
+        tail_elem["/K"] = pikepdf.Array(tail_kids)
+        _insert_kid(grandparent_obj, new_elem, at + 1)
+        _insert_kid(grandparent_obj, tail_elem, at + 2)
+    elif before:
+        # The selection ran to the end: the original keeps the head, and the
+        # new tag follows it.
+        _insert_kid(grandparent_obj, new_elem, at + 1)
+    else:
+        # The selection started at the beginning: the original keeps the
+        # tail, and the new tag goes in front of it.
+        _insert_kid(grandparent_obj, new_elem, at)
+
+    # No pruning needed: the plan only fires when at least one of before/
+    # after is non-empty, so the original always retains content.
+    tree = _rebuild_after_mutation(doc_id)
+    return {
+        "tree": tree, "newNodeId": _node_id_for_object(doc, new_elem),
+        "removedTagCount": 0, "relabelled": False, **_undo_state(doc),
+    }
+
+
+def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None, li_items=None):
+    """wrap_leaves() without the undo snapshot, so tag_rect_content() can run
+    its cuts and this under a single one."""
+    doc = documents[doc_id]
+    page_index = _validate_leaf_selection(doc, node_ids)
+
+    # Document order across arbitrary parents: parent_map is filled in
+    # _walk()'s own depth-first, left-to-right order, so filtering it
+    # preserves that order - the same property _group_into_container()
+    # relies on within a single parent.
+    selected = set(node_ids)
+    ordered_ids = [nid for nid in doc["parent_map"] if nid in selected]
+    if not ordered_ids:
+        raise ValueError("Could not locate the selected content in the tree")
+
+    _, document_parent_id = _document_insertion_parent(doc)
+    stop_ids = {document_parent_id, "root"}
+
+    # Relabel-in-place case: the whole of one tag, and nothing else.
+    parent_ids = {doc["parent_map"].get(nid) for nid in ordered_ids}
+    if len(parent_ids) == 1:
+        sole_parent_id = next(iter(parent_ids))
+        if (sole_parent_id is not None
+                and sole_parent_id not in stop_ids
+                and doc["node_kind"].get(sole_parent_id) == "element"
+                and _collect_leaf_ids(doc, sole_parent_id) == ordered_ids):
+            relabelled_elem = doc["elements"][sole_parent_id]
+            relabelled_elem["/S"] = pikepdf.Name("/" + role)
+            # Retyping to LI isn't enough on its own: a list item's content
+            # is always the Lbl/LBody pair, so rebuild it the same way
+            # convert_to_list_item() does when it relabels an element.
+            if role == "LI":
+                _set_li_content(doc, relabelled_elem, ordered_ids, use_label, label_split)
+            elif role == "L" and li_items:
+                _fill_list(doc, relabelled_elem, li_items)
+            tree = _rebuild_after_mutation(doc_id)
+            return {
+                "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
+                "relabelled": True, **_undo_state(doc),
+            }
+
+    # Part of one tag's own content: the new tag belongs beside that tag,
+    # not inside it (see _sibling_split_plan).
+    plan = _sibling_split_plan(doc, ordered_ids, stop_ids)
+    if plan is not None:
+        return _split_container_around(doc_id, plan, ordered_ids, role, page_index,
+                                       use_label, label_split, li_items)
+
+    # Where the new tag goes, decided against the tree as it stands now -
+    # before anything is unlinked and the positions move.
+    anchor_id = _highest_fully_selected_ancestor(doc, ordered_ids[0], selected, stop_ids)
+    anchor_parent_id = doc["parent_map"].get(anchor_id)
+    if anchor_parent_id is None:
+        raise ValueError("The selected content has no parent tag to group it within")
+    anchor_parent_obj = doc["elements"][anchor_parent_id]
+    insert_index = _kid_index(anchor_parent_obj, doc["elements"][anchor_id])
+    if insert_index == -1:
+        raise ValueError("Could not locate the selected content in its parent")
+
+    new_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+        "/P": anchor_parent_obj,
+    }))
+    # Set /Pg explicitly for the same reason _wrap_leaf() does: the leaves
+    # inside may be bare MCIDs with no page of their own.
+    if page_index is not None:
+        new_elem["/Pg"] = doc["pdf"].pages[page_index].obj
+
+    source_parent_ids = []
+    moved = []
+    for node_id in ordered_ids:
+        leaf_obj = doc["elements"][node_id]
+        source_parent_id = doc["parent_map"].get(node_id)
+        source_parent_obj = doc["elements"].get(source_parent_id) if source_parent_id is not None else None
+        if source_parent_obj is not None:
+            _remove_kid(source_parent_obj, leaf_obj)
+            source_parent_ids.append(source_parent_id)
+        moved.append(leaf_obj)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
+
+    _insert_kid(anchor_parent_obj, new_elem, insert_index)
+    removed_count = _prune_emptied(doc, source_parent_ids, stop_ids)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_node_id = _node_id_for_object(doc, new_elem)
+    return {
+        "tree": tree, "newNodeId": new_node_id, "removedTagCount": removed_count,
+        "relabelled": False, **_undo_state(doc),
+    }
+
+
+def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
+    """The page preview's rectangle selection, when the rectangle cuts
+    through content rather than only around it: divides each partially
+    covered leaf at the rectangle's edges, then groups everything the
+    rectangle actually covers into one new tag with role `role`.
+
+    `selections` is [{"nodeId", "startIndex", "endIndex", "labelSplit"}, ...],
+    the indices being character offsets into that leaf's own decoded text
+    (the same string get_leaf_text() returns), naming the run the rectangle
+    covers. "labelSplit", where a run leads with a list marker, is how far
+    into that run the marker ends - see _split_label_off().
+    A selection covering the whole leaf - startIndex 0 and endIndex at or
+    past its length - needs no cut and is simply taken as it stands, which
+    is how a caller asks for Phase-1 behaviour on a leaf it can't measure.
+
+    Everything happens under one undo snapshot and produces one fresh
+    `pdfBase64`, rather than one of each per cut: split_leaf() pays for both
+    per call because it only ever makes one cut, and a rectangle crossing
+    six paragraphs would otherwise snapshot the whole document six times.
+
+    Cut order matters twice over:
+      - Within a leaf, the *end* cut goes first. The first half of a cut
+        keeps the original MCID, so cutting at the end leaves the run we
+        want inside a leaf still addressable by that same mcid; cutting at
+        the start first would move it into a freshly minted one we'd then
+        have to go and find.
+      - Across leaves, later ones first. Each cut rewrites the page content
+        stream and mints an MCID from it, and working backwards keeps the
+        offsets we were handed pointing at the text they were computed
+        against.
+    """
+    doc = documents[doc_id]
+    if not selections:
+        raise ValueError("No content selected")
+    if page_index < 0 or page_index >= len(doc["pdf"].pages):
+        raise ValueError(f"Page {page_index} is out of range")
+
+    node_ids = [s["nodeId"] for s in selections]
+    selected_page = _validate_leaf_selection(doc, node_ids)
+    if selected_page != page_index:
+        raise ValueError("The selected content isn't on the page it was drawn on")
+
+    # Resolve every leaf's mcid up front: node ids stop being trustworthy the
+    # moment the first cut lands (nothing is re-indexed until the end), but
+    # an mcid names the same marked content throughout.
+    planned = []
+    for selection in selections:
+        node_id = selection["nodeId"]
+        _, mcid = _leaf_page_and_mcid(doc, node_id)
+        planned.append({
+            "nodeId": node_id,
+            "mcid": mcid,
+            "start": int(selection.get("startIndex", 0) or 0),
+            "end": selection.get("endIndex"),
+            # Where this run's own leading list marker ends, when it has one.
+            "label_split": selection.get("labelSplit"),
+            # Which list item this run belongs to. Runs sharing one become a
+            # single LI, which is how an entry spanning several lines - or
+            # several leaves, on a scan that gives every line its own -
+            # stays one item. Absent means one item per run.
+            "item_index": selection.get("itemIndex"),
+        })
+
+    _push_undo_snapshot(doc)
+
+    # Document order, so "later ones first" below is a real reversal rather
+    # than whatever order the renderer happened to send. Several selections
+    # can name the same leaf - a list painted as one run contributes one per
+    # item - so where they start breaks the tie, and cutting back to front
+    # keeps every earlier offset pointing at the text it was measured
+    # against (the left half of a cut keeps the original MCID).
+    order = {nid: i for i, nid in enumerate(doc["parent_map"])}
+    planned.sort(key=lambda p: (order.get(p["nodeId"], 0), p["start"]))
+
+    cuts_made = 0
+    kept = []
+    for plan in reversed(planned):
+        node_id = _leaf_id_for_mcid(doc, page_index, plan["mcid"])
+        if node_id is None:
+            raise ValueError("Lost track of a content leaf while splitting it")
+
+        start = max(0, plan["start"])
+        keep_mcid = plan["mcid"]
+
+        if start == 0 and plan["end"] is None:
+            # The whole leaf, so nothing to cut - and nothing to decode
+            # either. Worth short-circuiting rather than merely skipping the
+            # cut: this is exactly the case a caller uses for a leaf whose
+            # font it couldn't measure, and decoding one of those raises.
+            kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
+                         "item_index": plan["item_index"]})
+            continue
+
+        codes = _decode_leaf(doc, node_id)[5]
+        total = sum(len(c["text"]) for c in codes)
+        end = total if plan["end"] is None else min(int(plan["end"]), total)
+        if start >= end:
+            raise ValueError("A selected run has no text in it")
+        if end < total:
+            _cut_leaf(doc, node_id, end)
+            cuts_made += 1
+            node_id = _leaf_id_for_mcid(doc, page_index, keep_mcid)
+        if start > 0:
+            # The tail of this cut is the run we want, so follow its mcid.
+            _, _, keep_mcid, _, _ = _cut_leaf(doc, node_id, start)
+            cuts_made += 1
+        kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
+                     "item_index": plan["item_index"]})
+
+    tree = _rebuild_after_mutation(doc_id)
+
+    def ids_for(mcids):
+        out = []
+        for mcid in mcids:
+            leaf_id = _leaf_id_for_mcid(doc, page_index, mcid)
+            if leaf_id is None:
+                raise ValueError("Lost track of a content leaf after splitting it")
+            out.append(leaf_id)
+        return out
+
+    # Cuts were applied back to front, so put the survivors into document
+    # order before anything cares which of them comes first.
+    position = {nid: i for i, nid in enumerate(doc["parent_map"])}
+    kept.sort(key=lambda k: position.get(_leaf_id_for_mcid(doc, page_index, k["mcid"]), 0))
+
+    # Each run's own marker gets cut off here rather than in
+    # _set_li_content(), which by then is holding leaves already detached
+    # from their parent - and _cut_leaf() needs a leaf still in place to
+    # splice its other half in beside. A cut that can't be made just leaves
+    # that item unlabelled, which is what it would have been anyway.
+    items = []
+    for entry in kept:
+        split = entry["label_split"]
+        if not split:
+            piece = {"mcids": [entry["mcid"]], "useLabel": False}
+        else:
+            try:
+                _, head_mcid, tail_mcid, _, _ = _cut_leaf(
+                    doc, ids_for([entry["mcid"]])[0], split)
+            except ValueError:
+                piece = {"mcids": [entry["mcid"]], "useLabel": False}
+            else:
+                cuts_made += 1
+                _rebuild_after_mutation(doc_id)
+                piece = {"mcids": [head_mcid, tail_mcid], "useLabel": True}
+        # Runs the caller grouped under one item index are one entry, so
+        # they merge rather than each becoming an LI of their own.
+        if (entry["item_index"] is not None and items
+                and items[-1]["itemIndex"] == entry["item_index"]):
+            items[-1]["mcids"].extend(piece["mcids"])
+            items[-1]["useLabel"] = items[-1]["useLabel"] or piece["useLabel"]
+            continue
+        piece["itemIndex"] = entry["item_index"]
+        items.append(piece)
+
+    flat_ids = [leaf_id for item in items for leaf_id in ids_for(item["mcids"])]
+    if role == "L":
+        # A list is the one role that isn't a single tag over the whole
+        # selection: each run becomes its own LI inside it.
+        li_items = [{"leafIds": ids_for(item["mcids"]), "useLabel": item["useLabel"]}
+                    for item in items]
+        result = _wrap_leaves_impl(doc_id, flat_ids, role, li_items=li_items)
+    else:
+        # Everything else takes the whole selection. For an LI that means one
+        # item, so only the first run's marker can be its Lbl.
+        result = _wrap_leaves_impl(doc_id, flat_ids, role, items[0]["useLabel"] or use_label)
+    result["cutCount"] = cuts_made
+    # The one command here besides split_leaf() that rewrites a page's
+    # content stream, so the renderer's pdf.js copy needs the new bytes -
+    # see split_leaf()'s docstring for why a struct-tree-only edit doesn't.
+    if cuts_made:
+        result["pdfBase64"] = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
+    return result
 
 
 def add_table_row(doc_id, table_id):
@@ -963,7 +1508,63 @@ def _make_leaf_container(doc, role, leaf_ids):
     return elem
 
 
-def _set_li_content(doc, li_elem, leaf_ids, use_label):
+def _make_leaf_container_from_objs(doc, role, leaf_objs, page_index):
+    """_make_leaf_container() for leaves that have no node id yet - the half
+    a just-made cut produced, before the registry has been rebuilt."""
+    elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+    }))
+    if not leaf_objs:
+        return elem
+    if page_index is not None:
+        elem["/Pg"] = doc["pdf"].pages[page_index].obj
+    elem["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
+    return elem
+
+
+def _split_label_off(doc, li_elem, leaf_ids, label_split):
+    """Divides the first leaf at `label_split` so its leading marker can
+    become the Lbl, and fills `li_elem` with the resulting Lbl/LBody pair.
+    True when it worked.
+
+    A well-formed list already gives the marker its own content leaf, and
+    _set_li_content()'s `use_label` promotes that leaf as it stands. Plenty
+    of real documents don't: they paint "* ask clarification questions." as
+    one run, so there is no label leaf to promote and everything used to
+    fall into a single LBody. The marker has to be cut off first, and this
+    is where that happens.
+
+    Returns False, changing nothing, when the cut can't be made - the leaf's
+    font may be one the engine won't measure, or the caller's index may not
+    land on a character boundary. The caller then falls back to the
+    unlabelled shape, which is what it would have produced anyway.
+    """
+    first_id = leaf_ids[0]
+    parent_id = doc["parent_map"].get(first_id)
+    parent_obj = doc["elements"].get(parent_id) if parent_id is not None else None
+    if parent_obj is None:
+        return False
+    try:
+        page_index, _, _, label_obj, body_obj = _cut_leaf(doc, first_id, label_split)
+    except (ValueError, KeyError):
+        return False
+
+    # The cut spliced both halves into the leaf's old parent; they belong in
+    # the Lbl and LBody instead.
+    _remove_kid(parent_obj, label_obj)
+    _remove_kid(parent_obj, body_obj)
+
+    rest = [_kid_for_leaf(doc, lid, page_index) for lid in leaf_ids[1:]]
+    lbl = _make_leaf_container_from_objs(doc, "Lbl", [label_obj], page_index)
+    body = _make_leaf_container_from_objs(doc, "LBody", [body_obj] + rest, page_index)
+    lbl["/P"] = li_elem
+    body["/P"] = li_elem
+    li_elem["/K"] = pikepdf.Array([lbl, body])
+    return True
+
+
+def _set_li_content(doc, li_elem, leaf_ids, use_label, label_split=None):
     """Populates `li_elem`'s /K from `leaf_ids` (already in document
     order): when `use_label` is set, the first leaf becomes a Lbl and every
     remaining leaf (possibly none) becomes an LBody, so the split always
@@ -980,6 +1581,12 @@ def _set_li_content(doc, li_elem, leaf_ids, use_label):
     if not leaf_ids:
         if "/K" in li_elem:
             del li_elem["/K"]
+        return
+
+    # A marker sharing its leaf with the text it introduces has to be cut
+    # off before it can be a Lbl - see _split_label_off, which falls through
+    # to the unlabelled shape below if the cut isn't possible.
+    if label_split and _split_label_off(doc, li_elem, leaf_ids, label_split):
         return
 
     if use_label:
@@ -1073,7 +1680,7 @@ def _group_into_container(doc_id, node_ids, container_role, item_role, preserved
     return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
 
 
-def make_list(doc_id, node_ids, label_flags):
+def make_list(doc_id, node_ids, label_flags, label_splits=None):
     """Groups the selected tags into a newly created List: each one becomes
     an LI whose own content is rebuilt from its collapsed leaves (see
     _leaf_ids_for_li_source), split into a Lbl+LBody pair or a single LBody
@@ -1128,7 +1735,8 @@ def make_list(doc_id, node_ids, label_flags):
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/LI"),
             }))
-        _set_li_content(doc, li, leaf_ids_by_node[node_id], bool(label_flags.get(node_id)))
+        _set_li_content(doc, li, leaf_ids_by_node[node_id],
+                        bool(label_flags.get(node_id)), (label_splits or {}).get(node_id))
         li_elems.append(li)
 
     new_list = doc["pdf"].make_indirect(pikepdf.Dictionary({
@@ -1142,10 +1750,15 @@ def make_list(doc_id, node_ids, label_flags):
 
     _insert_kid(parent_obj, new_list, first_index)
 
-    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+    result = {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+    # Splitting a marker off its text rewrites the page's content stream -
+    # see split_leaf()'s docstring on why the preview needs the new bytes.
+    if any((label_splits or {}).values()):
+        result["pdfBase64"] = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
+    return result
 
 
-def convert_to_list_item(doc_id, node_ids, label_flags):
+def convert_to_list_item(doc_id, node_ids, label_flags, label_splits=None):
     """Converts each selected tag to an LI, the same way set_role_or_wrap()
     handles H1-H6 - a struct element relabeled to /LI in place, a content/
     object-ref leaf wrapped in a brand-new /LI - except an LI's content is
@@ -1166,22 +1779,29 @@ def convert_to_list_item(doc_id, node_ids, label_flags):
         if node_id not in doc["elements"]:
             raise ValueError(f"Unknown node id: {node_id}")
 
+    label_splits = label_splits or {}
     top_level = _top_level_selection(doc, node_ids)
     leaf_ids_by_node = {nid: _leaf_ids_for_li_source(doc, nid) for nid in top_level}
 
     _push_undo_snapshot(doc)
     for node_id in top_level:
         use_label = bool(label_flags.get(node_id))
+        split = label_splits.get(node_id)
         leaf_ids = leaf_ids_by_node[node_id]
         if doc["node_kind"].get(node_id) == "element":
             elem = doc["elements"][node_id]
             elem["/S"] = pikepdf.Name("/LI")
-            _set_li_content(doc, elem, leaf_ids, use_label)
+            _set_li_content(doc, elem, leaf_ids, use_label, split)
         else:
             li = _wrap_leaf(doc, node_id, "LI")
-            _set_li_content(doc, li, leaf_ids, use_label)
+            _set_li_content(doc, li, leaf_ids, use_label, split)
 
-    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+    result = {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+    # Splitting a marker off rewrites the page's content stream, so pdf.js
+    # needs the new bytes - same reasoning as split_leaf()'s docstring.
+    if any(label_splits.values()):
+        result["pdfBase64"] = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
+    return result
 
 
 def make_table(doc_id, node_ids):
@@ -1216,8 +1836,12 @@ def _undo_state(doc):
 
 def _push_undo_snapshot(doc):
     """Call before mutating `doc["pdf"]`, once validation has passed - a
-    new edit always clears the redo stack, same as any standard editor."""
-    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
+    new edit always clears the redo stack, same as any standard editor.
+
+    The content generation is stored with the bytes so undo can tell whether
+    stepping back to them changes what the page paints, and hand the
+    renderer fresh bytes only when it does."""
+    doc["undo_stack"].append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
     if len(doc["undo_stack"]) > MAX_UNDO_DEPTH:
         doc["undo_stack"].pop(0)
     doc["redo_stack"].clear()
@@ -1809,6 +2433,11 @@ def open_document(path):
         "node_kind": {}, "children_map": {}, "counter": 0,
         "page_index_by_objgen": {page.objgen: i for i, page in enumerate(pdf.pages)},
         "undo_stack": [], "redo_stack": [],
+        # Bumped by every edit that rewrites a page's content stream. The
+        # renderer's pdf.js holds its own parse of those bytes, so undo and
+        # redo compare this against the snapshot they restore to know
+        # whether that parse has to be replaced - see undo_edit().
+        "content_gen": 0,
     }
     doc = documents[doc_id]
     outline_tree = _get_outline_tree(doc)
@@ -2501,6 +3130,7 @@ def _artifact_marked_content_on_page(doc, page_index, mcids, fix_orphans=False):
 
     if changed:
         page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
+        doc["content_gen"] += 1
     return fixed
 
 
@@ -2867,7 +3497,7 @@ def join_tags(doc_id, node_ids):
 # text is only as splittable as it is *provably* decodable. Two separate
 # questions have to both be answered with certainty before a single font
 # code can be sliced out of a string operand:
-#   - how many bytes is one code? (_font_code_width) - always 1 for a simple
+#   - how many bytes is one code? (glyph_metrics.font_code_width) - always 1 for a simple
 #     font; for a Type0/CID font, 2 for the near-ubiquitous /Identity-H (or
 #     -V) predefined encoding, or read from an embedded /Encoding CMap's own
 #     codespace range. This deliberately does *not* come from the font's
@@ -2878,7 +3508,7 @@ def join_tags(doc_id, node_ids):
 #     that are all 2-byte) since it exists to be looked up by, not to
 #     describe, the font's real encoding.
 #   - what Unicode text does a code of that width decode to?
-#     (_parse_bf_mappings, reading the font's /ToUnicode bfchar/bfrange)
+#     (glyph_metrics.parse_bf_mappings, reading /ToUnicode bfchar/bfrange)
 # An unrecognized font subtype, an unsupported predefined CMap, a mixed-width
 # embedded CMap, an undecodable code, marked content nested inside the span,
 # or a split point that doesn't land exactly on a character boundary all
@@ -2887,129 +3517,18 @@ def join_tags(doc_id, node_ids):
 # content-stream split can corrupt what a viewer actually paints, which is
 # why this code takes the conservative branch every time it's unsure.
 #
+# Both of those, and the matrix/page-inheritance helpers this section leans
+# on, now live in glyph_metrics.py - which needs them too, to place each
+# character on the page for the rectangle-selection tool. They are imported
+# back under their original private names at the top of this file, so the
+# call sites below read as they always did.
+#
 # get_leaf_text() (read-only) and split_leaf() (mutating) share the same
 # decode pipeline (_decode_leaf) so what the Tag Properties panel shows the
 # user to place a cursor in is *exactly* what split_leaf() will operate on -
 # not pdf.js's own text extraction (which the tag tree's preview elsewhere
 # uses), since any drift between "what you see" and "what gets split" would
 # make the cursor position lie.
-
-def _codespace_widths(text):
-    """The distinct byte-widths declared by every `begincodespacerange`
-    block in a CMap's own text - {len(lo_hex) // 2 for each <lo> <hi> pair}.
-    Shared by _font_code_width() (reading a font's *own* /Encoding CMap,
-    when it's an embedded stream rather than a predefined name) - not used
-    against a /ToUnicode CMap's codespace, which can legitimately be wider
-    than any code it actually maps (see the section docstring above)."""
-    widths = set()
-    for block in re.findall(r"begincodespacerange(.*?)endcodespacerange", text, re.S):
-        for lo, _hi in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
-            widths.add(len(lo) // 2)
-    return widths
-
-
-def _font_code_width(font):
-    """How many bytes one font code occupies in a `Tj`/`TJ`/`'`/`"` string
-    operand for `font` - the width _decode_leaf_content() needs to chop a
-    raw operand into codes, before any /ToUnicode lookup happens at all.
-    Always 1 for a simple font. For a Type0 (composite) font, 2 for the
-    near-ubiquitous predefined /Identity-H or /Identity-V encoding, or
-    whatever a single-width embedded /Encoding CMap's own codespace range
-    declares - any other predefined CMap name, or a mixed-width embedded
-    one, isn't supported (raises ValueError; see the section docstring)."""
-    subtype = str(font.get("/Subtype", ""))
-    if subtype != "/Type0":
-        return 1
-    encoding = font.get("/Encoding")
-    if isinstance(encoding, pikepdf.Name):
-        if str(encoding) in ("/Identity-H", "/Identity-V"):
-            return 2
-        raise ValueError(f"Unsupported predefined CMap encoding: {encoding}")
-    if isinstance(encoding, (pikepdf.Dictionary, pikepdf.Stream)):
-        try:
-            text = bytes(encoding.read_bytes()).decode("latin-1")
-        except Exception as exc:
-            raise ValueError(f"Could not read this font's Encoding CMap: {exc}") from exc
-        widths = _codespace_widths(text)
-        if len(widths) != 1:
-            raise ValueError("This font's Encoding CMap has no single, unambiguous character width")
-        return widths.pop()
-    raise ValueError("This font's character encoding isn't recognized")
-
-
-def _parse_bf_mappings(stream_bytes):
-    """Parses a /ToUnicode CMap stream's `beginbfchar`/`beginbfrange` blocks
-    into {code_int: decoded_str}. This is a light regex-based reader for the
-    predictable shape font-embedding tools actually emit, not a full
-    PostScript interpreter - anything it doesn't recognize (a malformed
-    range, ...) raises ValueError rather than silently mis-parsing, since a
-    wrong decode here would silently mis-split real text."""
-    try:
-        text = stream_bytes.decode("latin-1")
-    except Exception as exc:
-        raise ValueError(f"Could not read this font's ToUnicode CMap: {exc}") from exc
-
-    def dst_to_text(hex_str):
-        raw = bytes.fromhex(hex_str)
-        if len(raw) % 2 != 0:
-            raise ValueError("Malformed ToUnicode destination string")
-        return raw.decode("utf-16-be")
-
-    mapping = {}
-    for block in re.findall(r"beginbfchar(.*?)endbfchar", text, re.S):
-        for code_hex, dst_hex in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", block):
-            mapping[int(code_hex, 16)] = dst_to_text(dst_hex)
-
-    for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
-        # Array form: <lo> <hi> [ <d0> <d1> ... ] - one explicit destination
-        # per code in the range.
-        for lo_hex, hi_hex, array_body in re.findall(
-            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[(.*?)\]", block, re.S
-        ):
-            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
-            dsts = re.findall(r"<([0-9A-Fa-f]+)>", array_body)
-            if len(dsts) != hi - lo + 1:
-                raise ValueError("Malformed ToUnicode bfrange array")
-            for code, dst_hex in zip(range(lo, hi + 1), dsts):
-                mapping[code] = dst_to_text(dst_hex)
-        # Scalar form: <lo> <hi> <dst> - dst increments by (code - lo) for
-        # each code in the range. Matched against whatever the array form
-        # above didn't already consume, so the two forms can't double-count
-        # the same range.
-        remainder = re.sub(r"<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\[.*?\]", "", block, flags=re.S)
-        for lo_hex, hi_hex, dst_hex in re.findall(
-            r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", remainder
-        ):
-            lo, hi = int(lo_hex, 16), int(hi_hex, 16)
-            dst_bytes = bytes.fromhex(dst_hex)
-            base = int.from_bytes(dst_bytes, "big")
-            for offset, code in enumerate(range(lo, hi + 1)):
-                value = base + offset
-                mapping[code] = value.to_bytes(len(dst_bytes), "big").decode("utf-16-be")
-
-    return mapping
-
-
-def _font_tounicode(page, font_name):
-    """(width, mapping) - width from _font_code_width(), mapping from
-    _parse_bf_mappings() - for /Resources/Font/<font_name> on `page`, or
-    None if the font can't be resolved, its encoding isn't one this file
-    understands, or it carries no /ToUnicode. /Resources is inheritable the
-    same way /MediaBox is (see _resolve_inherited) - a font used by every
-    page in a section is often set once on a shared /Pages node rather than
-    repeated per page."""
-    resources = _resolve_inherited(page.obj, "/Resources")
-    fonts = resources.get("/Font") if isinstance(resources, pikepdf.Dictionary) else None
-    font = fonts.get(font_name) if isinstance(fonts, pikepdf.Dictionary) else None
-    if not isinstance(font, pikepdf.Dictionary) or "/ToUnicode" not in font:
-        return None
-    try:
-        width = _font_code_width(font)
-        mapping = _parse_bf_mappings(bytes(font["/ToUnicode"].read_bytes()))
-    except Exception:
-        return None
-    return width, mapping
-
 
 def _find_mcid_block(instructions, mcid):
     """(start, end) indices into `instructions` such that instructions[start]
@@ -3329,6 +3848,118 @@ def _leaf_id_for_mcid(doc, page_index, mcid):
     return None
 
 
+def get_page_code_boxes(doc_id, page_index):
+    """Where every character on `page_index` sits, for the renderer's
+    rectangle selection - see glyph_metrics.page_code_boxes().
+
+    Read-only, and cached per page on the renderer's side rather than here,
+    since it's derived entirely from bytes the renderer can't reach but
+    doesn't change until an edit rewrites the page's content stream.
+
+    Coordinates are PDF page space, rounded to two decimal places: the
+    renderer converts them into its own viewport space anyway, and a
+    text-heavy page carries a few thousand of these, so full float precision
+    would inflate the payload for digits nothing downstream can use.
+
+    `refusals` is {mcid: reason} for spans that painted text the engine
+    declined to measure. The renderer treats a refused span as selectable but
+    not splittable - selecting a whole leaf only needs a box, which comes
+    from pdf.js, while naming a split point needs this."""
+    doc = documents[doc_id]
+    pdf = doc["pdf"]
+    if page_index < 0 or page_index >= len(pdf.pages):
+        raise ValueError(f"Page {page_index} is out of range")
+
+    boxes, refusals = glyph_metrics.page_code_boxes(pdf.pages[page_index])
+    return {
+        "pageIndex": page_index,
+        "boxes": [{
+            "mcid": b["mcid"], "seq": b["seq"], "text": b["text"],
+            "x0": round(b["x0"], 2), "y0": round(b["y0"], 2),
+            "x1": round(b["x1"], 2), "y1": round(b["y1"], 2),
+            "invisible": b["invisible"],
+        } for b in boxes],
+        # JSON object keys must be strings; the renderer parses them back.
+        "refusals": {str(mcid): reason for mcid, reason in refusals.items()
+                     if mcid is not None},
+    }
+
+
+def _cut_leaf(doc, node_id, split_index):
+    """One content-stream cut: divides `node_id`'s marked content in two at
+    character offset `split_index` into its decoded text, and splices the
+    second half into the parent's /K right after the first. Returns
+    (page_index, original_mcid, new_mcid).
+
+    Everything a *single* split also needs - the undo snapshot, the registry
+    rebuild, the fresh page bytes for the preview - is deliberately left to
+    the caller, because tag_rect_content() makes several of these in a row
+    and must pay for each of those once, not once per cut. split_leaf() is
+    the single-cut caller and does exactly that around this.
+
+    The first half keeps the original MCID (and, for a bare-MCID leaf, its
+    node id), which is what lets a caller cut the same leaf twice: address
+    it by the same mcid both times and the second cut lands in the first
+    half, where the remaining text is."""
+    if node_id not in doc["elements"]:
+        raise ValueError(f"Unknown node id: {node_id}")
+
+    page, page_index, block_start, block_end, instructions, codes = _decode_leaf(
+        doc, node_id, for_write=True)
+
+    boundaries = [0]
+    for c in codes:
+        boundaries.append(boundaries[-1] + len(c["text"]))
+    try:
+        split_code_index = boundaries.index(split_index)
+    except ValueError:
+        split_code_index = -1
+    if split_code_index <= 0 or split_code_index >= len(codes):
+        raise ValueError(
+            "Place the cursor strictly between two characters, with text on both sides, to split there")
+
+    parent_id = doc["parent_map"].get(node_id)
+    if parent_id is None:
+        raise ValueError("This content leaf has no parent to split it within")
+    parent_obj = doc["elements"][parent_id]
+    node_obj = doc["elements"][node_id]
+    index_in_parent = _kid_index(parent_obj, node_obj)
+    if index_in_parent == -1:
+        raise ValueError("Could not locate this content leaf in its parent")
+
+    instructions_a, instructions_b = _split_block(
+        instructions, block_start, block_end, split_code_index, codes)
+
+    orig_bdc = instructions[block_start]
+    tag_operand = orig_bdc.operands[0]
+    props_a = orig_bdc.operands[1]
+    original_mcid = int(props_a["/MCID"])
+    new_mcid = _next_mcid_on_page(doc, page_index)
+    props_b = pikepdf.Dictionary({k: v for k, v in props_a.items()})
+    props_b["/MCID"] = new_mcid
+
+    emc = pikepdf.ContentStreamInstruction([], pikepdf.Operator("EMC"))
+    bdc_b = pikepdf.ContentStreamInstruction([tag_operand, props_b], pikepdf.Operator("BDC"))
+    new_sequence = [orig_bdc, *instructions_a, emc, bdc_b, *instructions_b, emc]
+    final_instructions = instructions[:block_start] + new_sequence + instructions[block_end + 1:]
+
+    page.obj.Contents.write(pikepdf.unparse_content_stream(final_instructions))
+    doc["content_gen"] += 1
+
+    kind = doc["node_kind"].get(node_id)
+    leaf_a = node_obj
+    if kind == "content-int":
+        leaf_b = new_mcid
+    else:
+        leaf_b = pikepdf.Dictionary({k: v for k, v in node_obj.items()})
+        leaf_b["/MCID"] = new_mcid
+
+    _remove_kid(parent_obj, node_obj)
+    _insert_kid(parent_obj, leaf_a, index_in_parent)
+    _insert_kid(parent_obj, leaf_b, index_in_parent + 1)
+    return page_index, original_mcid, new_mcid, leaf_a, leaf_b
+
+
 def split_leaf(doc_id, node_id, split_index):
     """Splits one content leaf's marked content into two at character offset
     `split_index` into get_leaf_text()'s decoded text (so `split_index` must
@@ -3351,60 +3982,8 @@ def split_leaf(doc_id, node_id, split_index):
     right MCIDs in the tree, stale text/positions on the page - until the
     next full close/reopen."""
     doc = documents[doc_id]
-    if node_id not in doc["elements"]:
-        raise ValueError(f"Unknown node id: {node_id}")
-
-    page, page_index, block_start, block_end, instructions, codes = _decode_leaf(doc, node_id, for_write=True)
-
-    boundaries = [0]
-    for c in codes:
-        boundaries.append(boundaries[-1] + len(c["text"]))
-    try:
-        split_code_index = boundaries.index(split_index)
-    except ValueError:
-        split_code_index = -1
-    if split_code_index <= 0 or split_code_index >= len(codes):
-        raise ValueError("Place the cursor strictly between two characters, with text on both sides, to split there")
-
-    parent_id = doc["parent_map"].get(node_id)
-    if parent_id is None:
-        raise ValueError("This content leaf has no parent to split it within")
-    parent_obj = doc["elements"][parent_id]
-    node_obj = doc["elements"][node_id]
-    index_in_parent = _kid_index(parent_obj, node_obj)
-    if index_in_parent == -1:
-        raise ValueError("Could not locate this content leaf in its parent")
-
-    instructions_a, instructions_b = _split_block(instructions, block_start, block_end, split_code_index, codes)
-
-    orig_bdc = instructions[block_start]
-    tag_operand = orig_bdc.operands[0]
-    props_a = orig_bdc.operands[1]
-    original_mcid = int(props_a["/MCID"])
-    new_mcid = _next_mcid_on_page(doc, page_index)
-    props_b = pikepdf.Dictionary({k: v for k, v in props_a.items()})
-    props_b["/MCID"] = new_mcid
-
-    emc = pikepdf.ContentStreamInstruction([], pikepdf.Operator("EMC"))
-    bdc_b = pikepdf.ContentStreamInstruction([tag_operand, props_b], pikepdf.Operator("BDC"))
-    new_sequence = [orig_bdc, *instructions_a, emc, bdc_b, *instructions_b, emc]
-    final_instructions = instructions[:block_start] + new_sequence + instructions[block_end + 1:]
-
     _push_undo_snapshot(doc)
-
-    page.obj.Contents.write(pikepdf.unparse_content_stream(final_instructions))
-
-    kind = doc["node_kind"].get(node_id)
-    leaf_a = node_obj
-    if kind == "content-int":
-        leaf_b = new_mcid
-    else:
-        leaf_b = pikepdf.Dictionary({k: v for k, v in node_obj.items()})
-        leaf_b["/MCID"] = new_mcid
-
-    _remove_kid(parent_obj, node_obj)
-    _insert_kid(parent_obj, leaf_a, index_in_parent)
-    _insert_kid(parent_obj, leaf_b, index_in_parent + 1)
+    page_index, original_mcid, new_mcid, _, _ = _cut_leaf(doc, node_id, split_index)
 
     tree = _rebuild_after_mutation(doc_id)
     new_id_a = _leaf_id_for_mcid(doc, page_index, original_mcid)
@@ -3465,30 +4044,6 @@ def split_leaf(doc_id, node_id, split_index):
 # the drag/drop reordering the tag tree already supports is still there for
 # whatever the estimate gets wrong.
 
-def _mat_mult(m1, m2):
-    """Composes two PDF transformation matrices as `m1` applied first, `m2`
-    second - i.e. a point transforms as `point * m1 * m2`. This is the order
-    a content stream's `cm` operator combines with the CTM already in
-    effect: the new matrix describes the *inner* (most recently established)
-    coordinate system."""
-    a1, b1, c1, d1, e1, f1 = m1
-    a2, b2, c2, d2, e2, f2 = m2
-    return (
-        a1 * a2 + b1 * c2,
-        a1 * b2 + b1 * d2,
-        c1 * a2 + d1 * c2,
-        c1 * b2 + d1 * d2,
-        e1 * a2 + f1 * c2 + e2,
-        e1 * b2 + f1 * d2 + f2,
-    )
-
-
-def _mat_apply(point, m):
-    x, y = point
-    a, b, c, d, e, f = m
-    return (a * x + c * y + e, b * x + d * y + f)
-
-
 def _rect_area(r):
     x0, y0, x1, y1 = r
     return max(0.0, x1 - x0) * max(0.0, y1 - y0)
@@ -3498,28 +4053,6 @@ def _rect_intersection_area(a, b):
     x0, y0 = max(a[0], b[0]), max(a[1], b[1])
     x1, y1 = min(a[2], b[2]), min(a[3], b[3])
     return _rect_area((x0, y0, x1, y1))
-
-
-def _resolve_inherited(page_obj, key, default=None):
-    """Walks /Parent (the Pages tree) for a page attribute that's allowed to
-    be inherited rather than set directly on the page itself - /Resources
-    and /MediaBox both are, and a scanned document built from one shared
-    template per section often relies on that instead of repeating them on
-    every page."""
-    node = page_obj
-    seen = set()
-    while node is not None:
-        if key in node:
-            return node[key]
-        parent = node.get("/Parent")
-        if not isinstance(parent, pikepdf.Dictionary):
-            return default
-        if getattr(parent, "is_indirect", False):
-            if parent.objgen in seen:
-                return default
-            seen.add(parent.objgen)
-        node = parent
-    return default
 
 
 def _page_image_placements(page):
@@ -3962,32 +4495,48 @@ def _reindex_pages(doc):
     doc["page_index_by_objgen"] = {page.objgen: i for i, page in enumerate(doc["pdf"].pages)}
 
 
+def _step_history(doc_id, from_stack, to_stack):
+    """The shared half of undo and redo: bank the current state on one stack
+    and restore the top of the other.
+
+    Carries `pdfBase64` when the restored state paints differently from the
+    one being left. Most edits only move tags around, and the renderer's
+    pdf.js copy stays valid through those - but a split (or an artifacting
+    delete) rewrites a page's content stream, and stepping across one of
+    those leaves pdf.js parsing bytes the tree no longer describes. Its
+    MCIDs then name different text than the restored tree does, so leaves
+    come up empty and highlights land nowhere."""
+    doc = documents[doc_id]
+    to_stack.append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
+    restored_bytes, restored_gen = from_stack.pop()
+    doc["pdf"].close()
+    doc["pdf"] = pikepdf.open(io.BytesIO(restored_bytes))
+    _reindex_pages(doc)
+
+    content_changed = restored_gen != doc["content_gen"]
+    doc["content_gen"] = restored_gen
+
+    result = {
+        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
+        "docInfo": _get_doc_info(doc), **_undo_state(doc),
+    }
+    if content_changed:
+        result["pdfBase64"] = base64.b64encode(restored_bytes).decode("ascii")
+    return result
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
         raise ValueError("Nothing to undo")
-    doc["redo_stack"].append(_snapshot_bytes(doc["pdf"]))
-    doc["pdf"].close()
-    doc["pdf"] = pikepdf.open(io.BytesIO(doc["undo_stack"].pop()))
-    _reindex_pages(doc)
-    return {
-        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
-        "docInfo": _get_doc_info(doc), **_undo_state(doc),
-    }
+    return _step_history(doc_id, doc["undo_stack"], doc["redo_stack"])
 
 
 def redo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["redo_stack"]:
         raise ValueError("Nothing to redo")
-    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
-    doc["pdf"].close()
-    doc["pdf"] = pikepdf.open(io.BytesIO(doc["redo_stack"].pop()))
-    _reindex_pages(doc)
-    return {
-        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
-        "docInfo": _get_doc_info(doc), **_undo_state(doc),
-    }
+    return _step_history(doc_id, doc["redo_stack"], doc["undo_stack"])
 
 
 # Safety-net copies of the pre-save file (see save_document()) live here
@@ -4145,6 +4694,8 @@ def main():
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "get_leaf_text":
                 result = get_leaf_text(request["docId"], request["nodeId"])
+            elif cmd == "get_page_code_boxes":
+                result = get_page_code_boxes(request["docId"], request["pageIndex"])
             elif cmd == "split_leaf":
                 result = split_leaf(request["docId"], request["nodeId"], request["splitIndex"])
             elif cmd == "figure_from_rect":
@@ -4153,6 +4704,14 @@ def main():
                 result = insert_paragraph_after(request["docId"], request.get("nodeId"))
             elif cmd == "set_role_or_wrap":
                 result = set_role_or_wrap(request["docId"], request["nodeIds"], request["role"])
+            elif cmd == "wrap_leaves":
+                result = wrap_leaves(request["docId"], request["nodeIds"], request["role"],
+                                     request.get("useLabel", False))
+            elif cmd == "tag_rect_content":
+                result = tag_rect_content(
+                    request["docId"], request["pageIndex"],
+                    request["selections"], request["role"],
+                    request.get("useLabel", False))
             elif cmd == "add_table_row":
                 result = add_table_row(request["docId"], request["tableId"])
             elif cmd == "add_table_column":

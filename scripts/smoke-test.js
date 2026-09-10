@@ -29,6 +29,16 @@ const ROOT = path.resolve(__dirname, '..');
 
 const FIXTURES = ['test-complex-generated.pdf'];
 
+// Run only against the tests that need them, not the whole suite - each is
+// here for one specific shape the main fixture doesn't have.
+//
+// test-standard14.pdf: a standard-14 font carrying no /Widths of its own,
+// which is the case standard_fonts.py supplies AFM metrics for. Every font
+// in the main fixture embeds its own metrics, so without this the AFM path
+// would only ever be exercised by documents outside the repo. Rebuild with
+// `python scripts/make-standard14-fixture.py`.
+const STANDARD14_FIXTURE = 'test-standard14.pdf';
+
 // --- talking to the worker -------------------------------------------------
 
 /**
@@ -417,6 +427,624 @@ async function editTests(fixture) {
     assertEqual(countNodes(redone.tree), afterEdit, 'redo did not reapply the edit');
   }));
 
+  // get_page_code_boxes() - the glyph-advance engine (glyph_metrics.py).
+  // The contract that matters is that what it reports is exactly what
+  // split_leaf() will slice: a character offset taken from geometry is
+  // meaningless if the two disagree about what the text is.
+  await test('per-character geometry matches what split_leaf decodes', () => withDoc(fixture, async (doc) => {
+    const leaves = contentLeaves(doc.tree).filter((n) => n.page !== null && n.page !== undefined);
+    if (leaves.length === 0) skip('fixture has no content leaves');
+
+    const pages = [...new Set(leaves.map((n) => n.page))].sort((a, b) => a - b).slice(0, 3);
+    let compared = 0;
+    for (const pageIndex of pages) {
+      const result = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+
+      const byMcid = new Map();
+      for (const box of result.boxes) {
+        if (!byMcid.has(box.mcid)) byMcid.set(box.mcid, []);
+        byMcid.get(box.mcid).push(box);
+      }
+      // A refused span must contribute no boxes at all - a partial result
+      // would read as complete and put every later offset out by that much.
+      for (const mcid of Object.keys(result.refusals)) {
+        assert(!byMcid.has(Number(mcid)),
+          `refused span ${mcid} still returned glyph boxes`);
+      }
+
+      for (const leaf of leaves.filter((n) => n.page === pageIndex)) {
+        const boxes = byMcid.get(leaf.mcid);
+        if (!boxes) continue;
+        const leafText = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id });
+        if (leafText.text === null || leafText.text === undefined) continue;
+        const engineText = boxes
+          .sort((a, b) => a.seq - b.seq)
+          .map((b) => b.text)
+          .join('');
+        assertEqual(engineText, leafText.text,
+          `engine and get_leaf_text disagree on p${pageIndex} mcid ${leaf.mcid}`);
+        compared += 1;
+
+        // Glyphs must carry real extent, and advance left to right *along a
+        // line* - not across the whole span, since a leaf that wraps starts
+        // its next line back at the left margin. Grouped by baseline so the
+        // check means "the pen moves forward as it writes".
+        const byLine = new Map();
+        for (const box of boxes) {
+          assert(box.x1 >= box.x0, 'glyph box has negative width');
+          assert(box.y1 > box.y0, 'glyph box has no height');
+          const line = box.y0.toFixed(1);
+          if (!byLine.has(line)) byLine.set(line, []);
+          byLine.get(line).push(box);
+        }
+        for (const lineBoxes of byLine.values()) {
+          let previousX = -Infinity;
+          for (const box of lineBoxes) {
+            assert(box.x0 >= previousX - 0.01, 'the pen moved backwards along a line');
+            previousX = box.x0;
+          }
+        }
+      }
+    }
+    assert(compared > 0, 'no leaves were actually compared');
+  }));
+
+  await test('rejects an out-of-range page instead of guessing', () => withDoc(fixture, async (doc) => {
+    let threw = false;
+    try {
+      await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 9999 });
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'an out-of-range page index was accepted');
+  }));
+
+  // wrap_leaves() - the page preview's Select Content rectangle. Three
+  // shapes, because which one fires decides whether the result is what the
+  // user drew: the whole of one tag (relabel in place, attributes kept), part
+  // of one tag (nest inside it, source survives), and leaves from two tags
+  // (new tag takes the consumed tag's slot, emptied sources discarded).
+  await test('tagging a whole tag\'s content relabels it in place', () => withDoc(fixture, async (doc) => {
+    const parent = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.children.length > 0
+      && n.children.every((k) => k.type === 'content'));
+    if (!parent) skip('no element with only content leaves in this fixture');
+
+    const leafIds = parent.children.map((k) => k.id);
+    const before = countNodes(doc.tree);
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'H2',
+    });
+
+    assert(result.relabelled, 'should have relabelled rather than wrapped');
+    assertEqual(result.removedTagCount, 0, 'relabelling should discard nothing');
+    assertEqual(countNodes(result.tree), before, 'relabelling changed the node count');
+    const retagged = findById(result.tree, result.newNodeId);
+    assertEqual(retagged.role, 'H2', 'role was not applied');
+    assertEqual(retagged.children.length, leafIds.length, 'lost content while relabelling');
+
+    await saveAndReopen(doc.docId, 'wrap-leaves-relabel', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the retagged tag did not survive save');
+    });
+  }));
+
+  await test('tagging part of a tag divides it into siblings', () => withDoc(fixture, async (doc) => {
+    // Taking the first of a tag's leaves leaves nothing before the
+    // selection, so the original keeps the tail and the new tag goes in
+    // front of it - both under the original's own parent, neither inside
+    // the other.
+    const parent = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.children.length >= 2
+      && n.children.every((k) => k.type === 'content'));
+    if (!parent) skip('no element with two or more content leaves in this fixture');
+    const grandparent = parentOf(doc.tree, parent.id);
+    if (!grandparent) skip('that tag has no parent to become a sibling within');
+
+    const kidsBefore = parent.children.length;
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: [parent.children[0].id], role: 'Span',
+    });
+
+    assert(!result.relabelled, 'a partial selection must not relabel the source tag');
+    assertEqual(result.removedTagCount, 0, 'a surviving source tag must not be discarded');
+
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.role, grandparent.role,
+      'the new tag should sit beside the source tag, not inside it');
+    const at = holder.children.findIndex((c) => c.id === result.newNodeId);
+    const remainder = holder.children[at + 1];
+    assert(remainder && remainder.role === parent.role,
+      'the source tag should follow the new one, keeping its role');
+    assertEqual(remainder.children.length, kidsBefore - 1,
+      'the source tag should have given up exactly the selected leaf');
+  }));
+
+  await test('tagging across two tags discards the ones it empties', () => withDoc(fixture, async (doc) => {
+    // Two sibling tags on one page whose children are all content leaves:
+    // taking every leaf from both leaves both empty, so both should go.
+    let pair = null;
+    for (const node of allNodes(doc.tree)) {
+      const kids = node.children.filter((c) => c.type === 'element');
+      for (let i = 0; i < kids.length - 1 && !pair; i += 1) {
+        const [a, b] = [kids[i], kids[i + 1]];
+        const usable = (n) => n.children.length > 0 && n.children.every((k) => k.type === 'content');
+        if (usable(a) && usable(b) && a.page === b.page) pair = { container: node, a, b };
+      }
+      if (pair) break;
+    }
+    if (!pair) skip('no adjacent leaf-only sibling tags in this fixture');
+
+    const leafIds = [...pair.a.children, ...pair.b.children].map((k) => k.id);
+    const leavesBefore = contentLeaves(doc.tree).length;
+    const nodesBefore = countNodes(doc.tree);
+
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'H3',
+    });
+
+    assertEqual(result.removedTagCount, 2, 'both emptied source tags should have been discarded');
+    // Two tags out, one in - and not a single content leaf lost on the way.
+    assertEqual(countNodes(result.tree), nodesBefore - 1, 'unexpected net node count');
+    assertEqual(contentLeaves(result.tree).length, leavesBefore, 'content was lost');
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.id, pair.container.id, 'the new tag did not take the consumed tags\' place');
+
+    await saveAndReopen(doc.docId, 'wrap-leaves-across', (reopened) => {
+      assertEqual(contentLeaves(reopened.tree).length, leavesBefore,
+        'the saved file lost content leaves');
+      assert(byRole(reopened.tree, 'H3').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+
+  // tag_rect_content() - the same rectangle, when it cuts through content
+  // rather than only around it. Cut indices must land on real character
+  // boundaries, which is why these derive them from the glyph engine rather
+  // than picking round numbers: a code whose /ToUnicode maps it to more than
+  // one character spans several offsets with no boundary inside it. The
+  // renderer is in the same position and reaches the same answer, since
+  // coveredRun() sums the same per-glyph text lengths.
+  async function boundariesFor(doc, pageIndex, mcid) {
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+    const glyphs = geometry.boxes
+      .filter((b) => b.mcid === mcid)
+      .sort((a, b) => a.seq - b.seq);
+    const offsets = [0];
+    for (const g of glyphs) offsets.push(offsets[offsets.length - 1] + g.text.length);
+    return offsets;
+  }
+
+  async function pickCuttableLeaf(doc, minChars = 30) {
+    for (const leaf of contentLeaves(doc.tree)) {
+      if (leaf.page === null || leaf.page === undefined || leaf.mcid === null) continue;
+      const text = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+      if (!text || text.length < minChars) continue;
+      const offsets = await boundariesFor(doc, leaf.page, leaf.mcid);
+      if (offsets.length > 6) return { leaf, text, offsets };
+    }
+    return null;
+  }
+
+  await test('a rectangle cutting mid-leaf tags only the covered run', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut twice');
+    const { leaf, text, offsets } = target;
+    const start = offsets[2];
+    const end = offsets[offsets.length - 3];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: start, endIndex: end }],
+      role: 'H2',
+    });
+
+    assertEqual(result.cutCount, 2, 'a middle run needs a cut at each end');
+    assert(result.pdfBase64, 'a cut must hand back fresh page bytes for the preview');
+
+    const tagged = findById(result.tree, result.newNodeId);
+    assertEqual(tagged.children.length, 1, 'the new tag should hold exactly the cut run');
+    const taggedText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: tagged.children[0].id })).text;
+    assertEqual(taggedText, text.slice(start, end), 'the tagged text is not the run asked for');
+
+    // The head and tail must still be on the page, just untagged - a cut
+    // divides content, it never removes any.
+    const remaining = [];
+    for (const other of contentLeaves(result.tree)) {
+      if (other.page !== leaf.page) continue;
+      const t = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: other.id })).text;
+      if (t) remaining.push(t);
+    }
+    const joined = remaining.join('');
+    assert(joined.includes(text.slice(0, start)), 'the run before the cut went missing');
+    assert(joined.includes(text.slice(end)), 'the run after the cut went missing');
+
+    await saveAndReopen(doc.docId, 'tag-rect-content', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+
+  await test('tagging part of a tag puts the new tag beside it, not inside', () => withDoc(fixture, async (doc) => {
+    // Anchoring the new tag at the selected leaf's own slot - right for a
+    // single hand-picked leaf - would nest it: <P><H3>..</H3>..</P>. Tagging
+    // half a paragraph as a heading should leave them side by side.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+    const container = parentOf(doc.tree, leaf.id);
+    if (!container || container.children.length !== 1) {
+      skip('the leaf shares its parent, so this is not the single-run case');
+    }
+    const cut = offsets[Math.floor(offsets.length / 2)];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: cut, endIndex: null }],
+      role: 'H3',
+    });
+
+    const holder = parentOf(result.tree, result.newNodeId);
+    assert(holder.role !== container.role || holder.id !== container.id,
+      'the new tag was nested inside the tag its content came from');
+
+    // Side by side under the original's own parent, in reading order, with
+    // the text divided between them and nothing lost.
+    const siblings = holder.children;
+    const at = siblings.findIndex((c) => c.id === result.newNodeId);
+    assert(at > 0, 'the new tag should follow the half it was split from');
+    const headText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: siblings[at - 1].children[0].id })).text;
+    const tagText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: siblings[at].children[0].id })).text;
+    assertEqual(headText, text.slice(0, cut), 'the head half lost or gained text');
+    assertEqual(tagText, text.slice(cut), 'the tagged half is not the run selected');
+    assertEqual(siblings[at - 1].role, container.role,
+      'the half left behind changed role');
+  }));
+
+  await test('a run inside a list body stays inside it', () => withDoc(fixture, async (doc) => {
+    // An LBody's siblings are its list item's Lbl and LBody, so dividing one
+    // into two would be structurally wrong - position-constrained containers
+    // keep the nesting behaviour.
+    const body = allNodes(doc.tree).find((n) => n.role === 'LBody'
+      && n.children.length > 0
+      && n.children.every((c) => c.type === 'content')
+      && n.children[0].mcid !== null && n.children[0].mcid !== undefined
+      && n.children[0].page !== null && n.children[0].page !== undefined);
+    if (!body) skip('no leaf-only LBody in this fixture');
+    const leaf = body.children[0];
+    const offsets = await boundariesFor(doc, leaf.page, leaf.mcid);
+    if (offsets.length < 4) skip('that list body is too short to cut');
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: offsets[Math.floor(offsets.length / 2)] }],
+      role: 'Span',
+    });
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.role, 'LBody', 'the run escaped its list body');
+  }));
+
+  await test('tagging a selection as a list item builds the LBody', () => withDoc(fixture, async (doc) => {
+    // An LI's content is always the Lbl/LBody pair, never bare leaves -
+    // the rectangle path goes through the same _set_li_content() the tree's
+    // 'I' shortcut uses, rather than dropping the leaves straight in.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, offsets } = target;
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: null }],
+      role: 'LI',
+      useLabel: false,
+    });
+
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.role, 'LI', 'the new tag is not an LI');
+    assertEqual(li.children.length, 1, 'an unlabelled LI should hold one LBody');
+    assertEqual(li.children[0].role, 'LBody', 'the LI holds bare content, not an LBody');
+    assert(li.children[0].children.length > 0, 'the LBody came out empty');
+
+    await saveAndReopen(doc.docId, 'rect-list-item', (reopened) => {
+      const items = byRole(reopened.tree, 'LI');
+      assert(items.some((n) => n.children.some((c) => c.role === 'LBody')),
+        'the LI/LBody shape did not survive save');
+    });
+  }));
+
+  await test('a labelled list item splits into Lbl and LBody', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, offsets } = target;
+
+    // Two selections from one leaf: the first stands in for a bullet, so
+    // useLabel splits them into Lbl + LBody rather than one LBody.
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [
+        { nodeId: leaf.id, startIndex: 0, endIndex: offsets[2] },
+      ],
+      role: 'LI',
+      useLabel: true,
+    });
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 2, 'a labelled LI should hold a Lbl and an LBody');
+    assertEqual(li.children[0].role, 'Lbl', 'the first child should be the Lbl');
+    assertEqual(li.children[1].role, 'LBody', 'the second child should be the LBody');
+  }));
+
+  await test('a marker sharing a leaf with its text is cut off into a Lbl', () => withDoc(fixture, async (doc) => {
+    // A well-formed list gives the marker its own leaf, and useLabel simply
+    // promotes it. Where the marker and its text are painted as one run
+    // there is nothing to promote, so labelSplit cuts it off first - the
+    // case that had every such item collapse into a single LBody.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+    const split = offsets[1];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null, labelSplit: split }],
+      role: 'LI',
+      useLabel: false,
+    });
+
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 2, 'the marker was not split off');
+    assertEqual(li.children[0].role, 'Lbl', 'the first child should be the Lbl');
+    assertEqual(li.children[1].role, 'LBody', 'the second child should be the LBody');
+
+    const lblText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: li.children[0].children[0].id })).text;
+    assertEqual(lblText, text.slice(0, split), 'the Lbl holds the wrong text');
+    assert(result.pdfBase64, 'cutting the marker must hand back fresh page bytes');
+
+    await saveAndReopen(doc.docId, 'rect-label-split', (reopened) => {
+      const labelled = byRole(reopened.tree, 'LI')
+        .filter((n) => n.children.some((c) => c.role === 'Lbl'));
+      assert(labelled.length >= 1, 'the Lbl/LBody split did not survive save');
+    });
+  }));
+
+  await test('an impossible label split falls back to a single LBody', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf } = target;
+
+    // An index that lands inside a character rather than between two: the
+    // cut can't be made, and the item must still come out valid.
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null, labelSplit: 100000 }],
+      role: 'LI',
+      useLabel: false,
+    });
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 1, 'a failed split should leave one LBody');
+    assertEqual(li.children[0].role, 'LBody', 'the fallback should still be an LBody');
+  }));
+
+  await test('tagging several runs as a list gives each its own item', () => withDoc(fixture, async (doc) => {
+    // A list is the one role that isn't a single tag over the whole
+    // selection: every run the rectangle covered becomes its own LI, each
+    // with its own label, rather than all of them landing in one item.
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough to cut in three');
+    const { leaf, offsets } = target;
+    const third = Math.floor(offsets.length / 3);
+    const cuts = [offsets[0], offsets[third], offsets[third * 2]];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [
+        { nodeId: leaf.id, startIndex: cuts[0], endIndex: cuts[1] },
+        { nodeId: leaf.id, startIndex: cuts[1], endIndex: cuts[2] },
+        { nodeId: leaf.id, startIndex: cuts[2], endIndex: null },
+      ],
+      role: 'L',
+    });
+
+    const list = findById(result.tree, result.newNodeId);
+    assertEqual(list.role, 'L', 'the new tag is not a list');
+    assertEqual(list.children.length, 3, 'each covered run should be its own item');
+    for (const item of list.children) {
+      assertEqual(item.role, 'LI', 'a list child is not an LI');
+      assertEqual(item.children.length, 1, 'an unlabelled item should hold one LBody');
+      assertEqual(item.children[0].role, 'LBody', 'an item holds bare content');
+    }
+
+    await saveAndReopen(doc.docId, 'rect-list', (reopened) => {
+      const lists = byRole(reopened.tree, 'L');
+      assert(lists.some((n) => n.children.filter((c) => c.role === 'LI').length === 3),
+        'the three-item list did not survive save');
+    });
+  }));
+
+  await test('a list built from one leaf gives every item its own label', () => withDoc(fixture, async (doc) => {
+    // The workflow this exists for: one rectangle over a whole visual list,
+    // one L keystroke. A list is routinely painted as a single run, so the
+    // renderer sends one selection per item found inside it - several
+    // naming the same leaf, which the worker has to cut back to front for
+    // the earlier offsets to stay valid.
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough for three items');
+    const { leaf, text, offsets } = target;
+    const third = Math.floor(offsets.length / 3);
+    const bounds = [offsets[0], offsets[third], offsets[third * 2], null];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [0, 1, 2].map((i) => ({
+        nodeId: leaf.id,
+        startIndex: bounds[i],
+        endIndex: bounds[i + 1],
+        // One character of each item stands in for its marker.
+        labelSplit: offsets[offsets.indexOf(bounds[i]) + 1] - bounds[i],
+      })),
+      role: 'L',
+    });
+
+    const list = findById(result.tree, result.newNodeId);
+    assertEqual(list.children.length, 3, 'each item inside the leaf should be its own LI');
+    for (const item of list.children) {
+      assertEqual(item.children.length, 2, 'a labelled item holds a Lbl and an LBody');
+      assertEqual(item.children[0].role, 'Lbl', 'the first child should be the Lbl');
+      assertEqual(item.children[1].role, 'LBody', 'the second child should be the LBody');
+    }
+
+    // Nothing lost or reordered: the items still spell out the original.
+    const rebuilt = [];
+    for (const item of list.children) {
+      for (const part of item.children) {
+        for (const contentLeaf of part.children) {
+          rebuilt.push((await worker.call('get_leaf_text',
+            { docId: doc.docId, nodeId: contentLeaf.id })).text);
+        }
+      }
+    }
+    assertEqual(rebuilt.join(''), text, 'the items do not reconstruct the original text');
+
+    await saveAndReopen(doc.docId, 'rect-list-items', (reopened) => {
+      const labelled = byRole(reopened.tree, 'LI')
+        .filter((n) => n.children.some((c) => c.role === 'Lbl'));
+      assert(labelled.length >= 3, 'the labelled items did not survive save');
+    });
+  }));
+
+  await test('undoing a cut hands back the page it restores', () => withDoc(fixture, async (doc) => {
+    // The renderer keeps its own pdf.js parse of the page bytes. Most edits
+    // only move tags about and leave that parse valid, but a cut rewrites
+    // the content stream - so stepping back across one has to re-feed it,
+    // or its MCIDs name different text than the restored tree does and the
+    // content leaves read as empty.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+
+    await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: null }],
+      role: 'P',
+    });
+
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(undone.pdfBase64, 'undoing a cut must hand back the restored page bytes');
+
+    // And the restored leaf really does read as it did before the cut.
+    const restored = contentLeaves(undone.tree)
+      .find((n) => n.page === leaf.page && n.mcid === leaf.mcid);
+    assert(restored, 'the content leaf did not come back');
+    const restoredText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: restored.id })).text;
+    assertEqual(restoredText, text, 'the restored leaf lost or gained text');
+
+    const redone = await worker.call('redo', { docId: doc.docId });
+    assert(redone.pdfBase64, 'redoing a cut must hand back bytes too');
+  }));
+
+  await test('undoing a tag-only edit does not resend the page', () => withDoc(fixture, async (doc) => {
+    // The counterpart: bytes are only worth sending when they changed, and
+    // a whole document's worth of them per undo would be a real cost.
+    const element = allNodes(doc.tree).find((n) => n.type === 'element' && n.id !== 'root');
+    if (!element) skip('fixture has no taggable element');
+    await worker.call('update_node', {
+      docId: doc.docId, nodeId: element.id, changes: { alt: 'undo cost check' },
+    });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(!undone.pdfBase64, 'a tag-only undo should not resend the document');
+  }));
+
+  await test('undoing a delete hands back the page it restores', () => withDoc(fixture, async (doc) => {
+    // delete_nodes rewrites content streams too, turning the removed
+    // leaves' marked content into artifacts - so its undo needs the same
+    // treatment, and had the same problem before this.
+    const victim = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.id !== 'root'
+      && contentLeaves(n).length > 0);
+    if (!victim) skip('fixture has no element with content to delete');
+    await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [victim.id] });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(undone.pdfBase64, 'undoing an artifacting delete must hand back bytes');
+  }));
+
+  await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
+    if (!leaf) skip('fixture has no placed content leaves');
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      // startIndex 0 with no end is how the renderer asks for a leaf whole -
+      // the shape it sends for anything the glyph engine couldn't measure.
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      role: 'P',
+    });
+    assertEqual(result.cutCount, 0, 'a whole-leaf selection should not cut');
+    assert(!result.pdfBase64, 'no cut means the content stream is untouched');
+  }));
+
+  await test('cutting for a rectangle leaves every glyph where it was', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut twice');
+    const { leaf, offsets } = target;
+
+    // The safety property the whole splitting design rests on. Compared
+    // ownership-agnostically: the cut deliberately changes which mcid owns
+    // each glyph, and must change nothing else about it.
+    const glyphSignature = async (pageIndex) => {
+      const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+      return geometry.boxes
+        .map((b) => `${b.x0},${b.y0},${b.x1},${b.y1},${b.text}`)
+        .sort()
+        .join('|');
+    };
+
+    const before = await glyphSignature(leaf.page);
+    await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: offsets[offsets.length - 3] }],
+      role: 'H3',
+    });
+    const after = await glyphSignature(leaf.page);
+    assertEqual(after, before, 'cutting moved, added or dropped a glyph');
+  }));
+
+  await test('refuses to group content from two different pages', () => withDoc(fixture, async (doc) => {
+    const byPage = new Map();
+    for (const node of allNodes(doc.tree)) {
+      if (node.type !== 'content' || node.page === null || node.page === undefined) continue;
+      if (!byPage.has(node.page)) byPage.set(node.page, []);
+      byPage.get(node.page).push(node.id);
+    }
+    const pages = [...byPage.keys()].sort((a, b) => a - b);
+    if (pages.length < 2) skip('fixture has content on only one page');
+
+    // A bare MCID leaf takes its page from its containing tag, so grouping
+    // across pages would silently relabel which page the content points at.
+    let threw = false;
+    try {
+      await worker.call('wrap_leaves', {
+        docId: doc.docId,
+        nodeIds: [byPage.get(pages[0])[0], byPage.get(pages[1])[0]],
+        role: 'P',
+      });
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'a cross-page selection was accepted');
+  }));
+
   await test('flattening unwraps organizational tags and they stay gone', () => withDoc(fixture, async (doc) => {
     // Flatten never removes the tag you selected - only the organizational
     // tags nested inside it - so this selects the root and expects everything
@@ -712,10 +1340,75 @@ async function errorTests(fixture) {
   }));
 }
 
+// The standard 14 fonts may carry no metrics at all, because every viewer is
+// expected to have Adobe's AFM tables already. Supplying those is what lets a
+// rectangle divide a leaf that Split Content could always divide - decoding
+// needs /ToUnicode, but *placing* a character needs widths, and the two
+// disagreeing on the same text is what these guard against.
+async function standardFontTests(fixture) {
+  await test('a standard-14 font with no /Widths still places its glyphs', () => withDoc(fixture, async (doc) => {
+    const result = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    assertEqual(Object.keys(result.refusals).length, 0,
+      `refused a standard-14 font: ${JSON.stringify(result.refusals)}`);
+    assert(result.boxes.length > 50, 'placed suspiciously few glyphs');
+
+    // Widths must be real, not a single fallback repeated: Helvetica's "i"
+    // is far narrower than its "w", and a flat fallback would make every
+    // cut index drift along the line.
+    const widthOf = (ch) => {
+      const box = result.boxes.find((b) => b.text === ch);
+      return box ? box.x1 - box.x0 : null;
+    };
+    const narrow = widthOf('i');
+    const wide = widthOf('w');
+    assert(narrow !== null && wide !== null, 'fixture text lost its i and w');
+    assert(wide > narrow * 1.5, `widths look flat: i=${narrow}, w=${wide}`);
+  }));
+
+  await test('the engine and split_leaf agree on a standard-14 leaf', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree)[0];
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    const engineText = geometry.boxes
+      .filter((b) => b.mcid === leaf.mcid)
+      .sort((a, b) => a.seq - b.seq)
+      .map((b) => b.text)
+      .join('');
+    const leafText = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+    assertEqual(engineText, leafText, 'the two decoders disagree on this leaf');
+  }));
+
+  await test('a rectangle can cut a standard-14 leaf', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree)[0];
+    const leafText = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    const glyphs = geometry.boxes.filter((b) => b.mcid === leaf.mcid).sort((a, b) => a.seq - b.seq);
+    const offsets = [0];
+    for (const g of glyphs) offsets.push(offsets[offsets.length - 1] + g.text.length);
+    const cut = offsets[Math.floor(offsets.length / 2)];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: 0,
+      selections: [{ nodeId: leaf.id, startIndex: cut, endIndex: null }],
+      role: 'H2',
+    });
+    assertEqual(result.cutCount, 1, 'a trailing run needs exactly one cut');
+    const tagged = findById(result.tree, result.newNodeId);
+    const taggedText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: tagged.children[0].id })).text;
+    assertEqual(taggedText, leafText.slice(cut), 'the cut did not land where it was asked to');
+
+    await saveAndReopen(doc.docId, 'standard14-cut', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+}
+
 // --- main ------------------------------------------------------------------
 
 async function main() {
-  const missing = FIXTURES.filter((f) => !fs.existsSync(path.join(ROOT, f)));
+  const missing = [...FIXTURES, STANDARD14_FIXTURE]
+    .filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missing.length) {
     console.error(`Missing fixture PDFs: ${missing.join(', ')}`);
     process.exit(1);
@@ -738,6 +1431,10 @@ async function main() {
       await bookmarkTests(fixture);
       await errorTests(fixture);
     }
+
+    console.log(`
+${STANDARD14_FIXTURE}`);
+    await standardFontTests(STANDARD14_FIXTURE);
   } finally {
     worker.stop();
     fs.rmSync(tempDir, { recursive: true, force: true });

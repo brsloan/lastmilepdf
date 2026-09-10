@@ -9,6 +9,55 @@ import { pdfjsLib } from './pdfjs.js';
 import { PAGE_SCALE, state } from './state.js';
 import { extractMcidFromItemId } from './util.js';
 
+// Fraction of item.height treated as rising above the text baseline, the
+// rest as descent below it. pdf.js's own text-layer builder leans on a
+// similar per-font ascent ratio (it has real font-metric tables for it);
+// this fixed ratio is an approximation, but is close enough for a highlight
+// box and avoids depending on pdf.js's private font-metrics internals.
+const TEXT_ASCENT_RATIO = 0.75;
+
+// item.transform places a text run's local origin (its baseline) in PDF
+// page space and gives its local x/y axis directions - but item.width/
+// item.height are already absolute page-space lengths along those axes,
+// not unit-square coordinates. Re-running them through the full transform
+// (which still has font size baked into its a/d components) double-scales
+// them - that was inflating every box by roughly the font size and pushing
+// wide/large text off the page. Instead, build the run's quad directly in
+// page space using the transform's *unit* axis directions, split around
+// the baseline by TEXT_ASCENT_RATIO, then map that quad through the
+// viewport transform.
+//
+// Lives here rather than in viewer.js (which owns the highlight overlay and
+// was its original home) because rect-select.js needs the same per-item
+// geometry to decide what a dragged rectangle covers, and viewer.js already
+// imports from this module - putting it the other way round would be a
+// circular import.
+export function itemRectInViewport(item, viewport) {
+  const [a, b, c, d, e, f] = item.transform;
+  const xAxisLen = Math.hypot(a, b) || 1;
+  const yAxisLen = Math.hypot(c, d) || 1;
+  const ux = [a / xAxisLen, b / xAxisLen];
+  const uy = [c / yAxisLen, d / yAxisLen];
+  const ascent = item.height * TEXT_ASCENT_RATIO;
+  const descent = item.height - ascent;
+
+  const pageCorners = [
+    [e - uy[0] * descent, f - uy[1] * descent],
+    [e + ux[0] * item.width - uy[0] * descent, f + ux[1] * item.width - uy[1] * descent],
+    [e + uy[0] * ascent, f + uy[1] * ascent],
+    [e + ux[0] * item.width + uy[0] * ascent, f + ux[1] * item.width + uy[1] * ascent],
+  ];
+  const corners = pageCorners.map((p) => pdfjsLib.Util.applyTransform(p, viewport.transform));
+  const xs = corners.map((c2) => c2[0]);
+  const ys = corners.map((c2) => c2[1]);
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+  };
+}
+
 export function collectTargetMcids(nodeId) {
   const entry = state.nodesById.get(nodeId);
   if (!entry) return [];
@@ -109,6 +158,8 @@ export function clearPageCaches() {
   state.textContentCache.clear();
   state.mcidTextCache.clear();
   state.mcidGraphicsCache.clear();
+  state.leafRectsCache.clear();
+  state.codeBoxCache.clear();
 }
 
 export async function getPageTextContent(pageNumber) {
@@ -118,6 +169,105 @@ export async function getPageTextContent(pageNumber) {
     const textContent = await page.getTextContent({ includeMarkedContent: true });
     const viewport = page.getViewport({ scale: PAGE_SCALE });
     return { textContent, viewport };
+  });
+}
+
+// A page's mcid -> [rect, ...] lookup in viewport space: every text run and
+// every graphic each marked-content id paints, kept as separate rects rather
+// than unioned into one box.
+//
+// Separate rects matter here in a way they don't for the highlight overlay
+// (which unions them - see highlightNodeOnPage): a paragraph that wraps over
+// six lines has a union box spanning the full column, so a rectangle dragged
+// over one line would read as covering a sliver of it. Measuring coverage
+// per run instead keeps "how much of this leaf did I select?" honest for
+// multi-line content - see coverageOf() in rect-select.js.
+export async function getPageLeafRects(pageNumber) {
+  if (state.leafRectsCache.has(pageNumber)) return state.leafRectsCache.get(pageNumber);
+  return dedupePageBuild('leafRects', pageNumber, state.leafRectsCache, async () => {
+    const { textContent, viewport } = await getPageTextContent(pageNumber);
+    const map = new Map();
+    const mcidStack = [];
+    for (const item of textContent.items) {
+      if (item.str === undefined) {
+        if (item.type === 'beginMarkedContentProps' || item.type === 'beginMarkedContent') {
+          mcidStack.push(extractMcidFromItemId(item.id));
+        } else if (item.type === 'endMarkedContent') {
+          mcidStack.pop();
+        }
+        continue;
+      }
+      // Whitespace-only runs carry no ink to select, and their boxes are
+      // wide enough to skew a coverage figure noticeably.
+      if (!item.str || !item.str.trim()) continue;
+      const currentMcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
+      if (currentMcid === null) continue;
+      if (!map.has(currentMcid)) map.set(currentMcid, []);
+      map.get(currentMcid).push(itemRectInViewport(item, viewport));
+    }
+    // Figures and other drawn content have no text runs at all; their rects
+    // come from the operator-list pass instead.
+    const graphicRects = await getPageGraphicRects(pageNumber);
+    for (const [mcid, rects] of graphicRects) {
+      if (!map.has(mcid)) map.set(mcid, []);
+      map.get(mcid).push(...rects);
+    }
+    return map;
+  });
+}
+
+// A page's per-character geometry, from the worker's glyph-advance engine
+// (get_page_code_boxes() in tag_worker.py), converted into the same viewport
+// space every other rect here uses.
+//
+// This is the finer-grained counterpart to getPageLeafRects() above: that
+// measures whole text runs from pdf.js, this measures individual characters
+// from the PDF's own font metrics. The rectangle selection prefers this
+// where it exists, and falls back to run-level rects where the fonts can't
+// be measured - see rect-select.js.
+//
+// One worker round trip per page, cached like the pdf.js reads. The engine
+// is read-only, and what it describes only changes when an edit rewrites the
+// page's content stream, which is exactly when clearPageCaches() runs.
+export async function getPageCodeBoxes(pageNumber) {
+  if (state.codeBoxCache.has(pageNumber)) return state.codeBoxCache.get(pageNumber);
+  return dedupePageBuild('codeBoxes', pageNumber, state.codeBoxCache, async () => {
+    const { viewport } = await getPageTextContent(pageNumber);
+    let payload;
+    try {
+      payload = await window.api.getPageCodeBoxes(state.docId, pageNumber - 1);
+    } catch (err) {
+      // A worker that can't measure this page is not a failure the caller
+      // needs to handle - selection still works from pdf.js geometry, just
+      // at run rather than character resolution.
+      console.warn('Could not read per-character geometry for page', pageNumber, err);
+      return { byMcid: new Map(), refusals: new Map() };
+    }
+
+    const byMcid = new Map();
+    for (const box of payload.boxes) {
+      // The worker speaks PDF page space (y up from the bottom-left); the
+      // overlays speak viewport space (y down from the top-left).
+      const [vx0, vy0] = viewport.convertToViewportPoint(box.x0, box.y0);
+      const [vx1, vy1] = viewport.convertToViewportPoint(box.x1, box.y1);
+      if (!byMcid.has(box.mcid)) byMcid.set(box.mcid, []);
+      byMcid.get(box.mcid).push({
+        seq: box.seq,
+        text: box.text,
+        invisible: box.invisible,
+        x: Math.min(vx0, vx1),
+        y: Math.min(vy0, vy1),
+        width: Math.abs(vx1 - vx0),
+        height: Math.abs(vy1 - vy0),
+      });
+    }
+    for (const glyphs of byMcid.values()) glyphs.sort((a, b) => a.seq - b.seq);
+
+    const refusals = new Map();
+    for (const [mcid, reason] of Object.entries(payload.refusals || {})) {
+      refusals.set(Number(mcid), reason);
+    }
+    return { byMcid, refusals };
   });
 }
 
@@ -446,14 +596,54 @@ function firstLeafNode(nodeId) {
 // at all both simply fail the test. Backs the 'L' and 'I' shortcuts -
 // tag_worker.py has no text extraction of its own, so this decision has to
 // be made here and passed down as a plain boolean per node id.
+// The same test against text the caller already has. The rectangle tool
+// knows its selected run's text from the glyph boxes, so it has no node to
+// look up - but the question, and the answer, must stay identical to the
+// tree's own 'I' shortcut.
+export function looksLikeListLabel(text) {
+  return LIST_LABEL_RE.test((text || '').trim());
+}
+
+// A marker at the *start* of some text that also carries the words it
+// introduces - "• ask clarification questions." as one run rather than a
+// bullet leaf beside a text leaf. Returns how many characters to cut off to
+// leave the marker on its own, or 0 when there's no such marker.
+//
+// LIST_LABEL_RE can't answer this: it is anchored at both ends, because its
+// question is "is this leaf nothing but a marker?", which is the shape a
+// well-formed list already has. Plenty of documents don't have it - the
+// marker and its text are painted as one run - and there the marker has to
+// be split off before it can be a Lbl at all.
+//
+// The trailing \s+\S is what makes this safe: a marker with nothing after
+// it is already a label leaf in its own right, and cutting there would
+// leave an empty LBody.
+const LEADING_LIST_LABEL_RE = /^(\s*)([•‣◦▪●○*]|[A-Za-z]\.|\d+\.)\s+\S/;
+
+export function leadingListLabelLength(text) {
+  const match = LEADING_LIST_LABEL_RE.exec(text || '');
+  return match ? match[1].length + match[2].length : 0;
+}
+
+
+// The text of the first content leaf under `nodeId`, or '' - what both list
+// label questions above get asked about.
+export async function firstLeafText(nodeId) {
+  const leaf = firstLeafNode(nodeId);
+  if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined
+      || leaf.page === null || leaf.page === undefined) {
+    return '';
+  }
+  return (await resolveMcidText(leaf.page, leaf.mcid)) || '';
+}
+
 export async function isListLabelLeaf(nodeId) {
   const leaf = firstLeafNode(nodeId);
   if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined
       || leaf.page === null || leaf.page === undefined) {
     return false;
   }
-  const text = await resolveMcidText(leaf.page, leaf.mcid);
-  return LIST_LABEL_RE.test((text || '').trim());
+  return looksLikeListLabel(await resolveMcidText(leaf.page, leaf.mcid));
 }
 
 // Collects a tag's own content text (its content-leaf descendants' text,

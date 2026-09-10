@@ -1127,6 +1127,14 @@ ipcMain.handle('tags:flatten-tags', async (_event, { docId, nodeIds }) => {
   return callWorker('flatten_tags', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:wrap-leaves', async (_event, { docId, nodeIds, role }) => {
+  return callWorker('wrap_leaves', { docId, nodeIds, role });
+});
+
+ipcMain.handle('tags:tag-rect-content', async (_event, { docId, pageIndex, selections, role, useLabel }) => {
+  return callWorker('tag_rect_content', { docId, pageIndex, selections, role, useLabel });
+});
+
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
   return callWorker('scope_tables', { docId });
 });
@@ -1149,6 +1157,10 @@ ipcMain.handle('tags:join-tags', async (_event, { docId, nodeIds }) => {
 
 ipcMain.handle('tags:get-leaf-text', async (_event, { docId, nodeId }) => {
   return callWorker('get_leaf_text', { docId, nodeId });
+});
+
+ipcMain.handle('tags:get-page-code-boxes', async (_event, { docId, pageIndex }) => {
+  return callWorker('get_page_code_boxes', { docId, pageIndex });
 });
 
 ipcMain.handle('tags:split-leaf', async (_event, { docId, nodeId, splitIndex }) => {
@@ -1183,12 +1195,12 @@ ipcMain.handle('tags:convert-to-figure', async (_event, { docId, nodeIds }) => {
   return callWorker('convert_to_figure', { docId, nodeIds });
 });
 
-ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds, labelFlags }) => {
-  return callWorker('make_list', { docId, nodeIds, labelFlags });
+ipcMain.handle('tags:make-list', async (_event, { docId, nodeIds, labelFlags, labelSplits }) => {
+  return callWorker('make_list', { docId, nodeIds, labelFlags, labelSplits });
 });
 
-ipcMain.handle('tags:convert-to-list-item', async (_event, { docId, nodeIds, labelFlags }) => {
-  return callWorker('convert_to_list_item', { docId, nodeIds, labelFlags });
+ipcMain.handle('tags:convert-to-list-item', async (_event, { docId, nodeIds, labelFlags, labelSplits }) => {
+  return callWorker('convert_to_list_item', { docId, nodeIds, labelFlags, labelSplits });
 });
 
 ipcMain.handle('tags:make-table', async (_event, { docId, nodeIds }) => {

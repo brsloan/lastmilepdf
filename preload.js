@@ -117,6 +117,29 @@ const api = {
   flattenTags: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:flatten-tags', { docId, nodeIds }),
   /**
+   * Groups content leaves selected by a rectangle on the page preview into
+   * one new tag, discarding any source tag the move leaves empty. Unlike
+   * setRoleOrWrap(), the leaves may come from several different parents.
+   * @param {string} docId
+   * @param {string[]} nodeIds content-leaf ids, any order
+   * @param {string} role
+   * @returns {Promise<import('./types/domain').WrapLeavesResult>}
+   */
+  wrapLeaves: (docId, nodeIds, role) =>
+    ipcRenderer.invoke('tags:wrap-leaves', { docId, nodeIds, role }),
+  /**
+   * Like wrapLeaves(), but first divides each partially covered leaf at the
+   * rectangle's edges so only the covered run is tagged. One undo step.
+   * @param {string} docId
+   * @param {number} pageIndex 0-based
+   * @param {import('./types/domain').RectSelection[]} selections
+   * @param {string} role
+   * @param {boolean} [useLabel] For an LI whose marker is already a piece of its own.
+   * @returns {Promise<import('./types/domain').TagRectContentResult>}
+   */
+  tagRectContent: (docId, pageIndex, selections, role, useLabel = false) =>
+    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role, useLabel }),
+  /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
    */
@@ -154,6 +177,15 @@ const api = {
    */
   getLeafText: (docId, nodeId) =>
     ipcRenderer.invoke('tags:get-leaf-text', { docId, nodeId }),
+  /**
+   * Per-character geometry for one page, in PDF page space - what the
+   * rectangle selection needs to name a split point. Read-only.
+   * @param {string} docId
+   * @param {number} pageIndex 0-based
+   * @returns {Promise<import('./types/domain').PageCodeBoxes>}
+   */
+  getPageCodeBoxes: (docId, pageIndex) =>
+    ipcRenderer.invoke('tags:get-page-code-boxes', { docId, pageIndex }),
   /**
    * @param {string} docId
    * @param {string} nodeId
@@ -220,18 +252,18 @@ const api = {
    * @param {string} docId
    * @param {string[]} nodeIds
    * @param {Record<string, boolean>} labelFlags nodeId -> whether its first leaf is a list label (Lbl).
-   * @returns {Promise<MutationResult>}
+   * @returns {Promise<import('./types/domain').ListResult>}
    */
-  makeList: (docId, nodeIds, labelFlags) =>
-    ipcRenderer.invoke('tags:make-list', { docId, nodeIds, labelFlags }),
+  makeList: (docId, nodeIds, labelFlags, labelSplits = {}) =>
+    ipcRenderer.invoke('tags:make-list', { docId, nodeIds, labelFlags, labelSplits }),
   /**
    * @param {string} docId
    * @param {string[]} nodeIds
    * @param {Record<string, boolean>} labelFlags
-   * @returns {Promise<MutationResult>}
+   * @returns {Promise<import('./types/domain').ListResult>}
    */
-  convertToListItem: (docId, nodeIds, labelFlags) =>
-    ipcRenderer.invoke('tags:convert-to-list-item', { docId, nodeIds, labelFlags }),
+  convertToListItem: (docId, nodeIds, labelFlags, labelSplits = {}) =>
+    ipcRenderer.invoke('tags:convert-to-list-item', { docId, nodeIds, labelFlags, labelSplits }),
   /**
    * @param {string} docId
    * @param {string[]} nodeIds

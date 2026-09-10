@@ -8,6 +8,7 @@ import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails } from './details.js';
 import { el } from './dom.js';
 import { clearPageCaches } from './page-content.js';
+import { setRectSelectActive } from './rect-select.js';
 import { updateRunScriptButtonState } from './scripts.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
@@ -38,6 +39,11 @@ function resetPerDocumentNodeState() {
   state.collapseOverrides.clear();
   state.findReplaceLastMatchId = null;
   state.pendingPulledActualTextNodeId = null;
+  // The rubber-band tool doesn't survive a document change either: its
+  // pending selection is a list of node ids, and leaving the mode armed
+  // would keep the canvas in crosshair mode behind a button the incoming
+  // document may have disabled.
+  setRectSelectActive(false);
 }
 
 /**
@@ -76,6 +82,7 @@ export async function performOpen(filePath) {
     el.btnScopeTables.disabled = !opened.hasStructTree;
     el.btnSmartifact.disabled = !opened.hasStructTree;
     el.btnAddFigure.disabled = !opened.hasStructTree;
+    el.btnRectSelect.disabled = !opened.hasStructTree;
     el.btnAddP.disabled = !opened.hasStructTree;
     el.btnWalk.disabled = !opened.hasStructTree;
     el.btnFixAllActualText.disabled = !opened.hasStructTree;
@@ -271,6 +278,7 @@ export async function performClose() {
   el.btnScopeTables.disabled = true;
   el.btnSmartifact.disabled = true;
   el.btnAddFigure.disabled = true;
+  el.btnRectSelect.disabled = true;
   el.btnAddP.disabled = true;
   el.btnWalk.disabled = true;
   el.btnFixAllActualText.disabled = true;

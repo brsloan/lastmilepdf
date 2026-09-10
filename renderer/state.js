@@ -92,6 +92,8 @@ export const state = {
   textContentCache: new Map(), // page number -> { textContent, viewport }, reset per document
   mcidTextCache: new Map(),    // page number -> Map(mcid -> text), reset per document
   mcidGraphicsCache: new Map(), // page number -> { imageRects, vectorMcids }, reset per document
+  leafRectsCache: new Map(),    // page number -> Map(mcid -> rects[]), reset per document - see getPageLeafRects()
+  codeBoxCache: new Map(),      // page number -> { byMcid, refusals } per-character geometry, reset per document - see getPageCodeBoxes()
   highlightToken: 0,           // invalidates in-flight highlight computations when selection/doc changes
   tablePreviewToken: 0,        // invalidates in-flight table-preview builds when selection/doc changes
   listPreviewToken: 0,         // invalidates in-flight list-preview builds when selection/doc changes
@@ -113,6 +115,13 @@ export const state = {
   walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
   figureDrawActive: false,      // true while the Add Figure button's rubber-band draw mode is armed
   figureDrawRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
+  rectSelectActive: false,      // true while the Select Content button's rubber-band mode is armed - see rect-select.js
+  rectSelectRect: null,         // { start: {x,y}, current: {x,y} } in canvas-pixel space, while dragging
+  rectSelectHits: null,         // last computed [{ nodeId, rects, coverage, full }] for the in-progress/just-finished drag
+  rectSelectSkipped: 0,         // leaves the last drag touched but didn't cover enough of, for the status line
+  rectSelectPending: null,      // leaf ids awaiting a role keystroke after a completed drag, or null
+  rectSelectIndex: null,        // Map(mcid -> leaf node id) for the page being dragged on, built once per drag
+  rectSelectPage: null,         // 1-based page the current selection belongs to; anything else invalidates it
   docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
   hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.

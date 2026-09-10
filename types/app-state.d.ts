@@ -21,6 +21,32 @@ export interface Point {
   y: number;
 }
 
+/** An axis-aligned box in pdf.js viewport space, as the overlays use. */
+export interface ViewportRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One character's box in viewport space, from the worker's glyph engine. */
+export interface GlyphBox extends ViewportRect {
+  /** Index within its own marked-content span, counting from 0. */
+  seq: number;
+  /** What it decodes to - usually one character, but a ligature can be more. */
+  text: string;
+  /** Painted in text render mode 3, as an OCR layer over a scan is. */
+  invisible: boolean;
+}
+
+/** One page's per-character geometry, plus the spans that couldn't be measured. */
+export interface PageGlyphs {
+  /** mcid -> its glyphs, in painting order. */
+  byMcid: Map<number, GlyphBox[]>;
+  /** mcid -> why that span was refused; such a span is selectable but not splittable. */
+  refusals: Map<number, string>;
+}
+
 /** An entry in `state.bookmarksById` - mirrors IndexedNode, for the outline. */
 export interface IndexedBookmark {
   node: BookmarkNode;
@@ -75,6 +101,29 @@ export interface PageGraphicsInfo {
 export interface FigureDrawRect {
   start: Point;
   current: Point;
+}
+
+/**
+ * One content leaf a Select Content rectangle picked up, and how much of it
+ * the rectangle actually covered - see hitsForRect() in rect-select.js.
+ */
+export interface RectSelectHit {
+  /** The content leaf's node id, as wrap_leaves() expects it. */
+  nodeId: string;
+  /** The leaf's painted runs in viewport space, one rect per text run. */
+  rects: ViewportRect[];
+  /** Share (0-1) of those runs' combined area inside the rectangle. */
+  coverage: number;
+  /** True when the leaf sits entirely inside, so it has no overhang to flag. */
+  full: boolean;
+  /** True when the rectangle's edges can divide this leaf exactly. */
+  splittable: boolean;
+  /** Per-character geometry, when the worker could measure this leaf's font. */
+  glyphs: GlyphBox[] | null;
+  /** The text the rectangle covers, where it can be known. */
+  runText: string | null;
+  /** The covered run, as offsets into the leaf's decoded text; null when there's nothing to cut by. */
+  run: { startIndex: number; endIndex: number } | null;
 }
 
 export interface AppState {
@@ -133,6 +182,10 @@ export interface AppState {
   mcidTextCache: Map<number, Map<number, string>>;
   /** page number -> cached graphics info, reset per document. */
   mcidGraphicsCache: Map<number, PageGraphicsInfo>;
+  /** page number -> Map(mcid -> painted rects), reset per document. */
+  leafRectsCache: Map<number, Map<number, ViewportRect[]>>;
+  /** page number -> per-character geometry from the worker, reset per document. */
+  codeBoxCache: Map<number, PageGlyphs>;
 
   // --- editing state ----------------------------------------------------
   /** Tag edits made since the last save. */
@@ -181,6 +234,22 @@ export interface AppState {
   // --- the Add Figure tool ---------------------------------------------
   figureDrawActive: boolean;
   figureDrawRect: FigureDrawRect | null;
+
+  // --- Select Content (rect-select.js) ----------------------------------
+  /** True while the rubber-band content-selection tool is armed. */
+  rectSelectActive: boolean;
+  /** The in-progress drag, in canvas-pixel space; null when not dragging. */
+  rectSelectRect: FigureDrawRect | null;
+  /** What the current (or just-finished) drag covers. */
+  rectSelectHits: RectSelectHit[] | null;
+  /** How many leaves that drag touched but covered too little of to take. */
+  rectSelectSkipped: number;
+  /** Leaf ids from a finished drag, waiting on a role keystroke. */
+  rectSelectPending: string[] | null;
+  /** mcid -> leaf node id for the page being dragged on; built once per drag. */
+  rectSelectIndex: Map<number, string> | null;
+  /** 1-based page the selection belongs to; rendering any other page discards it. */
+  rectSelectPage: number | null;
 
   // --- Actual Text review ----------------------------------------------
   /** nodeId -> an AI fix already applied, kept to render the inline diff. */

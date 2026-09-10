@@ -39,6 +39,7 @@ export const el = {
   btnScopeTables: asButton('btn-scope-tables'),
   btnSmartifact: asButton('btn-smartifact'),
   btnAddFigure: asButton('btn-add-figure'),
+  btnRectSelect: asButton('btn-rect-select'),
   btnAddP: asButton('btn-add-p'),
   btnWalk: asButton('btn-walk'),
   btnVerify: asButton('btn-verify'),

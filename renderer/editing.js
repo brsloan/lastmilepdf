@@ -10,16 +10,24 @@
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
-import { isListLabelLeaf } from './page-content.js';
+import { firstLeafText, isListLabelLeaf, leadingListLabelLength, looksLikeListLabel } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { hangingIndentItems, listItemPieces } from './rect-select.js';
+import { refreshPdfPreviewBytes } from './viewer.js';
 
 export async function performUndo() {
   if (!state.docId || !state.canUndo) return;
   try {
     const result = await window.api.undo(state.docId);
+    // Stepping across an edit that rewrote a page's content stream leaves
+    // pdf.js parsing bytes the restored tree no longer describes - its
+    // MCIDs would name different text, so leaves come up blank and
+    // highlights land nowhere. The worker only sends bytes when that's the
+    // case; see _step_history() in tag_worker.py.
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
@@ -45,6 +53,7 @@ export async function performRedo() {
   if (!state.docId || !state.canRedo) return;
   try {
     const result = await window.api.redo(state.docId);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64); // see performUndo()
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
@@ -287,6 +296,150 @@ export async function deleteSelection() {
 // tag_worker.py), which is what we want selected afterward anyway. Not used
 // for the 'I' shortcut - see convertSelectionToListItem(), which needs the
 // Lbl/LBody handling convert_to_list_item() backs it with instead.
+// Tags whatever the Select Content rectangle is currently holding (see
+// rect-select.js) as one new tag with `role`, via wrap_leaves().
+//
+// Unlike applyRoleShortcut() above, this never wraps each selected item
+// separately: the whole point of the gesture is that the rectangle's
+// contents become one tag, even when the leaves came from several different
+// paragraphs. The worker also discards any source tag the move leaves empty,
+// which is why the status line reports that count - a rectangle that happens
+// to consume an entire <Sect> removes it, and that shouldn't be silent.
+// One selection per list item found inside a covered run - or just the run
+// itself where its items can't be told apart, which is the same thing this
+// did before and still the right answer for a leaf that can't be cut.
+function listSelectionsFor(hit) {
+  const base = hit.run ? hit.run.startIndex : 0;
+  const pieces = hit.glyphs ? listItemPieces(hit.glyphs, hit.run) : [];
+  if (pieces.length === 0) {
+    return [{
+      nodeId: hit.nodeId,
+      startIndex: base,
+      endIndex: hit.run ? hit.run.endIndex : null,
+      labelSplit: leadingListLabelLength(hit.runText) || null,
+    }];
+  }
+  const runEnd = hit.run ? hit.run.endIndex : null;
+  const textLength = pieces[pieces.length - 1].end;
+  return pieces.map((piece) => ({
+    nodeId: hit.nodeId,
+    startIndex: base + piece.start,
+    // Keep "runs to the end" as null where it really does, so the worker
+    // can skip decoding a leaf it doesn't need to cut.
+    endIndex: runEnd === null && piece.end === textLength ? null : base + piece.end,
+    labelSplit: piece.labelLength || null,
+  }));
+}
+
+// The reference-list variant of tagRectSelection('L'): entries found by
+// where each line begins rather than by a marker on it. Kept behind its own
+// shortcut, never a fallback, because an ordinary indented paragraph is this
+// shape inverted and guessing wrong would carve it up at every line.
+export async function tagRectSelectionAsHangingList() {
+  const hits = state.rectSelectHits;
+  if (!hits || hits.length === 0) return;
+
+  const found = hangingIndentItems(hits);
+  if (!found) {
+    setStatus('No hanging indent found in that selection - its lines all start at the same place.'
+      + ' Use L if the items have bullets or numbers.');
+    return;
+  }
+  const selections = found.map((piece) => ({
+    nodeId: hits[piece.hitIndex].nodeId,
+    startIndex: piece.startIndex,
+    endIndex: piece.endIndex,
+    labelSplit: null,
+    itemIndex: piece.itemIndex,
+  }));
+  const items = new Set(found.map((p) => p.itemIndex)).size;
+  await commitRectSelection('L', selections, `Tagged ${items} entries as a list.`);
+}
+
+export async function tagRectSelection(role) {
+  const hits = state.rectSelectHits;
+  if (!hits || hits.length === 0) return;
+
+  // Each leaf contributes the run of its own text the rectangle covered.
+  // A leaf with no run - fully covered, or one the worker couldn't measure -
+  // is sent as its whole self, which is what makes this degrade cleanly to
+  // taking leaves whole on documents whose fonts can't be read.
+  // A list is built from items, and a run is not the same thing as an item:
+  // a whole list is often painted as one run, so tagging the selection as a
+  // list has to find the items inside each run rather than assume one each.
+  // Every other role takes the runs as they come.
+  const selections = role === 'L'
+    ? hits.flatMap((hit) => listSelectionsFor(hit))
+    : hits.map((hit) => ({
+      nodeId: hit.nodeId,
+      startIndex: hit.run ? hit.run.startIndex : 0,
+      endIndex: hit.run ? hit.run.endIndex : null,
+      labelSplit: role === 'LI' ? (leadingListLabelLength(hit.runText) || null) : null,
+    }));
+
+  // An LI splits into Lbl + LBody when its first piece is a bare marker,
+  // and into a single LBody otherwise - the same question the tree's own
+  // 'I' shortcut asks, answered from the text the rectangle covered rather
+  // than from a leaf's full text, since a cut may have taken only part of
+  // one. "First" here is reading order down the page, which is where a
+  // bullet sits relative to the words it introduces.
+  // The other shape a marker comes in: already a run of its own, beside the
+  // run it introduces. Then there is nothing to cut - the first piece simply
+  // becomes the Lbl.
+  let useLabel = false;
+  if (role === 'LI' && hits.length > 1) {
+    const first = [...hits].sort((a, b) => {
+      const ay = Math.min(...a.rects.map((r) => r.y));
+      const by = Math.min(...b.rects.map((r) => r.y));
+      if (Math.abs(ay - by) > 1) return ay - by;
+      return Math.min(...a.rects.map((r) => r.x)) - Math.min(...b.rects.map((r) => r.x));
+    })[0];
+    useLabel = looksLikeListLabel(first?.runText);
+  }
+
+  const count = selections.length;
+  const what = `${count} item${count === 1 ? '' : 's'}`;
+  await commitRectSelection(role, selections, `Tagged ${what} as ${role}.`, useLabel);
+}
+
+// Sends a rectangle selection to the worker and applies what comes back.
+// Shared by the two ways of arriving here - a plain role, and the
+// hanging-indent list - because everything from the call onwards is the
+// same: re-feed pdf.js if a cut moved the bytes under it, adopt the tree,
+// select what was made, and say what happened.
+async function commitRectSelection(role, selections, headline, useLabel = false) {
+  const pageIndex = state.currentPage - 1;
+  try {
+    const result = await window.api.tagRectContent(
+      state.docId, pageIndex, selections, role, useLabel);
+    // A cut rewrites the page's content stream, so pdf.js is now holding
+    // bytes that no longer describe the page. Re-feed it before the tree
+    // update below asks it to draw a highlight against those positions.
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
+    // applyFreshTree() drops the pending selection and its overlay as part
+    // of rebuilding the tree, so there's nothing to clear separately here.
+    // On failure it never runs, which leaves the selection in place for the
+    // user to retry - which is what we want.
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+
+    if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
+    else closeDetails();
+
+    const cut = result.cutCount > 0
+      ? ` Split ${result.cutCount} time${result.cutCount === 1 ? '' : 's'} to fit the rectangle.`
+      : '';
+    const removed = result.removedTagCount > 0
+      ? ` ${result.removedTagCount} emptied tag${result.removedTagCount === 1 ? '' : 's'} discarded.`
+      : '';
+    setStatus(result.relabelled
+      ? `Retagged as ${role}.${cut}${removed}`
+      : `${headline}${cut}${removed}`);
+  } catch (err) {
+    reportError(`Could not tag the selection as ${role}`, err);
+  }
+}
+
 export async function applyRoleShortcut(role) {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
@@ -412,16 +565,38 @@ export async function convertSelectionToFigure() {
 // Reselects on a single target the same way convertSelectionToFigure()
 // does; a multi-target conversion can restructure arbitrarily much of the
 // tree at once, so it just clears the selection instead.
+// How each tag being made into a list item should find its label, asked the
+// same way for the 'L' and 'I' shortcuts.
+//
+// Two shapes, because documents use both: a marker that is already a content
+// leaf of its own is promoted as it stands (labelFlags), while one sharing a
+// leaf with the text it introduces has to be cut off first (labelSplits).
+// The worker falls back to a single LBody when a cut it was asked for turns
+// out not to be possible.
+async function listLabelPlan(ids) {
+  const labelFlags = {};
+  const labelSplits = {};
+  for (const id of ids) {
+    labelFlags[id] = await isListLabelLeaf(id);
+    if (!labelFlags[id]) {
+      const split = leadingListLabelLength(await firstLeafText(id));
+      if (split > 0) labelSplits[id] = split;
+    }
+  }
+  return { labelFlags, labelSplits };
+}
+
 export async function convertSelectionToListItem() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
   if (topLevelIds.length === 0) return;
 
-  const labelFlags = {};
-  for (const id of topLevelIds) labelFlags[id] = await isListLabelLeaf(id);
+  const { labelFlags, labelSplits } = await listLabelPlan(topLevelIds);
 
   try {
-    const result = await window.api.convertToListItem(state.docId, topLevelIds, labelFlags);
+    const result = await window.api.convertToListItem(
+      state.docId, topLevelIds, labelFlags, labelSplits);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     applyUndoState(result);
 
@@ -454,11 +629,11 @@ export async function groupSelectionIntoList() {
   const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
   const firstId = orderedIds[0] ?? ids[0];
 
-  const labelFlags = {};
-  for (const id of ids) labelFlags[id] = await isListLabelLeaf(id);
+  const { labelFlags, labelSplits } = await listLabelPlan(ids);
 
   try {
-    const result = await window.api.makeList(state.docId, ids, labelFlags);
+    const result = await window.api.makeList(state.docId, ids, labelFlags, labelSplits);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     applyUndoState(result);
 
