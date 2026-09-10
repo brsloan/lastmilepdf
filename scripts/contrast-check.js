@@ -231,10 +231,75 @@ for (const [token, alpha] of [['--overlay-wash', 0.28], ['--overlay-wash-alt', 0
   show(token, v, 4.5, `wash resolves to ${wash}`);
 }
 
+// ---- 5. the marketing site ----------------------------------------------
+// docs/ uses the same two palettes as the app - same token names, same
+// values - but it has no preference to store, so it follows the visitor's
+// prefers-color-scheme instead: dark in :root, light in the media block.
+//
+// It gets its own section because its surfaces are not the app's. Cards
+// stack differently, the accent is used as a fill in some places and as text
+// in others, and the tinted pills and columns are pairs the app never makes.
+// The one below caught exactly that: the role pill put --accent as text on an
+// 18% tint of itself, which pulls the ground toward the text and landed at
+// 3.99:1 in dark.
+//
+// Note the limit of this whole file: the pairs are listed by hand, not
+// derived from the CSS rules. It catches a value drifting out of range; it
+// cannot notice a rule that starts using a token this list does not pair.
+const SITE_PATH = path.resolve(__dirname, '..', 'docs', 'styles.css');
+const siteCss = fs.readFileSync(SITE_PATH, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+
+function siteTokens(src) {
+  const out = {};
+  for (const m of src.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) out[m[1]] = m[2].trim();
+  return out;
+}
+const LIGHT_AT = siteCss.indexOf('@media (prefers-color-scheme: light)');
+if (LIGHT_AT < 0) fail('docs/styles.css no longer has a prefers-color-scheme block');
+const siteDark = siteTokens(siteCss.slice(siteCss.indexOf(':root {'), LIGHT_AT));
+const siteLight = { ...siteDark, ...siteTokens(siteCss.slice(LIGHT_AT)) };
+
+console.log('\nmarketing site (docs/), 4.5:1 text:');
+for (const [name, t] of [['dark', siteDark], ['light', siteLight]]) {
+  console.log(`  ${name}:`);
+  const grounds = ['--bg', '--panel', '--panel-alt'];
+  let worst = Infinity;
+  let worstAt = '';
+  for (const fg of ['--text', '--text-dim', '--accent', '--accent-strong', '--warn-text']) {
+    for (const g of grounds) {
+      const v = ratio(t[fg], t[g]);
+      if (v < worst) { worst = v; worstAt = `${fg} on ${g}`; }
+      if (v < 4.5) fail(`site ${name}: ${fg} on ${g} is ${v.toFixed(2)}, needs 4.5`);
+    }
+  }
+  show('worst foreground', worst, 4.5, worstAt);
+
+  // Uses the same require_() helper as the app sections above rather than a
+  // table of rows: a mixed [string, number, number, string?] array infers as
+  // (string | number)[] and loses both types on destructuring.
+  const site = `site ${name}`;
+  require_(site, 'btn ink on fill', ratio(t['--btn-ink'], t['--accent']), 4.5,
+    'nav CTA, primary button');
+  require_(site, 'btn ink on hover', ratio(t['--btn-ink'], t['--accent-strong']), 4.5,
+    'primary button hover');
+  require_(site, 'border-control', Math.min(...grounds.map((g) => ratio(t['--border-control'], t[g]))),
+    3, '.btn-secondary edge, 1.4.11');
+  require_(site, 'role pill text',
+    ratio(t['--accent-strong'], composite(t['--accent'], 0.18, t['--panel-alt'])), 4.5,
+    'on an --accent tint');
+  require_(site, 'eyebrow text',
+    ratio(t['--accent-strong'], composite(t['--accent-strong'], 0.10, t['--bg'])), 4.5,
+    'on its own tint');
+  require_(site, 'scope-good body',
+    ratio(t['--text-dim'], composite(t['--accent-strong'], 0.06, t['--bg'])), 4.5);
+  require_(site, 'scope-limit body',
+    ratio(t['--text-dim'], composite(t['--warn-text'], 0.06, t['--bg'])), 4.5);
+}
+
 // ---- result --------------------------------------------------------------
 if (failures.length) {
   console.log(`\n${failures.length} contrast problem(s):`);
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
-console.log('\nboth themes and the overlay group pass their targets.');
+console.log('\nthe app\'s two themes, the overlay group and the site all pass.');

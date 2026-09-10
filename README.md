@@ -1,6 +1,15 @@
 # LastMilePDF
 
-![screenshot](images/screenshot.png)
+<!-- GitHub honours prefers-color-scheme inside <picture>, so this follows the
+     reader's own GitHub theme. The alt text sits on the <img> and serves every
+     source, which is why it does not name a theme: which of the two is showing
+     depends on the reader, not on us. Dark is the <img> fallback for anything
+     that doesn't support <picture>, matching the app's own default. -->
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/lastmilepdf-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lastmilepdf-dark.png">
+  <img src="docs/assets/lastmilepdf-dark.png" width="1920" height="1008" alt="The LastMilePDF window. A PDF page preview fills the left pane, with a bulleted list on the page outlined and labelled /L. The tag tree in the middle has that list's /L tag selected and expanded to show its /LI, /Lbl and /LBody children. Tag properties on the right show the role &quot;L&quot;, empty language and alt text fields, and a live list preview of the four bullet items.">
+</picture>
 
 LastMilePDF is for cleaning up auto-tagged PDFs, especially those made from scanned images. Its purpose is to have the best possible user-interface for manual tag changes, with optional built-in AI assistance for proofreading OCR errors.
 
@@ -311,12 +320,24 @@ theme block is invisible until someone switches to that theme and finds one
 theme's text on another theme's ground. The check exists so the claim in the
 header comment of `styles.css` stays true rather than becoming folklore.
 
-Two details worth knowing if you edit it: every colour token has to be a hex
+It also covers the marketing site in `docs/`, which uses the same two
+palettes and the same token names but picks between them with
+`prefers-color-scheme` rather than a stored preference. The site gets its own
+section because its surfaces are not the app's - cards stack differently, and
+its tinted pills and columns are pairs the app never makes. One of those
+caught a real problem: the role pill put `--accent` as text on an 18% tint of
+itself, which pulls the ground toward the text and measured 3.99:1 in dark.
+
+Three details worth knowing if you edit it. Every colour token has to be a hex
 literal, because a named colour would come through as `NaN` and compare false
-against every threshold - failing for the wrong reason. And each foreground is
+against every threshold - failing for the wrong reason. Each foreground is
 measured against *every* background surface rather than its intended one; both
 defects found while the themes were being built were a token landing on a
-surface nobody had thought about.
+surface nobody had thought about. And the pairs themselves are listed by hand
+rather than derived from the CSS rules, so the check notices a *value* drifting
+out of range but cannot notice a rule that starts reaching for a different
+token - swapping that role pill back to `--accent` passes, because the check
+still measures the pairing it was told about.
 
 This covers the layer where the bugs actually happen. The worker is where PDF
 semantics live, and a wrong edit there produces a file that looks correct in

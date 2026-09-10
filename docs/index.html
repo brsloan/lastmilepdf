@@ -8,9 +8,17 @@
   <link rel="icon" href="assets/icon.png" />
   <link rel="stylesheet" href="styles.css" />
 
+  <!-- So the browser's own chrome (the address bar on mobile, mainly) matches
+       whichever palette the visitor's system asks for. These two values are
+       --bg from each theme in styles.css; keep them in step by hand, since a
+       meta tag cannot read a custom property. -->
+  <meta name="theme-color" content="#1b1c21" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+
   <meta property="og:title" content="LastMilePDF — Free PDF Accessibility Tag Editor" />
   <meta property="og:description" content="Clean up auto-tagged PDFs fast. Built for universities and nonprofits doing accessibility remediation on a real budget." />
-  <meta property="og:image" content="assets/screenshot.png" />
+  <meta property="og:image" content="assets/lastmilepdf-dark.png" />
+  <meta property="og:image:alt" content="The LastMilePDF window: a PDF page preview beside its accessibility tag tree and a tag properties panel." />
   <meta property="og:type" content="website" />
 </head>
 <body>
@@ -45,9 +53,39 @@
         <a class="btn btn-primary" href="#download">Download LastMilePDF</a>
         <a class="btn btn-secondary" href="https://github.com/brsloan/lastmilepdf">View on GitHub</a>
       </div>
-      <div class="screenshot-frame">
-        <img src="assets/screenshot.png" alt="LastMilePDF main window showing a PDF page preview next to its accessibility tag tree and tag properties panel" />
+      <p class="gallery-note gallery-note-lead">
+        Select a tag and its content highlights on the page. Click content on the page and
+        its tag is selected — no mode switching, no dialogs to hunt through.
+      </p>
+      <!-- Both shots are the same document with the same tag selected, so the
+           pair reads as one window in two themes rather than two screenshots.
+           The alt text follows that: the first describes the view in full, the
+           second says only what differs, so a screen reader user is not read
+           the same three-pane description twice. -->
+      <div class="theme-pair">
+        <figure class="shot">
+          <div class="shot-frame">
+            <img
+              src="assets/lastmilepdf-dark.png"
+              width="1920" height="1008"
+              alt="LastMilePDF in its dark theme. A PDF page preview fills the left pane, with a bulleted list on the page outlined in teal and labelled /L. The tag tree in the middle has that list's /L tag selected and expanded to show its /LI, /Lbl and /LBody children. Tag properties on the right show the role &quot;L&quot;, empty language and alt text fields, and a live list preview of the four bullet items." />
+          </div>
+          <figcaption class="shot-caption">Dark theme</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="shot-frame">
+            <img
+              src="assets/lastmilepdf-light.png"
+              width="1920" height="1008"
+              alt="The same window in the light theme: identical document, identical selected list tag, on a white background with darker text and outlines." />
+          </div>
+          <figcaption class="shot-caption">Light theme</figcaption>
+        </figure>
       </div>
+      <p class="gallery-note">
+        Two themes, following your system setting by default. Both meet WCAG 2.1 AA for
+        contrast; the light one goes further, to 7:1 for text.
+      </p>
     </div>
   </section>
 
@@ -155,13 +193,54 @@
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">See it</span>
-        <h2>Page preview, tag tree, and properties — all in one view</h2>
-        <p>Select a tag and its content highlights on the page. Click content on the page and its tag is selected. No mode switching, no dialogs to hunt through.</p>
+        <h2>A closer look at the parts that save the most time</h2>
+        <p>Three of the places the manual pass usually gets slowest: proofreading OCR text against the page, sorting out table headers, and working out what still needs fixing.</p>
       </div>
-      <div class="screenshot-frame">
-        <img src="assets/screenshot.png" alt="LastMilePDF editing a scanned book PDF: page preview on the left, tag tree in the middle with a list selected, and tag properties with a live list preview on the right" />
+
+      <div class="shot-stack">
+        <figure class="shot">
+          <div class="shot-frame">
+            <img
+              src="assets/proofread-AI.png" loading="lazy"
+              width="1920" height="1008"
+              alt="Proofread Mode in the dark theme. The page preview sits on the left, a wide Actual Text field in the middle holds the selected tag's text with the words an AI pass changed highlighted in yellow, and a narrow tag tree strip on the right marks each corrected tag with an &quot;AI fix&quot; badge. A bar below the field reads &quot;AI fix applied — changes highlighted&quot; next to a Revert button." />
+          </div>
+          <figcaption class="shot-caption">
+            <strong>Proofread Mode with AI-assisted OCR fixes.</strong> The page image and the
+            text it produced sit side by side, every AI change is highlighted for approval,
+            and Revert puts the original back. The tag strip flags which tags were touched.
+          </figcaption>
+        </figure>
+
+        <figure class="shot">
+          <div class="shot-frame">
+            <img
+              src="assets/table-editor.png" loading="lazy"
+              width="1920" height="1008"
+              alt="The Table Editor dialog in the light theme, showing a five-row table as an editable grid. Header cells carry scope arrows — a down arrow for column scope, a down-and-right arrow for both — and a red cross marks one header with no scope set. The cell reading &quot;Trieste, 1909-1912&quot; is selected, with column span, row span, and &quot;Convert to Header (TH) or Data (TD)&quot; controls along the bottom." />
+          </div>
+          <figcaption class="shot-caption">
+            <strong>Table editor with scope at a glance.</strong> Edit cells in place, add or
+            delete rows and columns, set spans, and convert between header and data cells —
+            with each header's scope shown as an arrow, so a missing one is obvious.
+          </figcaption>
+        </figure>
+
+        <figure class="shot">
+          <div class="shot-frame">
+            <img
+              src="assets/verify-checker.png" loading="lazy"
+              width="1920" height="1008"
+              alt="The Accessibility Check dialog in the light theme, reporting &quot;4 failed checks&quot;. Results are grouped under Document, Bookmarks and Headings, and every row is marked with a tick, a cross or a dash beside its name: &quot;Tagged PDF&quot; passes, &quot;Document title&quot; fails with &quot;No document title is set&quot;, and &quot;Bookmarks present for long documents&quot; is marked not applicable." />
+          </div>
+          <figcaption class="shot-caption">
+            <strong>A checker that says what to fix next.</strong> Common PDF/UA and WCAG
+            problems, grouped and explained, with an inline Repair button on the ones the app
+            can fix for you. Each result is marked by shape as well as colour, so the report
+            itself doesn't depend on distinguishing green from red.
+          </figcaption>
+        </figure>
       </div>
-      <p class="gallery-note">Dark, high-contrast interface designed for long remediation sessions.</p>
     </div>
   </section>
 
