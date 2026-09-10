@@ -13,6 +13,7 @@
 import { pdfjsLib } from './pdfjs.js';
 import { el } from './dom.js';
 import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport } from './page-content.js';
+import { discardRectSelectIfPageChanged } from './rect-select.js';
 import { PAGE_SCALE, state } from './state.js';
 import { base64ToUint8Array, categoryForRole, extractMcidFromItemId, pointInRect, unionRects } from './util.js';
 
@@ -405,6 +406,9 @@ export async function refreshPdfPreviewBytes(base64Data) {
 //     cancel check (there's no task to cancel yet) and collide anyway.
 export async function renderCurrentPage() {
   if (!state.pdfDoc) return;
+  // Every way the page can change ends up here, so this is where a
+  // selection drawn on a different page stops being valid.
+  discardRectSelectIfPageChanged();
 
   if (state.renderTask) {
     state.renderTask.cancel();

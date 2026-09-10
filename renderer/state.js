@@ -121,6 +121,7 @@ export const state = {
   rectSelectSkipped: 0,         // leaves the last drag touched but didn't cover enough of, for the status line
   rectSelectPending: null,      // leaf ids awaiting a role keystroke after a completed drag, or null
   rectSelectIndex: null,        // Map(mcid -> leaf node id) for the page being dragged on, built once per drag
+  rectSelectPage: null,         // 1-based page the current selection belongs to; anything else invalidates it
   docInfo: { title: null, author: null }, // PDF document-info Title/Author, shown when the /Document tag is selected
   hasStructTree: false, // whether the current document has a /StructTreeRoot at all - used by the Verify report
   aiProposals: new Map(), // nodeId -> { original, suggested } - a "Fix All Actual Text (AI)" fix already applied to that tag; kept only to render the inline diff highlight (see updateActualTextReviewUI()) and to detect a stale/reverted/edited-since tag (see pruneStaleAiProposals()) - not a pending/unsaved edit, the fix is already the tag's real Actual Text.

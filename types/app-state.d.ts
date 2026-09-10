@@ -246,6 +246,8 @@ export interface AppState {
   rectSelectPending: string[] | null;
   /** mcid -> leaf node id for the page being dragged on; built once per drag. */
   rectSelectIndex: Map<number, string> | null;
+  /** 1-based page the selection belongs to; rendering any other page discards it. */
+  rectSelectPage: number | null;
 
   // --- Actual Text review ----------------------------------------------
   /** nodeId -> an AI fix already applied, kept to render the inline diff. */

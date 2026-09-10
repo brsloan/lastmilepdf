@@ -1872,9 +1872,6 @@ el.verifyDialog.addEventListener('click', (e) => {
 
 el.btnPrevPage.addEventListener('click', async () => {
   if (state.currentPage <= 1) return;
-  // A pending rectangle selection names content on the page being left, and
-  // its overlay is positioned in that page's viewport - neither survives.
-  clearRectSelect();
   state.currentPage -= 1;
   await renderCurrentPage();
   updatePageNavUI();
@@ -1883,7 +1880,6 @@ el.btnPrevPage.addEventListener('click', async () => {
 
 el.btnNextPage.addEventListener('click', async () => {
   if (state.currentPage >= state.pageCount) return;
-  clearRectSelect();
   state.currentPage += 1;
   await renderCurrentPage();
   updatePageNavUI();
@@ -2011,6 +2007,7 @@ el.canvas.addEventListener('mousedown', (e) => {
   const p = canvasPointFromEvent(e);
   state.rectSelectRect = { start: p, current: p };
   state.rectSelectPending = null;
+  state.rectSelectPage = state.currentPage;
   // Rebuilt per drag rather than reused: the tree may have been re-indexed
   // (fresh node ids) by an edit since the last one - see buildLeafIndexForPage().
   state.rectSelectIndex = null;

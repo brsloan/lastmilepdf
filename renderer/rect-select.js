@@ -72,7 +72,20 @@ export function clearRectSelect() {
   state.rectSelectSkipped = 0;
   state.rectSelectPending = null;
   state.rectSelectIndex = null;
+  state.rectSelectPage = null;
   el.drawOverlay.innerHTML = '';
+}
+
+// A selection belongs to the page it was drawn on: its overlay is positioned
+// in that page's viewport, and its leaf ids name that page's content. Called
+// from renderCurrentPage(), which is the one place every page change funnels
+// through - the page number is reached from the page buttons, the page-number
+// field, a bookmark, and a tag selection that jumps pages, and hooking each
+// of those separately is how a stale overlay keeps coming back.
+export function discardRectSelectIfPageChanged() {
+  if (state.rectSelectPage === null) return;
+  if (state.rectSelectPage === state.currentPage) return;
+  clearRectSelect();
 }
 
 // mcid -> content-leaf node id for one page.
