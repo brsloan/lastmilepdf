@@ -528,24 +528,35 @@ async function editTests(fixture) {
     });
   }));
 
-  await test('tagging part of a tag nests a new tag and keeps the source', () => withDoc(fixture, async (doc) => {
+  await test('tagging part of a tag divides it into siblings', () => withDoc(fixture, async (doc) => {
+    // Taking the first of a tag's leaves leaves nothing before the
+    // selection, so the original keeps the tail and the new tag goes in
+    // front of it - both under the original's own parent, neither inside
+    // the other.
     const parent = allNodes(doc.tree).find((n) => n.type === 'element'
       && n.children.length >= 2
       && n.children.every((k) => k.type === 'content'));
     if (!parent) skip('no element with two or more content leaves in this fixture');
+    const grandparent = parentOf(doc.tree, parent.id);
+    if (!grandparent) skip('that tag has no parent to become a sibling within');
 
-    const leafIds = [parent.children[0].id];
     const kidsBefore = parent.children.length;
     const result = await worker.call('wrap_leaves', {
-      docId: doc.docId, nodeIds: leafIds, role: 'Span',
+      docId: doc.docId, nodeIds: [parent.children[0].id], role: 'Span',
     });
 
     assert(!result.relabelled, 'a partial selection must not relabel the source tag');
     assertEqual(result.removedTagCount, 0, 'a surviving source tag must not be discarded');
+
     const holder = parentOf(result.tree, result.newNodeId);
-    assertEqual(holder.role, parent.role, 'the new tag did not land inside the source tag');
-    assertEqual(holder.children.length, kidsBefore,
-      'the source tag should still have one child per original leaf');
+    assertEqual(holder.role, grandparent.role,
+      'the new tag should sit beside the source tag, not inside it');
+    const at = holder.children.findIndex((c) => c.id === result.newNodeId);
+    const remainder = holder.children[at + 1];
+    assert(remainder && remainder.role === parent.role,
+      'the source tag should follow the new one, keeping its role');
+    assertEqual(remainder.children.length, kidsBefore - 1,
+      'the source tag should have given up exactly the selected leaf');
   }));
 
   await test('tagging across two tags discards the ones it empties', () => withDoc(fixture, async (doc) => {
@@ -651,6 +662,69 @@ async function editTests(fixture) {
     await saveAndReopen(doc.docId, 'tag-rect-content', (reopened) => {
       assert(byRole(reopened.tree, 'H2').length >= 1, 'the new tag did not survive save');
     });
+  }));
+
+  await test('tagging part of a tag puts the new tag beside it, not inside', () => withDoc(fixture, async (doc) => {
+    // Anchoring the new tag at the selected leaf's own slot - right for a
+    // single hand-picked leaf - would nest it: <P><H3>..</H3>..</P>. Tagging
+    // half a paragraph as a heading should leave them side by side.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+    const container = parentOf(doc.tree, leaf.id);
+    if (!container || container.children.length !== 1) {
+      skip('the leaf shares its parent, so this is not the single-run case');
+    }
+    const cut = offsets[Math.floor(offsets.length / 2)];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: cut, endIndex: null }],
+      role: 'H3',
+    });
+
+    const holder = parentOf(result.tree, result.newNodeId);
+    assert(holder.role !== container.role || holder.id !== container.id,
+      'the new tag was nested inside the tag its content came from');
+
+    // Side by side under the original's own parent, in reading order, with
+    // the text divided between them and nothing lost.
+    const siblings = holder.children;
+    const at = siblings.findIndex((c) => c.id === result.newNodeId);
+    assert(at > 0, 'the new tag should follow the half it was split from');
+    const headText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: siblings[at - 1].children[0].id })).text;
+    const tagText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: siblings[at].children[0].id })).text;
+    assertEqual(headText, text.slice(0, cut), 'the head half lost or gained text');
+    assertEqual(tagText, text.slice(cut), 'the tagged half is not the run selected');
+    assertEqual(siblings[at - 1].role, container.role,
+      'the half left behind changed role');
+  }));
+
+  await test('a run inside a list body stays inside it', () => withDoc(fixture, async (doc) => {
+    // An LBody's siblings are its list item's Lbl and LBody, so dividing one
+    // into two would be structurally wrong - position-constrained containers
+    // keep the nesting behaviour.
+    const body = allNodes(doc.tree).find((n) => n.role === 'LBody'
+      && n.children.length > 0
+      && n.children.every((c) => c.type === 'content')
+      && n.children[0].mcid !== null && n.children[0].mcid !== undefined
+      && n.children[0].page !== null && n.children[0].page !== undefined);
+    if (!body) skip('no leaf-only LBody in this fixture');
+    const leaf = body.children[0];
+    const offsets = await boundariesFor(doc, leaf.page, leaf.mcid);
+    if (offsets.length < 4) skip('that list body is too short to cut');
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: offsets[Math.floor(offsets.length / 2)] }],
+      role: 'Span',
+    });
+    const holder = parentOf(result.tree, result.newNodeId);
+    assertEqual(holder.role, 'LBody', 'the run escaped its list body');
   }));
 
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {

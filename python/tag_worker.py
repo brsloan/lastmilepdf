@@ -640,6 +640,135 @@ def _validate_leaf_selection(doc, node_ids):
     return next(iter(pages))
 
 
+# Roles whose place among their siblings is fixed by their parent's own
+# structure: a TR's siblings are TRs, a TD's are cells, an LI's are list
+# items. Dividing one of these into two siblings would be structurally wrong,
+# so a selection inside one nests as before - which is correct there anyway,
+# since a P inside a TD or an LBody is ordinary.
+_POSITION_CONSTRAINED_ROLES = {
+    "Table", "THead", "TBody", "TFoot", "TR", "TD", "TH",
+    "L", "LI", "Lbl", "LBody", "TOC", "TOCI",
+}
+
+# Copied onto the trailing half when a tag is divided. /S and /Pg identify
+# what the half *is*; /Lang is a property of any subset of the text. /Alt,
+# /ActualText and /ID deliberately don't come along: the first two describe
+# the whole original passage and would be wrong on a fragment, and an /ID
+# has to stay unique.
+_DIVIDED_TAG_KEYS = ("/S", "/Pg", "/Lang")
+
+
+def _sibling_split_plan(doc, ordered_ids, stop_ids):
+    """(parent_id, before, after) when `ordered_ids` is a contiguous run of
+    one tag's own children and that tag can be divided - otherwise None.
+
+    Tagging part of a paragraph as a paragraph should leave two paragraphs
+    side by side, not one nested in the other. Anchoring the new tag at the
+    selected leaf's own slot (which is right for a single hand-picked leaf,
+    as _wrap_leaf does) produces the nested shape instead, so this detects
+    the case and _split_container_around() rebuilds it as siblings.
+    """
+    parent_ids = {doc["parent_map"].get(nid) for nid in ordered_ids}
+    if len(parent_ids) != 1:
+        return None
+    parent_id = next(iter(parent_ids))
+    if parent_id is None or parent_id in stop_ids:
+        return None
+    if doc["node_kind"].get(parent_id) != "element":
+        return None
+    role = str(doc["elements"][parent_id].get("/S", "")).lstrip("/")
+    if role in _POSITION_CONSTRAINED_ROLES:
+        return None
+    # The parent itself needs a parent to become a sibling within.
+    if doc["parent_map"].get(parent_id) is None:
+        return None
+
+    kids = _direct_child_ids(doc, parent_id)
+    positions = [i for i, kid in enumerate(kids) if kid in set(ordered_ids)]
+    if not positions or len(positions) != len(ordered_ids):
+        return None
+    if positions[-1] - positions[0] + 1 != len(positions):
+        return None  # not one unbroken run of the parent's children
+    before = kids[:positions[0]]
+    after = kids[positions[-1] + 1:]
+    if not before and not after:
+        return None  # the whole tag: the relabel-in-place path handles it
+    return parent_id, before, after
+
+
+def _split_container_around(doc_id, plan, ordered_ids, role, page_index):
+    """Divides a tag so the selected run becomes its sibling rather than its
+    child: [before] [new tag] [after], dropping either outer piece when the
+    selection sits at that end. The original element keeps the leading half
+    (so its own attributes stay with the text they were written for); only a
+    trailing half needs a fresh element, built by _DIVIDED_TAG_KEYS."""
+    doc = documents[doc_id]
+    parent_id, before, after = plan
+    parent_obj = doc["elements"][parent_id]
+    grandparent_id = doc["parent_map"][parent_id]
+    grandparent_obj = doc["elements"][grandparent_id]
+
+    at = _kid_index(grandparent_obj, parent_obj)
+    if at == -1:
+        raise ValueError("Could not locate the containing tag in its parent")
+
+    new_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name("/" + role),
+        "/P": grandparent_obj,
+    }))
+    if page_index is not None:
+        new_elem["/Pg"] = doc["pdf"].pages[page_index].obj
+
+    moved = []
+    for node_id in ordered_ids:
+        leaf_obj = doc["elements"][node_id]
+        _remove_kid(parent_obj, leaf_obj)
+        if isinstance(leaf_obj, pikepdf.Dictionary):
+            leaf_obj["/P"] = new_elem
+        moved.append(leaf_obj)
+    new_elem["/K"] = pikepdf.Array(moved)
+
+    # The original element is always kept, holding whichever half is left,
+    # so its own attributes stay with text they were written for. A fresh
+    # element is only needed when the selection came out of the middle and
+    # there are two halves to hold.
+    if before and after:
+        tail_elem = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/P": grandparent_obj,
+        }))
+        for key in _DIVIDED_TAG_KEYS:
+            if key in parent_obj:
+                tail_elem[key] = parent_obj[key]
+        tail_kids = []
+        for node_id in after:
+            kid_obj = doc["elements"][node_id]
+            _remove_kid(parent_obj, kid_obj)
+            if isinstance(kid_obj, pikepdf.Dictionary):
+                kid_obj["/P"] = tail_elem
+            tail_kids.append(kid_obj)
+        tail_elem["/K"] = pikepdf.Array(tail_kids)
+        _insert_kid(grandparent_obj, new_elem, at + 1)
+        _insert_kid(grandparent_obj, tail_elem, at + 2)
+    elif before:
+        # The selection ran to the end: the original keeps the head, and the
+        # new tag follows it.
+        _insert_kid(grandparent_obj, new_elem, at + 1)
+    else:
+        # The selection started at the beginning: the original keeps the
+        # tail, and the new tag goes in front of it.
+        _insert_kid(grandparent_obj, new_elem, at)
+
+    # No pruning needed: the plan only fires when at least one of before/
+    # after is non-empty, so the original always retains content.
+    tree = _rebuild_after_mutation(doc_id)
+    return {
+        "tree": tree, "newNodeId": _node_id_for_object(doc, new_elem),
+        "removedTagCount": 0, "relabelled": False, **_undo_state(doc),
+    }
+
+
 def _wrap_leaves_impl(doc_id, node_ids, role):
     """wrap_leaves() without the undo snapshot, so tag_rect_content() can run
     its cuts and this under a single one."""
@@ -672,6 +801,12 @@ def _wrap_leaves_impl(doc_id, node_ids, role):
                 "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
                 "relabelled": True, **_undo_state(doc),
             }
+
+    # Part of one tag's own content: the new tag belongs beside that tag,
+    # not inside it (see _sibling_split_plan).
+    plan = _sibling_split_plan(doc, ordered_ids, stop_ids)
+    if plan is not None:
+        return _split_container_around(doc_id, plan, ordered_ids, role, page_index)
 
     # Where the new tag goes, decided against the tree as it stands now -
     # before anything is unlinked and the positions move.

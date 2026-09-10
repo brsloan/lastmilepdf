@@ -37,10 +37,14 @@ import { el } from './dom.js';
 import { state } from './state.js';
 import { getPageCodeBoxes, getPageLeafRects, getPageTextContent } from './page-content.js';
 
-// Below this share of its own painted area inside the rectangle, a leaf is
-// left out entirely. Half is the natural reading of "mostly inside", and
-// makes the tool forgiving of a drag that clips a descender or overshoots
-// into the line below.
+// Below this share of its own painted area inside the rectangle, a leaf that
+// must be taken WHOLE is left out entirely - half being the natural reading
+// of "mostly inside", and forgiving of a drag that clips a descender or
+// overshoots into the line below.
+//
+// It does not apply to a leaf that can be cut: there, any covered run is a
+// valid selection however small a fraction of its leaf it happens to be.
+// See hitsForRect().
 export const COVERAGE_THRESHOLD = 0.5;
 
 // At or above this, a leaf counts as fully covered: taken whole with no
@@ -154,12 +158,23 @@ export function hitsForRect(box, leafRects, leafIndex, pageGlyphs = null) {
     const measured = glyphs && glyphs.length > 0 ? glyphs : rects;
     const coverage = coverageOf(measured, box);
     if (coverage <= 0) continue;
-    if (coverage < COVERAGE_THRESHOLD) {
+
+    const full = coverage >= FULL_COVERAGE;
+    const run = full || !glyphs ? null : coveredRun(glyphs, box);
+
+    // The coverage bar only applies to a leaf that has to be taken whole.
+    // It answers "is enough of this inside to be worth swallowing all of
+    // it?" - a question that stops meaning anything once the leaf can be
+    // cut, where what matters is simply which characters were covered.
+    //
+    // Applying it regardless made the tool feel imprecise in exactly the
+    // way you'd notice: one real paragraph came to 46% of its leaf, so
+    // dragging over it selected nothing until the drag reached into the
+    // next paragraph and crossed 50% - at which point it grabbed both.
+    if (!run && coverage < COVERAGE_THRESHOLD) {
       skipped += 1;
       continue;
     }
-    const full = coverage >= FULL_COVERAGE;
-    const run = full || !glyphs ? null : coveredRun(glyphs, box);
     hits.push({
       nodeId,
       rects,
