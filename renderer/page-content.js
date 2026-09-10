@@ -604,6 +604,38 @@ export function looksLikeListLabel(text) {
   return LIST_LABEL_RE.test((text || '').trim());
 }
 
+// A marker at the *start* of some text that also carries the words it
+// introduces - "• ask clarification questions." as one run rather than a
+// bullet leaf beside a text leaf. Returns how many characters to cut off to
+// leave the marker on its own, or 0 when there's no such marker.
+//
+// LIST_LABEL_RE can't answer this: it is anchored at both ends, because its
+// question is "is this leaf nothing but a marker?", which is the shape a
+// well-formed list already has. Plenty of documents don't have it - the
+// marker and its text are painted as one run - and there the marker has to
+// be split off before it can be a Lbl at all.
+//
+// The trailing \s+\S is what makes this safe: a marker with nothing after
+// it is already a label leaf in its own right, and cutting there would
+// leave an empty LBody.
+const LEADING_LIST_LABEL_RE = /^(\s*)([•‣◦▪●○*]|[A-Za-z]\.|\d+\.)\s+\S/;
+
+export function leadingListLabelLength(text) {
+  const match = LEADING_LIST_LABEL_RE.exec(text || '');
+  return match ? match[1].length + match[2].length : 0;
+}
+
+// The text of the first content leaf under `nodeId`, or '' - what both list
+// label questions above get asked about.
+export async function firstLeafText(nodeId) {
+  const leaf = firstLeafNode(nodeId);
+  if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined
+      || leaf.page === null || leaf.page === undefined) {
+    return '';
+  }
+  return (await resolveMcidText(leaf.page, leaf.mcid)) || '';
+}
+
 export async function isListLabelLeaf(nodeId) {
   const leaf = firstLeafNode(nodeId);
   if (!leaf || leaf.type !== 'content' || leaf.mcid === null || leaf.mcid === undefined

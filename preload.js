@@ -137,8 +137,9 @@ const api = {
    * @param {boolean} [useLabel] For an LI, split its first piece into a Lbl.
    * @returns {Promise<import('./types/domain').TagRectContentResult>}
    */
-  tagRectContent: (docId, pageIndex, selections, role, useLabel = false) =>
-    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role, useLabel }),
+  tagRectContent: (docId, pageIndex, selections, role, useLabel = false, labelSplit = null) =>
+    ipcRenderer.invoke('tags:tag-rect-content',
+      { docId, pageIndex, selections, role, useLabel, labelSplit }),
   /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
@@ -252,18 +253,18 @@ const api = {
    * @param {string} docId
    * @param {string[]} nodeIds
    * @param {Record<string, boolean>} labelFlags nodeId -> whether its first leaf is a list label (Lbl).
-   * @returns {Promise<MutationResult>}
+   * @returns {Promise<import('./types/domain').ListResult>}
    */
-  makeList: (docId, nodeIds, labelFlags) =>
-    ipcRenderer.invoke('tags:make-list', { docId, nodeIds, labelFlags }),
+  makeList: (docId, nodeIds, labelFlags, labelSplits = {}) =>
+    ipcRenderer.invoke('tags:make-list', { docId, nodeIds, labelFlags, labelSplits }),
   /**
    * @param {string} docId
    * @param {string[]} nodeIds
    * @param {Record<string, boolean>} labelFlags
-   * @returns {Promise<MutationResult>}
+   * @returns {Promise<import('./types/domain').ListResult>}
    */
-  convertToListItem: (docId, nodeIds, labelFlags) =>
-    ipcRenderer.invoke('tags:convert-to-list-item', { docId, nodeIds, labelFlags }),
+  convertToListItem: (docId, nodeIds, labelFlags, labelSplits = {}) =>
+    ipcRenderer.invoke('tags:convert-to-list-item', { docId, nodeIds, labelFlags, labelSplits }),
   /**
    * @param {string} docId
    * @param {string[]} nodeIds

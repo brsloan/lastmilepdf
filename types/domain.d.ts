@@ -139,6 +139,16 @@ export interface InsertResult extends MutationResult {
   newNodeId: string;
 }
 
+/**
+ * What the 'L' and 'I' shortcuts return. `pdfBase64` is present only when a
+ * list marker had to be cut off the text it shared a leaf with, since that -
+ * unlike relabelling - rewrites the page's content stream and leaves pdf.js
+ * holding stale bytes.
+ */
+export interface ListResult extends MutationResult {
+  pdfBase64?: string;
+}
+
 /** One character's box on a page, in PDF page space. */
 export interface CodeBox {
   /** The marked-content id whose span painted it. */

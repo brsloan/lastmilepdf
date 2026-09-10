@@ -778,6 +778,62 @@ async function editTests(fixture) {
     assertEqual(li.children[1].role, 'LBody', 'the second child should be the LBody');
   }));
 
+  await test('a marker sharing a leaf with its text is cut off into a Lbl', () => withDoc(fixture, async (doc) => {
+    // A well-formed list gives the marker its own leaf, and useLabel simply
+    // promotes it. Where the marker and its text are painted as one run
+    // there is nothing to promote, so labelSplit cuts it off first - the
+    // case that had every such item collapse into a single LBody.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+    const split = offsets[1];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      role: 'LI',
+      useLabel: false,
+      labelSplit: split,
+    });
+
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 2, 'the marker was not split off');
+    assertEqual(li.children[0].role, 'Lbl', 'the first child should be the Lbl');
+    assertEqual(li.children[1].role, 'LBody', 'the second child should be the LBody');
+
+    const lblText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: li.children[0].children[0].id })).text;
+    assertEqual(lblText, text.slice(0, split), 'the Lbl holds the wrong text');
+    assert(result.pdfBase64, 'cutting the marker must hand back fresh page bytes');
+
+    await saveAndReopen(doc.docId, 'rect-label-split', (reopened) => {
+      const labelled = byRole(reopened.tree, 'LI')
+        .filter((n) => n.children.some((c) => c.role === 'Lbl'));
+      assert(labelled.length >= 1, 'the Lbl/LBody split did not survive save');
+    });
+  }));
+
+  await test('an impossible label split falls back to a single LBody', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf } = target;
+
+    // An index that lands inside a character rather than between two: the
+    // cut can't be made, and the item must still come out valid.
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      role: 'LI',
+      useLabel: false,
+      labelSplit: 100000,
+    });
+    const li = findById(result.tree, result.newNodeId);
+    assertEqual(li.children.length, 1, 'a failed split should leave one LBody');
+    assertEqual(li.children[0].role, 'LBody', 'the fallback should still be an LBody');
+  }));
+
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
     const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
     if (!leaf) skip('fixture has no placed content leaves');

@@ -10,7 +10,7 @@
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
 import { el, selectableRows } from './dom.js';
-import { isListLabelLeaf, looksLikeListLabel } from './page-content.js';
+import { firstLeafText, isListLabelLeaf, leadingListLabelLength, looksLikeListLabel } from './page-content.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
@@ -319,6 +319,7 @@ export async function tagRectSelection(role) {
   // one. "First" here is reading order down the page, which is where a
   // bullet sits relative to the words it introduces.
   let useLabel = false;
+  let labelSplit = null;
   if (role === 'LI') {
     const inReadingOrder = [...hits].sort((a, b) => {
       const ay = Math.min(...a.rects.map((r) => r.y));
@@ -326,11 +327,18 @@ export async function tagRectSelection(role) {
       if (Math.abs(ay - by) > 1) return ay - by;
       return Math.min(...a.rects.map((r) => r.x)) - Math.min(...b.rects.map((r) => r.x));
     });
-    useLabel = inReadingOrder.length > 1 && looksLikeListLabel(inReadingOrder[0].runText);
+    const firstText = inReadingOrder[0]?.runText;
+    if (inReadingOrder.length > 1 && looksLikeListLabel(firstText)) {
+      useLabel = true;               // the marker is already a piece of its own
+    } else {
+      const split = leadingListLabelLength(firstText);
+      if (split > 0) labelSplit = split;  // it shares a run; cut it off
+    }
   }
 
   try {
-    const result = await window.api.tagRectContent(state.docId, pageIndex, selections, role, useLabel);
+    const result = await window.api.tagRectContent(
+      state.docId, pageIndex, selections, role, useLabel, labelSplit);
     // A cut rewrites the page's content stream, so pdf.js is now holding
     // bytes that no longer describe the page. Re-feed it before the tree
     // update below asks it to draw a highlight against those positions.
@@ -486,16 +494,38 @@ export async function convertSelectionToFigure() {
 // Reselects on a single target the same way convertSelectionToFigure()
 // does; a multi-target conversion can restructure arbitrarily much of the
 // tree at once, so it just clears the selection instead.
+// How each tag being made into a list item should find its label, asked the
+// same way for the 'L' and 'I' shortcuts.
+//
+// Two shapes, because documents use both: a marker that is already a content
+// leaf of its own is promoted as it stands (labelFlags), while one sharing a
+// leaf with the text it introduces has to be cut off first (labelSplits).
+// The worker falls back to a single LBody when a cut it was asked for turns
+// out not to be possible.
+async function listLabelPlan(ids) {
+  const labelFlags = {};
+  const labelSplits = {};
+  for (const id of ids) {
+    labelFlags[id] = await isListLabelLeaf(id);
+    if (!labelFlags[id]) {
+      const split = leadingListLabelLength(await firstLeafText(id));
+      if (split > 0) labelSplits[id] = split;
+    }
+  }
+  return { labelFlags, labelSplits };
+}
+
 export async function convertSelectionToListItem() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
   if (topLevelIds.length === 0) return;
 
-  const labelFlags = {};
-  for (const id of topLevelIds) labelFlags[id] = await isListLabelLeaf(id);
+  const { labelFlags, labelSplits } = await listLabelPlan(topLevelIds);
 
   try {
-    const result = await window.api.convertToListItem(state.docId, topLevelIds, labelFlags);
+    const result = await window.api.convertToListItem(
+      state.docId, topLevelIds, labelFlags, labelSplits);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     applyUndoState(result);
 
@@ -528,11 +558,11 @@ export async function groupSelectionIntoList() {
   const orderedIds = rows.map((row) => row.dataset.nodeId).filter((id) => ids.includes(id));
   const firstId = orderedIds[0] ?? ids[0];
 
-  const labelFlags = {};
-  for (const id of ids) labelFlags[id] = await isListLabelLeaf(id);
+  const { labelFlags, labelSplits } = await listLabelPlan(ids);
 
   try {
-    const result = await window.api.makeList(state.docId, ids, labelFlags);
+    const result = await window.api.makeList(state.docId, ids, labelFlags, labelSplits);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     applyUndoState(result);
 
