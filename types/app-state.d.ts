@@ -116,8 +116,12 @@ export interface RectSelectHit {
   coverage: number;
   /** True when the leaf sits entirely inside, so it has no overhang to flag. */
   full: boolean;
-  /** True when the worker could measure this leaf's font, so a cut point inside it could be named. */
+  /** True when the rectangle's edges can divide this leaf exactly. */
   splittable: boolean;
+  /** Per-character geometry, when the worker could measure this leaf's font. */
+  glyphs: GlyphBox[] | null;
+  /** The covered run, as offsets into the leaf's decoded text; null when there's nothing to cut by. */
+  run: { startIndex: number; endIndex: number } | null;
 }
 
 export interface AppState {

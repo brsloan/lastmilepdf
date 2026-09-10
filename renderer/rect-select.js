@@ -145,18 +145,64 @@ export function hitsForRect(box, leafRects, leafIndex, pageGlyphs = null) {
       skipped += 1;
       continue;
     }
+    const full = coverage >= FULL_COVERAGE;
+    const run = full || !glyphs ? null : coveredRun(glyphs, box);
     hits.push({
       nodeId,
       rects,
       coverage,
-      full: coverage >= FULL_COVERAGE,
-      // Whether a cut point could be named inside this leaf, once Phase 3
-      // can act on one. A span the engine refused is still perfectly
-      // selectable - a box comes from pdf.js - just not divisible.
-      splittable: !!(glyphs && glyphs.length > 0),
+      full,
+      glyphs: glyphs || null,
+      // The run to keep, as character offsets into this leaf's own decoded
+      // text. Null when there's nothing to cut (the leaf is fully covered)
+      // or nothing we can cut by (its font wasn't measurable, or the
+      // covered glyphs aren't contiguous - see coveredRun).
+      run,
+      // Whether the rectangle's edges can actually divide this leaf. A leaf
+      // that can't is still perfectly selectable, just taken whole - which
+      // is what the dashed overhang outline warns about.
+      splittable: !!run,
     });
   }
   return { hits, skipped };
+}
+
+// Which characters of one leaf the rectangle covers, as {startIndex,
+// endIndex} offsets into its decoded text - or null if the cover isn't a
+// single unbroken run.
+//
+// Contiguity is the thing worth refusing on. Text runs in painting order, so
+// a rectangle over the first two lines of a wrapped paragraph, or over a
+// band through its middle, covers an unbroken stretch and cuts cleanly. A
+// rectangle down a vertical slice of a multi-line leaf doesn't: it clips
+// each line, and the covered glyphs come in several disconnected pieces with
+// untouched text between them. There's no single pair of cuts that keeps
+// those and only those, so rather than cut somewhere plausible-looking and
+// quietly retag the gaps too, this declines and the leaf is taken whole with
+// its overhang drawn.
+export function coveredRun(glyphs, box) {
+  let first = -1;
+  let last = -1;
+  let covered = 0;
+  for (let i = 0; i < glyphs.length; i += 1) {
+    const g = glyphs[i];
+    const inside = g.x + g.width / 2 >= box.x
+      && g.x + g.width / 2 <= box.x + box.width
+      && g.y + g.height / 2 >= box.y
+      && g.y + g.height / 2 <= box.y + box.height;
+    if (!inside) continue;
+    if (first === -1) first = i;
+    last = i;
+    covered += 1;
+  }
+  if (first === -1) return null;
+  if (covered !== last - first + 1) return null; // gaps: not one run
+
+  let startIndex = 0;
+  for (let i = 0; i < first; i += 1) startIndex += glyphs[i].text.length;
+  let endIndex = startIndex;
+  for (let i = first; i <= last; i += 1) endIndex += glyphs[i].text.length;
+  return { startIndex, endIndex };
 }
 
 // The character offset a rectangle edge at viewport x `edgeX` implies within
@@ -174,6 +220,32 @@ export function splitIndexAtX(glyphs, edgeX) {
     index += glyph.text.length;
   }
   return index;
+}
+
+// The glyph boxes a run covers, merged into one rect per line so the overlay
+// draws a few boxes rather than one per character - which at a few thousand
+// glyphs a page would be both slow and visually noisy.
+function glyphsInRun(glyphs, run) {
+  let offset = 0;
+  const lines = new Map();
+  for (const g of glyphs) {
+    const start = offset;
+    offset += g.text.length;
+    if (start < run.startIndex || start >= run.endIndex) continue;
+    const key = Math.round(g.y);
+    const existing = lines.get(key);
+    if (!existing) {
+      lines.set(key, { x: g.x, y: g.y, width: g.width, height: g.height });
+      continue;
+    }
+    const right = Math.max(existing.x + existing.width, g.x + g.width);
+    const bottom = Math.max(existing.y + existing.height, g.y + g.height);
+    existing.x = Math.min(existing.x, g.x);
+    existing.y = Math.min(existing.y, g.y);
+    existing.width = right - existing.x;
+    existing.height = bottom - existing.y;
+  }
+  return Array.from(lines.values());
 }
 
 export function normalizedDragBox(rect) {
@@ -206,12 +278,23 @@ export function renderRectSelectOverlay(box, hits, viewportWidth, viewportHeight
   }
 
   for (const hit of hits || []) {
-    // One outline per run, not one around the union: a wrapped paragraph's
-    // union box would cover the whitespace either side of every short line
-    // and read as selecting far more than it does.
-    for (const r of hit.rects) {
+    // What gets outlined, and how, is the honest preview of what pressing a
+    // tagging shortcut will do:
+    //   - fully covered, or cuttable: solid, around just the text that ends
+    //     up in the new tag (the covered glyphs, where there was a cut)
+    //   - taken whole because it couldn't be cut: dashed, around the leaf's
+    //     entire extent, so the part the user never dragged over is visible
+    // One outline per run/glyph rather than one around the union: a wrapped
+    // paragraph's union box covers the whitespace either side of every short
+    // line and reads as selecting far more than it does.
+    const outlined = hit.splittable && hit.glyphs
+      ? glyphsInRun(hit.glyphs, hit.run)
+      : hit.rects;
+    for (const r of outlined) {
       const outline = document.createElement('div');
-      outline.className = hit.full ? 'select-box' : 'select-box select-overhang';
+      outline.className = hit.full || hit.splittable
+        ? 'select-box'
+        : 'select-box select-overhang';
       outline.style.left = pct(r.x, viewportWidth);
       outline.style.top = pct(r.y, viewportHeight);
       outline.style.width = pct(r.width, viewportWidth);

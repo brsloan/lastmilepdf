@@ -1131,6 +1131,10 @@ ipcMain.handle('tags:wrap-leaves', async (_event, { docId, nodeIds, role }) => {
   return callWorker('wrap_leaves', { docId, nodeIds, role });
 });
 
+ipcMain.handle('tags:tag-rect-content', async (_event, { docId, pageIndex, selections, role }) => {
+  return callWorker('tag_rect_content', { docId, pageIndex, selections, role });
+});
+
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
   return callWorker('scope_tables', { docId });
 });

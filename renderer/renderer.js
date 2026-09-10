@@ -2090,18 +2090,17 @@ window.addEventListener('mouseup', async () => {
   }
 
   state.rectSelectPending = hits.map((h) => h.nodeId);
-  const partial = hits.filter((h) => !h.full);
   const noun = hits.length === 1 ? 'item' : 'items';
-  // Only the partially covered items are worth reporting measurability for:
-  // a fully covered leaf is taken whole no matter what, so whether its font
-  // could be measured makes no difference to what happens to it.
-  const unmeasured = partial.filter((h) => !h.splittable).length;
+  // Two counts worth reporting, because they mean different things to the
+  // user: how many leaves will be trimmed to the rectangle (good, and
+  // invisible unless said), and how many will drag extra content along with
+  // them (the dashed outlines, and the only way this can damage a document).
+  const willCut = hits.filter((h) => h.splittable).length;
+  const willOverhang = hits.filter((h) => !h.full && !h.splittable).length;
   let detail = '';
-  if (partial.length > 0) {
-    detail = `, ${partial.length} extending past the rectangle (dashed)`;
-    if (unmeasured > 0) {
-      detail += ` - ${unmeasured === partial.length ? 'none' : `${partial.length - unmeasured} of ${partial.length}`} can be measured precisely`;
-    }
+  if (willCut > 0) detail += `, ${willCut} to be split at the edge`;
+  if (willOverhang > 0) {
+    detail += `, ${willOverhang} that can't be split and will bring the dashed text along`;
   }
   setStatus(`${hits.length} ${noun} selected${detail} - press a tagging shortcut to tag them.`);
 });

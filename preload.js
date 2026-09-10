@@ -128,6 +128,17 @@ const api = {
   wrapLeaves: (docId, nodeIds, role) =>
     ipcRenderer.invoke('tags:wrap-leaves', { docId, nodeIds, role }),
   /**
+   * Like wrapLeaves(), but first divides each partially covered leaf at the
+   * rectangle's edges so only the covered run is tagged. One undo step.
+   * @param {string} docId
+   * @param {number} pageIndex 0-based
+   * @param {import('./types/domain').RectSelection[]} selections
+   * @param {string} role
+   * @returns {Promise<import('./types/domain').TagRectContentResult>}
+   */
+  tagRectContent: (docId, pageIndex, selections, role) =>
+    ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role }),
+  /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
    */

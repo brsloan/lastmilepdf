@@ -575,6 +575,116 @@ async function editTests(fixture) {
     });
   }));
 
+  // tag_rect_content() - the same rectangle, when it cuts through content
+  // rather than only around it. Cut indices must land on real character
+  // boundaries, which is why these derive them from the glyph engine rather
+  // than picking round numbers: a code whose /ToUnicode maps it to more than
+  // one character spans several offsets with no boundary inside it. The
+  // renderer is in the same position and reaches the same answer, since
+  // coveredRun() sums the same per-glyph text lengths.
+  async function boundariesFor(doc, pageIndex, mcid) {
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+    const glyphs = geometry.boxes
+      .filter((b) => b.mcid === mcid)
+      .sort((a, b) => a.seq - b.seq);
+    const offsets = [0];
+    for (const g of glyphs) offsets.push(offsets[offsets.length - 1] + g.text.length);
+    return offsets;
+  }
+
+  async function pickCuttableLeaf(doc, minChars = 30) {
+    for (const leaf of contentLeaves(doc.tree)) {
+      if (leaf.page === null || leaf.page === undefined || leaf.mcid === null) continue;
+      const text = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+      if (!text || text.length < minChars) continue;
+      const offsets = await boundariesFor(doc, leaf.page, leaf.mcid);
+      if (offsets.length > 6) return { leaf, text, offsets };
+    }
+    return null;
+  }
+
+  await test('a rectangle cutting mid-leaf tags only the covered run', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut twice');
+    const { leaf, text, offsets } = target;
+    const start = offsets[2];
+    const end = offsets[offsets.length - 3];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: start, endIndex: end }],
+      role: 'H2',
+    });
+
+    assertEqual(result.cutCount, 2, 'a middle run needs a cut at each end');
+    assert(result.pdfBase64, 'a cut must hand back fresh page bytes for the preview');
+
+    const tagged = findById(result.tree, result.newNodeId);
+    assertEqual(tagged.children.length, 1, 'the new tag should hold exactly the cut run');
+    const taggedText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: tagged.children[0].id })).text;
+    assertEqual(taggedText, text.slice(start, end), 'the tagged text is not the run asked for');
+
+    // The head and tail must still be on the page, just untagged - a cut
+    // divides content, it never removes any.
+    const remaining = [];
+    for (const other of contentLeaves(result.tree)) {
+      if (other.page !== leaf.page) continue;
+      const t = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: other.id })).text;
+      if (t) remaining.push(t);
+    }
+    const joined = remaining.join('');
+    assert(joined.includes(text.slice(0, start)), 'the run before the cut went missing');
+    assert(joined.includes(text.slice(end)), 'the run after the cut went missing');
+
+    await saveAndReopen(doc.docId, 'tag-rect-content', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+
+  await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
+    if (!leaf) skip('fixture has no placed content leaves');
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      // startIndex 0 with no end is how the renderer asks for a leaf whole -
+      // the shape it sends for anything the glyph engine couldn't measure.
+      selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: null }],
+      role: 'P',
+    });
+    assertEqual(result.cutCount, 0, 'a whole-leaf selection should not cut');
+    assert(!result.pdfBase64, 'no cut means the content stream is untouched');
+  }));
+
+  await test('cutting for a rectangle leaves every glyph where it was', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut twice');
+    const { leaf, offsets } = target;
+
+    // The safety property the whole splitting design rests on. Compared
+    // ownership-agnostically: the cut deliberately changes which mcid owns
+    // each glyph, and must change nothing else about it.
+    const glyphSignature = async (pageIndex) => {
+      const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex });
+      return geometry.boxes
+        .map((b) => `${b.x0},${b.y0},${b.x1},${b.y1},${b.text}`)
+        .sort()
+        .join('|');
+    };
+
+    const before = await glyphSignature(leaf.page);
+    await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: offsets[offsets.length - 3] }],
+      role: 'H3',
+    });
+    const after = await glyphSignature(leaf.page);
+    assertEqual(after, before, 'cutting moved, added or dropped a glyph');
+  }));
+
   await test('refuses to group content from two different pages', () => withDoc(fixture, async (doc) => {
     const byPage = new Map();
     for (const node of allNodes(doc.tree)) {

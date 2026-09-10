@@ -15,6 +15,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { refreshPdfPreviewBytes } from './viewer.js';
 
 export async function performUndo() {
   if (!state.docId || !state.canUndo) return;
@@ -297,11 +298,26 @@ export async function deleteSelection() {
 // which is why the status line reports that count - a rectangle that happens
 // to consume an entire <Sect> removes it, and that shouldn't be silent.
 export async function tagRectSelection(role) {
-  const ids = state.rectSelectPending;
-  if (!ids || ids.length === 0) return;
+  const hits = state.rectSelectHits;
+  if (!hits || hits.length === 0) return;
+
+  // Each leaf contributes the run of its own text the rectangle covered.
+  // A leaf with no run - fully covered, or one the worker couldn't measure -
+  // is sent as its whole self, which is what makes this degrade cleanly to
+  // taking leaves whole on documents whose fonts can't be read.
+  const selections = hits.map((hit) => ({
+    nodeId: hit.nodeId,
+    startIndex: hit.run ? hit.run.startIndex : 0,
+    endIndex: hit.run ? hit.run.endIndex : null,
+  }));
+  const pageIndex = state.currentPage - 1;
 
   try {
-    const result = await window.api.wrapLeaves(state.docId, ids, role);
+    const result = await window.api.tagRectContent(state.docId, pageIndex, selections, role);
+    // A cut rewrites the page's content stream, so pdf.js is now holding
+    // bytes that no longer describe the page. Re-feed it before the tree
+    // update below asks it to draw a highlight against those positions.
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     // applyFreshTree() drops the pending selection and its overlay as part
     // of rebuilding the tree, so there's nothing to clear separately here.
     // On failure it never runs, which leaves the selection in place for the
@@ -312,14 +328,17 @@ export async function tagRectSelection(role) {
     if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
     else closeDetails();
 
-    const count = ids.length;
+    const count = selections.length;
     const what = `${count} item${count === 1 ? '' : 's'}`;
+    const cut = result.cutCount > 0
+      ? ` Split ${result.cutCount} time${result.cutCount === 1 ? '' : 's'} to fit the rectangle.`
+      : '';
     const removed = result.removedTagCount > 0
       ? ` ${result.removedTagCount} emptied tag${result.removedTagCount === 1 ? '' : 's'} discarded.`
       : '';
     setStatus(result.relabelled
-      ? `Retagged as ${role}.${removed}`
-      : `Tagged ${what} as ${role}.${removed}`);
+      ? `Retagged as ${role}.${cut}${removed}`
+      : `Tagged ${what} as ${role}.${cut}${removed}`);
   } catch (err) {
     reportError(`Could not tag the selection as ${role}`, err);
   }

@@ -180,6 +180,28 @@ export interface WrapLeavesResult extends InsertResult {
 }
 
 /**
+ * One leaf a rectangle covered, and which run of its text. Offsets index the
+ * leaf's own decoded text - the same string `get_leaf_text()` returns.
+ */
+export interface RectSelection {
+  nodeId: string;
+  /** First covered character; 0 means the run starts at the leaf's start. */
+  startIndex: number;
+  /** One past the last covered character; null means it runs to the end. */
+  endIndex: number | null;
+}
+
+/**
+ * `tag_rect_content()`'s result. `cutCount` is how many content-stream cuts
+ * it made; `pdfBase64` is present only when that is non-zero, since only a
+ * cut changes the bytes pdf.js is showing.
+ */
+export interface TagRectContentResult extends WrapLeavesResult {
+  cutCount: number;
+  pdfBase64?: string;
+}
+
+/**
  * `figure_from_rect()`'s result. `method` records which of the two tagging
  * strategies the worker picked for the drawn rectangle - see the section
  * comment above figure_from_rect() in tag_worker.py.
