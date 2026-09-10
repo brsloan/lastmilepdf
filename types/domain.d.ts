@@ -324,6 +324,13 @@ export interface UndoRedoResult extends UndoState {
   tree: TagNode | null;
   outline: BookmarkNode[];
   docInfo: DocInfo;
+  /**
+   * The restored document's bytes, present only when stepping here changes
+   * what a page paints - a split or an artifacting delete rewrites a content
+   * stream, and pdf.js has to be re-fed or it keeps parsing the bytes from
+   * the other side of the edit. Absent for the ordinary tag-only edit.
+   */
+  pdfBase64?: string;
 }
 
 /** What the outline-mutating commands return. */

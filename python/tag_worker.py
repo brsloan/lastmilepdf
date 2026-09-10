@@ -1820,8 +1820,12 @@ def _undo_state(doc):
 
 def _push_undo_snapshot(doc):
     """Call before mutating `doc["pdf"]`, once validation has passed - a
-    new edit always clears the redo stack, same as any standard editor."""
-    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
+    new edit always clears the redo stack, same as any standard editor.
+
+    The content generation is stored with the bytes so undo can tell whether
+    stepping back to them changes what the page paints, and hand the
+    renderer fresh bytes only when it does."""
+    doc["undo_stack"].append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
     if len(doc["undo_stack"]) > MAX_UNDO_DEPTH:
         doc["undo_stack"].pop(0)
     doc["redo_stack"].clear()
@@ -2413,6 +2417,11 @@ def open_document(path):
         "node_kind": {}, "children_map": {}, "counter": 0,
         "page_index_by_objgen": {page.objgen: i for i, page in enumerate(pdf.pages)},
         "undo_stack": [], "redo_stack": [],
+        # Bumped by every edit that rewrites a page's content stream. The
+        # renderer's pdf.js holds its own parse of those bytes, so undo and
+        # redo compare this against the snapshot they restore to know
+        # whether that parse has to be replaced - see undo_edit().
+        "content_gen": 0,
     }
     doc = documents[doc_id]
     outline_tree = _get_outline_tree(doc)
@@ -3105,6 +3114,7 @@ def _artifact_marked_content_on_page(doc, page_index, mcids, fix_orphans=False):
 
     if changed:
         page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
+        doc["content_gen"] += 1
     return fixed
 
 
@@ -3918,6 +3928,7 @@ def _cut_leaf(doc, node_id, split_index):
     final_instructions = instructions[:block_start] + new_sequence + instructions[block_end + 1:]
 
     page.obj.Contents.write(pikepdf.unparse_content_stream(final_instructions))
+    doc["content_gen"] += 1
 
     kind = doc["node_kind"].get(node_id)
     leaf_a = node_obj
@@ -4468,32 +4479,48 @@ def _reindex_pages(doc):
     doc["page_index_by_objgen"] = {page.objgen: i for i, page in enumerate(doc["pdf"].pages)}
 
 
+def _step_history(doc_id, from_stack, to_stack):
+    """The shared half of undo and redo: bank the current state on one stack
+    and restore the top of the other.
+
+    Carries `pdfBase64` when the restored state paints differently from the
+    one being left. Most edits only move tags around, and the renderer's
+    pdf.js copy stays valid through those - but a split (or an artifacting
+    delete) rewrites a page's content stream, and stepping across one of
+    those leaves pdf.js parsing bytes the tree no longer describes. Its
+    MCIDs then name different text than the restored tree does, so leaves
+    come up empty and highlights land nowhere."""
+    doc = documents[doc_id]
+    to_stack.append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
+    restored_bytes, restored_gen = from_stack.pop()
+    doc["pdf"].close()
+    doc["pdf"] = pikepdf.open(io.BytesIO(restored_bytes))
+    _reindex_pages(doc)
+
+    content_changed = restored_gen != doc["content_gen"]
+    doc["content_gen"] = restored_gen
+
+    result = {
+        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
+        "docInfo": _get_doc_info(doc), **_undo_state(doc),
+    }
+    if content_changed:
+        result["pdfBase64"] = base64.b64encode(restored_bytes).decode("ascii")
+    return result
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
         raise ValueError("Nothing to undo")
-    doc["redo_stack"].append(_snapshot_bytes(doc["pdf"]))
-    doc["pdf"].close()
-    doc["pdf"] = pikepdf.open(io.BytesIO(doc["undo_stack"].pop()))
-    _reindex_pages(doc)
-    return {
-        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
-        "docInfo": _get_doc_info(doc), **_undo_state(doc),
-    }
+    return _step_history(doc_id, doc["undo_stack"], doc["redo_stack"])
 
 
 def redo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["redo_stack"]:
         raise ValueError("Nothing to redo")
-    doc["undo_stack"].append(_snapshot_bytes(doc["pdf"]))
-    doc["pdf"].close()
-    doc["pdf"] = pikepdf.open(io.BytesIO(doc["redo_stack"].pop()))
-    _reindex_pages(doc)
-    return {
-        "tree": _rebuild_registry(doc_id), "outline": _get_outline_tree(doc),
-        "docInfo": _get_doc_info(doc), **_undo_state(doc),
-    }
+    return _step_history(doc_id, doc["redo_stack"], doc["undo_stack"])
 
 
 # Safety-net copies of the pre-save file (see save_document()) live here

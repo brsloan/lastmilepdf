@@ -921,6 +921,63 @@ async function editTests(fixture) {
     });
   }));
 
+  await test('undoing a cut hands back the page it restores', () => withDoc(fixture, async (doc) => {
+    // The renderer keeps its own pdf.js parse of the page bytes. Most edits
+    // only move tags about and leave that parse valid, but a cut rewrites
+    // the content stream - so stepping back across one has to re-feed it,
+    // or its MCIDs name different text than the restored tree does and the
+    // content leaves read as empty.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+
+    await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: offsets[2], endIndex: null }],
+      role: 'P',
+    });
+
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(undone.pdfBase64, 'undoing a cut must hand back the restored page bytes');
+
+    // And the restored leaf really does read as it did before the cut.
+    const restored = contentLeaves(undone.tree)
+      .find((n) => n.page === leaf.page && n.mcid === leaf.mcid);
+    assert(restored, 'the content leaf did not come back');
+    const restoredText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: restored.id })).text;
+    assertEqual(restoredText, text, 'the restored leaf lost or gained text');
+
+    const redone = await worker.call('redo', { docId: doc.docId });
+    assert(redone.pdfBase64, 'redoing a cut must hand back bytes too');
+  }));
+
+  await test('undoing a tag-only edit does not resend the page', () => withDoc(fixture, async (doc) => {
+    // The counterpart: bytes are only worth sending when they changed, and
+    // a whole document's worth of them per undo would be a real cost.
+    const element = allNodes(doc.tree).find((n) => n.type === 'element' && n.id !== 'root');
+    if (!element) skip('fixture has no taggable element');
+    await worker.call('update_node', {
+      docId: doc.docId, nodeId: element.id, changes: { alt: 'undo cost check' },
+    });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(!undone.pdfBase64, 'a tag-only undo should not resend the document');
+  }));
+
+  await test('undoing a delete hands back the page it restores', () => withDoc(fixture, async (doc) => {
+    // delete_nodes rewrites content streams too, turning the removed
+    // leaves' marked content into artifacts - so its undo needs the same
+    // treatment, and had the same problem before this.
+    const victim = allNodes(doc.tree).find((n) => n.type === 'element'
+      && n.id !== 'root'
+      && contentLeaves(n).length > 0);
+    if (!victim) skip('fixture has no element with content to delete');
+    await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [victim.id] });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(undone.pdfBase64, 'undoing an artifacting delete must hand back bytes');
+  }));
+
   await test('a whole-leaf selection cuts nothing', () => withDoc(fixture, async (doc) => {
     const leaf = contentLeaves(doc.tree).find((n) => n.page !== null && n.page !== undefined);
     if (!leaf) skip('fixture has no placed content leaves');

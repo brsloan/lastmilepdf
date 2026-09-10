@@ -22,6 +22,12 @@ export async function performUndo() {
   if (!state.docId || !state.canUndo) return;
   try {
     const result = await window.api.undo(state.docId);
+    // Stepping across an edit that rewrote a page's content stream leaves
+    // pdf.js parsing bytes the restored tree no longer describes - its
+    // MCIDs would name different text, so leaves come up blank and
+    // highlights land nowhere. The worker only sends bytes when that's the
+    // case; see _step_history() in tag_worker.py.
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
@@ -47,6 +53,7 @@ export async function performRedo() {
   if (!state.docId || !state.canRedo) return;
   try {
     const result = await window.api.redo(state.docId);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64); // see performUndo()
     applyFreshTree(result.tree);
     state.selectedBookmarkId = null;
     applyFreshOutline(result.outline);
