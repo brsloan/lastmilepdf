@@ -22,9 +22,9 @@ wide the glyph is, and (to report it) what character it is - and they come
 from different places:
 
   - width, from the font's own metrics: /Widths + /FirstChar for a simple
-    font, /W + /DW on the descendant of a Type0. A simple font entitled to
-    omit /Widths (a standard-14 face) has its metrics in an AFM table this
-    module does not ship, so it refuses rather than approximating.
+    font, /W + /DW on the descendant of a Type0, or - for a standard-14 face
+    entitled to carry no metrics at all - Adobe's AFM tables by way of the
+    font's encoding (see standard_fonts.py).
   - text, from /ToUnicode, exactly as split_leaf() reads it.
 
 Anything unmeasurable raises Unmeasurable with a specific reason, and the
@@ -38,6 +38,8 @@ on both font paths that appear in them.
 import re
 
 import pikepdf
+
+import standard_fonts
 
 
 class Unmeasurable(Exception):
@@ -360,12 +362,18 @@ class FontMetrics:
             if isinstance(descriptor, pikepdf.Dictionary) else 0.0
         )
         if widths is None or first is None:
-            # A standard-14 face may legitimately omit /Widths; its metrics
-            # live in an AFM table a viewer is expected to ship, and this
-            # module ships none. Refusing costs little in practice: measured
-            # across the corpus, the fonts that do this almost always lack
-            # /ToUnicode too, so split_leaf() already declines them.
-            raise Unmeasurable("Simple font with no /Widths (standard-14 AFM metrics not available)")
+            # A standard-14 face may legitimately omit /Widths: its metrics
+            # live in an AFM table every viewer is expected to have. We now
+            # supply those (see standard_fonts.py), which is what lets the
+            # rectangle tool divide a leaf that Split Content could already
+            # divide - those two disagreeing on the same text was the whole
+            # reason for adding this.
+            try:
+                self.widths = standard_fonts.widths_for(font)
+            except standard_fonts.UnknownStandardFont as exc:
+                raise Unmeasurable(str(exc)) from exc
+            self.branch = "standard-14"
+            return
         self.widths = {}
         first = int(first)
         for offset, value in enumerate(widths):

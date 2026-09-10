@@ -29,6 +29,16 @@ const ROOT = path.resolve(__dirname, '..');
 
 const FIXTURES = ['test-complex-generated.pdf'];
 
+// Run only against the tests that need them, not the whole suite - each is
+// here for one specific shape the main fixture doesn't have.
+//
+// test-standard14.pdf: a standard-14 font carrying no /Widths of its own,
+// which is the case standard_fonts.py supplies AFM metrics for. Every font
+// in the main fixture embeds its own metrics, so without this the AFM path
+// would only ever be exercised by documents outside the repo. Rebuild with
+// `python scripts/make-standard14-fixture.py`.
+const STANDARD14_FIXTURE = 'test-standard14.pdf';
+
 // --- talking to the worker -------------------------------------------------
 
 /**
@@ -1005,10 +1015,75 @@ async function errorTests(fixture) {
   }));
 }
 
+// The standard 14 fonts may carry no metrics at all, because every viewer is
+// expected to have Adobe's AFM tables already. Supplying those is what lets a
+// rectangle divide a leaf that Split Content could always divide - decoding
+// needs /ToUnicode, but *placing* a character needs widths, and the two
+// disagreeing on the same text is what these guard against.
+async function standardFontTests(fixture) {
+  await test('a standard-14 font with no /Widths still places its glyphs', () => withDoc(fixture, async (doc) => {
+    const result = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    assertEqual(Object.keys(result.refusals).length, 0,
+      `refused a standard-14 font: ${JSON.stringify(result.refusals)}`);
+    assert(result.boxes.length > 50, 'placed suspiciously few glyphs');
+
+    // Widths must be real, not a single fallback repeated: Helvetica's "i"
+    // is far narrower than its "w", and a flat fallback would make every
+    // cut index drift along the line.
+    const widthOf = (ch) => {
+      const box = result.boxes.find((b) => b.text === ch);
+      return box ? box.x1 - box.x0 : null;
+    };
+    const narrow = widthOf('i');
+    const wide = widthOf('w');
+    assert(narrow !== null && wide !== null, 'fixture text lost its i and w');
+    assert(wide > narrow * 1.5, `widths look flat: i=${narrow}, w=${wide}`);
+  }));
+
+  await test('the engine and split_leaf agree on a standard-14 leaf', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree)[0];
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    const engineText = geometry.boxes
+      .filter((b) => b.mcid === leaf.mcid)
+      .sort((a, b) => a.seq - b.seq)
+      .map((b) => b.text)
+      .join('');
+    const leafText = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+    assertEqual(engineText, leafText, 'the two decoders disagree on this leaf');
+  }));
+
+  await test('a rectangle can cut a standard-14 leaf', () => withDoc(fixture, async (doc) => {
+    const leaf = contentLeaves(doc.tree)[0];
+    const leafText = (await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id })).text;
+    const geometry = await worker.call('get_page_code_boxes', { docId: doc.docId, pageIndex: 0 });
+    const glyphs = geometry.boxes.filter((b) => b.mcid === leaf.mcid).sort((a, b) => a.seq - b.seq);
+    const offsets = [0];
+    for (const g of glyphs) offsets.push(offsets[offsets.length - 1] + g.text.length);
+    const cut = offsets[Math.floor(offsets.length / 2)];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: 0,
+      selections: [{ nodeId: leaf.id, startIndex: cut, endIndex: null }],
+      role: 'H2',
+    });
+    assertEqual(result.cutCount, 1, 'a trailing run needs exactly one cut');
+    const tagged = findById(result.tree, result.newNodeId);
+    const taggedText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: tagged.children[0].id })).text;
+    assertEqual(taggedText, leafText.slice(cut), 'the cut did not land where it was asked to');
+
+    await saveAndReopen(doc.docId, 'standard14-cut', (reopened) => {
+      assert(byRole(reopened.tree, 'H2').length >= 1, 'the new tag did not survive save');
+    });
+  }));
+}
+
 // --- main ------------------------------------------------------------------
 
 async function main() {
-  const missing = FIXTURES.filter((f) => !fs.existsSync(path.join(ROOT, f)));
+  const missing = [...FIXTURES, STANDARD14_FIXTURE]
+    .filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missing.length) {
     console.error(`Missing fixture PDFs: ${missing.join(', ')}`);
     process.exit(1);
@@ -1031,6 +1106,10 @@ async function main() {
       await bookmarkTests(fixture);
       await errorTests(fixture);
     }
+
+    console.log(`
+${STANDARD14_FIXTURE}`);
+    await standardFontTests(STANDARD14_FIXTURE);
   } finally {
     worker.stop();
     fs.rmSync(tempDir, { recursive: true, force: true });
