@@ -8,7 +8,7 @@
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/lastmilepdf-light.png">
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lastmilepdf-dark.png">
-  <img src="docs/assets/lastmilepdf-dark.png" width="1920" height="1008" alt="The LastMilePDF window. A PDF page preview fills the left pane, with a bulleted list on the page outlined and labelled /L. The tag tree in the middle has that list's /L tag selected and expanded to show its /LI, /Lbl and /LBody children. Tag properties on the right show the role &quot;L&quot;, empty language and alt text fields, and a live list preview of the four bullet items.">
+  <img src="docs/assets/lastmilepdf-dark.png" alt="The LastMilePDF window. A PDF page preview fills the left pane, with a bulleted list on the page outlined and labelled /L. The tag tree in the middle has that list's /L tag selected and expanded to show its /LI, /Lbl and /LBody children. Tag properties on the right show the role &quot;L&quot;, empty language and alt text fields, and a live list preview of the four bullet items.">
 </picture>
 
 LastMilePDF is for cleaning up auto-tagged PDFs, especially those made from scanned images. Its purpose is to have the best possible user-interface for manual tag changes, with optional built-in AI assistance for proofreading OCR errors.
