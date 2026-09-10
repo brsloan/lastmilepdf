@@ -243,7 +243,7 @@ header.site-nav {
 /* ---------- Screenshots ---------- */
 
 /* The frame is separate from any width, so the same border/radius/shadow
-   serves a single full-width shot and each half of the theme pair. */
+   serves every shot on the page, whatever container it sits in. */
 .shot-frame {
   border-radius: 12px;
   border: 1px solid var(--border);
@@ -253,7 +253,10 @@ header.site-nav {
 
 .shot {
   margin: 0;
-  min-width: 0; /* a grid item must be allowed to shrink under its image */
+  /* Both containers are flex, and a flex item's min-width is auto by
+     default - which is the image's intrinsic 1920px. Without this the shots
+     would refuse to shrink and push the page sideways. */
+  min-width: 0;
 }
 
 .shot-caption {
@@ -270,14 +273,19 @@ header.site-nav {
   color: var(--text);
 }
 
-/* The hero's dark/light pair. Wider than the 980px a single shot gets, since
-   it is carrying two. Captions here are just the theme name, so they sit
-   tight under each frame rather than reading as prose. */
+/* The hero's dark/light pair, stacked rather than side by side. These are
+   1920px-wide three-pane screenshots: at half the page's width each, the tag
+   tree and properties panel stopped being readable, which defeats the point
+   of showing the window at all. Full width and one above the other costs
+   vertical space but keeps both legible.
+
+   Captions here are just the theme name, so they sit tight under each frame
+   rather than reading as prose. */
 .theme-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 22px;
-  max-width: var(--max-width);
+  display: flex;
+  flex-direction: column;
+  gap: 38px;
+  max-width: 980px;
   margin: 0 auto;
 }
 
@@ -532,15 +540,12 @@ footer a:hover {
   .feature-grid {
     grid-template-columns: 1fr 1fr;
   }
-  /* Two 1920px shots side by side stop being legible well before the layout
-     runs out of room, so the pair stacks earlier than the card grids do. */
-  .theme-pair {
-    grid-template-columns: 1fr;
-    gap: 32px;
-    max-width: 620px;
-  }
+  /* .theme-pair needs nothing here any more - it stacks at every width. Its
+     max-width is already above this breakpoint, so the viewport constrains
+     it from here down. */
+  .theme-pair,
   .shot-stack {
-    gap: 40px;
+    gap: 32px;
   }
   .scope-columns {
     grid-template-columns: 1fr;
