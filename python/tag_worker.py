@@ -952,6 +952,11 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
             "end": selection.get("endIndex"),
             # Where this run's own leading list marker ends, when it has one.
             "label_split": selection.get("labelSplit"),
+            # Which list item this run belongs to. Runs sharing one become a
+            # single LI, which is how an entry spanning several lines - or
+            # several leaves, on a scan that gives every line its own -
+            # stays one item. Absent means one item per run.
+            "item_index": selection.get("itemIndex"),
         })
 
     _push_undo_snapshot(doc)
@@ -980,7 +985,8 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
             # either. Worth short-circuiting rather than merely skipping the
             # cut: this is exactly the case a caller uses for a leaf whose
             # font it couldn't measure, and decoding one of those raises.
-            kept.append({"mcid": keep_mcid, "label_split": plan["label_split"]})
+            kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
+                         "item_index": plan["item_index"]})
             continue
 
         codes = _decode_leaf(doc, node_id)[5]
@@ -996,7 +1002,8 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
             # The tail of this cut is the run we want, so follow its mcid.
             _, _, keep_mcid, _, _ = _cut_leaf(doc, node_id, start)
             cuts_made += 1
-        kept.append({"mcid": keep_mcid, "label_split": plan["label_split"]})
+        kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
+                     "item_index": plan["item_index"]})
 
     tree = _rebuild_after_mutation(doc_id)
 
@@ -1023,17 +1030,26 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     for entry in kept:
         split = entry["label_split"]
         if not split:
-            items.append({"mcids": [entry["mcid"]], "useLabel": False})
+            piece = {"mcids": [entry["mcid"]], "useLabel": False}
+        else:
+            try:
+                _, head_mcid, tail_mcid, _, _ = _cut_leaf(
+                    doc, ids_for([entry["mcid"]])[0], split)
+            except ValueError:
+                piece = {"mcids": [entry["mcid"]], "useLabel": False}
+            else:
+                cuts_made += 1
+                _rebuild_after_mutation(doc_id)
+                piece = {"mcids": [head_mcid, tail_mcid], "useLabel": True}
+        # Runs the caller grouped under one item index are one entry, so
+        # they merge rather than each becoming an LI of their own.
+        if (entry["item_index"] is not None and items
+                and items[-1]["itemIndex"] == entry["item_index"]):
+            items[-1]["mcids"].extend(piece["mcids"])
+            items[-1]["useLabel"] = items[-1]["useLabel"] or piece["useLabel"]
             continue
-        try:
-            _, head_mcid, tail_mcid, _, _ = _cut_leaf(
-                doc, ids_for([entry["mcid"]])[0], split)
-        except ValueError:
-            items.append({"mcids": [entry["mcid"]], "useLabel": False})
-            continue
-        cuts_made += 1
-        _rebuild_after_mutation(doc_id)
-        items.append({"mcids": [head_mcid, tail_mcid], "useLabel": True})
+        piece["itemIndex"] = entry["item_index"]
+        items.append(piece)
 
     flat_ids = [leaf_id for item in items for leaf_id in ids_for(item["mcids"])]
     if role == "L":

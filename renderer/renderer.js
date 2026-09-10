@@ -5,7 +5,7 @@ import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSele
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
-import { applyRoleShortcut, attemptHeadingLevelChange, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels, tagRectSelection } from './editing.js';
+import { applyRoleShortcut, attemptHeadingLevelChange, tagRectSelectionAsHangingList, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels, tagRectSelection } from './editing.js';
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
 import {
   MIN_RECT_SELECT_PX, clearRectSelect, normalizedDragBox,
@@ -1768,6 +1768,22 @@ const RECT_SELECT_ROLES = {
   paragraph: 'P', listItem: 'LI', list: 'L', td: 'TD', th: 'TH',
   caption: 'Caption', figure: 'Figure',
 };
+
+// Ctrl+L: a list whose items are marked out by hanging indents rather than
+// by bullets - a reference list, most often. Separate from plain L on
+// purpose: an ordinary indented paragraph is the same shape inverted, so
+// which one a block is has to be the user's call, not a guess.
+window.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  if (e.altKey || e.shiftKey || e.key.toLowerCase() !== 'l') return;
+  if (!state.rectSelectPending || state.rectSelectPending.length === 0) return;
+
+  const focused = document.activeElement?.tagName;
+  if (focused === 'INPUT' || focused === 'TEXTAREA' || focused === 'SELECT') return;
+
+  e.preventDefault();
+  tagRectSelectionAsHangingList();
+});
 
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;

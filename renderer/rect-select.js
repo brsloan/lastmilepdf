@@ -312,33 +312,54 @@ function glyphsInRun(glyphs, run) {
 // Text before the first marker becomes an unlabelled leading item rather
 // than being folded into the first labelled one or dropped: it is content
 // the user selected, and this way it stays visible and separable.
-export function listItemPieces(glyphs, run) {
-  const start = run ? run.startIndex : 0;
-  const end = run ? run.endIndex : Infinity;
+// Two baselines within this many points are one visual line: a line
+// carrying an italic or bold run shifts by a fraction of a point, and OCR
+// adds a little more. Rounding to whole points instead would split a line
+// whose halves happen to straddle a boundary.
+const LINE_TOLERANCE = 1.5;
 
+// The lines of one covered run, as { start, end, x, text } in run-relative
+// character offsets. Shared by both ways of finding list items - by the
+// markers on a line, and by where the line begins.
+export function linesOfRun(glyphs, run) {
+  const from = run ? run.startIndex : 0;
+  const to = run ? run.endIndex : Infinity;
+
+  const lines = [];
   let offset = 0;
-  let text = '';
-  const lineStarts = new Set();
-  let previousLine = null;
+  let taken = 0;
   for (const glyph of glyphs) {
     const at = offset;
     offset += glyph.text.length;
-    if (at < start || at >= end) continue;
-    const line = Math.round(glyph.y);
-    if (previousLine === null || line !== previousLine) lineStarts.add(text.length);
-    previousLine = line;
-    text += glyph.text;
+    if (at < from || at >= to) continue;
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(glyph.y - last.y) <= LINE_TOLERANCE) {
+      last.end = taken + glyph.text.length;
+      last.x = Math.min(last.x, glyph.x);
+      last.text += glyph.text;
+    } else {
+      lines.push({
+        start: taken, end: taken + glyph.text.length, x: glyph.x, y: glyph.y, text: glyph.text,
+      });
+    }
+    taken += glyph.text.length;
   }
-  if (!text) return [];
+  return lines;
+}
+
+export function listItemPieces(glyphs, run) {
+  const lines = linesOfRun(glyphs, run);
+  if (lines.length === 0) return [];
+  const text = lines.map((l) => l.text).join('');
 
   // Asked line by line rather than by scanning the whole run for markers,
   // because a PDF line break is not a character: "...alpha" and "* beta" on
   // consecutive lines run together as "...alpha* beta", so a marker that
   // begins a line usually has no whitespace in front of it to match on.
   const marks = [];
-  for (const at of [...lineStarts].sort((a, b) => a - b)) {
-    const length = leadingListLabelLength(text.slice(at));
-    if (length > 0) marks.push({ at, length });
+  for (const line of lines) {
+    const length = leadingListLabelLength(text.slice(line.start));
+    if (length > 0) marks.push({ at: line.start, length });
   }
   if (marks.length === 0) return [{ start: 0, end: text.length, labelLength: 0 }];
 
@@ -352,6 +373,98 @@ export function listItemPieces(glyphs, run) {
     });
   }
   return pieces.filter((p) => p.end > p.start);
+}
+
+// A line beginning within this far of the leftmost one is at the margin
+// rather than indented: justified text wobbles by a fraction of a point,
+// and OCR adds a little more.
+const MARGIN_TOLERANCE = 2.5;
+// Below this, an "indent" is only that wobble.
+const MIN_HANGING_INDENT = 4.0;
+
+// Where the entries of a hanging-indent list begin, across a whole
+// selection: [{ hitIndex, startIndex, endIndex, itemIndex }].
+//
+// A bulleted list announces its items with a character. A reference list
+// announces them with the opposite of an indent - the first line of each
+// entry sits at the outer margin and its continuations are pushed in - so
+// the item boundaries are the lines starting furthest left. Nothing in the
+// text says so; it is only visible in the geometry.
+//
+// Deliberately across the selection rather than within each run, because
+// how a list is carved into leaves varies completely: a born-digital
+// document paints a whole reference list as one run, while an OCR'd scan
+// gives every single line its own. Working per run would find nothing at
+// all on the scans this is mostly pointed at.
+//
+// Returns null rather than guessing when the lines don't separate cleanly:
+// fewer than two entries, no indented continuation, or an indent too small
+// to be anything but wobble. An ordinary paragraph has its *first* line
+// indented, which is this shape inverted - so a caller must ask for this
+// explicitly, never fall back to it.
+export function hangingIndentItems(hits) {
+  const lines = [];
+  hits.forEach((hit, hitIndex) => {
+    if (!hit.glyphs) return;
+    const base = hit.run ? hit.run.startIndex : 0;
+    for (const line of linesOfRun(hit.glyphs, hit.run)) {
+      lines.push({
+        hitIndex, x: line.x, y: line.y,
+        startIndex: base + line.start,
+        endIndex: base + line.end,
+      });
+    }
+  });
+  if (lines.length < 3) return null;
+
+  // Reading order down the page. Viewport y grows downward, so ascending y
+  // is top to bottom; ties go left to right.
+  lines.sort((a, b) => (Math.abs(a.y - b.y) > LINE_TOLERANCE ? a.y - b.y : a.x - b.x));
+
+  const outer = Math.min(...lines.map((l) => l.x));
+  const isStart = lines.map((l) => l.x <= outer + MARGIN_TOLERANCE);
+  const starts = isStart.filter(Boolean).length;
+  const indented = lines.filter((l, i) => !isStart[i]).map((l) => l.x);
+  if (starts < 2 || indented.length === 0) return null;
+
+  const lastMarginX = Math.max(...lines.filter((l, i) => isStart[i]).map((l) => l.x));
+  if (Math.min(...indented) - lastMarginX < MIN_HANGING_INDENT) return null;
+
+  // An ordinary paragraph with an indented first line is this shape exactly
+  // inverted, and has the same two indents to show for it - so the counts
+  // above can't tell them apart. What can: in a hanging-indent list an
+  // indented line *follows* a margin line, because it continues the entry
+  // that one began. In a first-line-indented paragraph the only indented
+  // line is the opening one, with nothing before it to continue.
+  const firstStart = isStart.indexOf(true);
+  if (!isStart.slice(firstStart).includes(false)) return null;
+
+  // Each margin line opens an entry; anything indented belongs to the entry
+  // above it. Lines before the first margin line - a heading caught by the
+  // drag, most likely - become a leading item of their own, the same as the
+  // text before a first bullet does.
+  const out = [];
+  let itemIndex = -1;
+  lines.forEach((line, i) => {
+    if (isStart[i] || itemIndex === -1) itemIndex += 1;
+    // Lines that adjoin within one leaf and belong to one entry are one
+    // piece: emitting them separately would have the worker cut between an
+    // entry's own lines only to join them back together afterwards.
+    const previous = out[out.length - 1];
+    if (previous && previous.itemIndex === itemIndex
+        && previous.hitIndex === line.hitIndex
+        && previous.endIndex === line.startIndex) {
+      previous.endIndex = line.endIndex;
+      return;
+    }
+    out.push({
+      hitIndex: line.hitIndex,
+      startIndex: line.startIndex,
+      endIndex: line.endIndex,
+      itemIndex,
+    });
+  });
+  return out;
 }
 
 export function normalizedDragBox(rect) {

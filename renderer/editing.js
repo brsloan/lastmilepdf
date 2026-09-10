@@ -15,7 +15,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
-import { listItemPieces } from './rect-select.js';
+import { hangingIndentItems, listItemPieces } from './rect-select.js';
 import { refreshPdfPreviewBytes } from './viewer.js';
 
 export async function performUndo() {
@@ -331,6 +331,31 @@ function listSelectionsFor(hit) {
   }));
 }
 
+// The reference-list variant of tagRectSelection('L'): entries found by
+// where each line begins rather than by a marker on it. Kept behind its own
+// shortcut, never a fallback, because an ordinary indented paragraph is this
+// shape inverted and guessing wrong would carve it up at every line.
+export async function tagRectSelectionAsHangingList() {
+  const hits = state.rectSelectHits;
+  if (!hits || hits.length === 0) return;
+
+  const found = hangingIndentItems(hits);
+  if (!found) {
+    setStatus('No hanging indent found in that selection - its lines all start at the same place.'
+      + ' Use L if the items have bullets or numbers.');
+    return;
+  }
+  const selections = found.map((piece) => ({
+    nodeId: hits[piece.hitIndex].nodeId,
+    startIndex: piece.startIndex,
+    endIndex: piece.endIndex,
+    labelSplit: null,
+    itemIndex: piece.itemIndex,
+  }));
+  const items = new Set(found.map((p) => p.itemIndex)).size;
+  await commitRectSelection('L', selections, `Tagged ${items} entries as a list.`);
+}
+
 export async function tagRectSelection(role) {
   const hits = state.rectSelectHits;
   if (!hits || hits.length === 0) return;
@@ -351,7 +376,6 @@ export async function tagRectSelection(role) {
       endIndex: hit.run ? hit.run.endIndex : null,
       labelSplit: role === 'LI' ? (leadingListLabelLength(hit.runText) || null) : null,
     }));
-  const pageIndex = state.currentPage - 1;
 
   // An LI splits into Lbl + LBody when its first piece is a bare marker,
   // and into a single LBody otherwise - the same question the tree's own
@@ -373,6 +397,18 @@ export async function tagRectSelection(role) {
     useLabel = looksLikeListLabel(first?.runText);
   }
 
+  const count = selections.length;
+  const what = `${count} item${count === 1 ? '' : 's'}`;
+  await commitRectSelection(role, selections, `Tagged ${what} as ${role}.`, useLabel);
+}
+
+// Sends a rectangle selection to the worker and applies what comes back.
+// Shared by the two ways of arriving here - a plain role, and the
+// hanging-indent list - because everything from the call onwards is the
+// same: re-feed pdf.js if a cut moved the bytes under it, adopt the tree,
+// select what was made, and say what happened.
+async function commitRectSelection(role, selections, headline, useLabel = false) {
+  const pageIndex = state.currentPage - 1;
   try {
     const result = await window.api.tagRectContent(
       state.docId, pageIndex, selections, role, useLabel);
@@ -390,8 +426,6 @@ export async function tagRectSelection(role) {
     if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
     else closeDetails();
 
-    const count = selections.length;
-    const what = `${count} item${count === 1 ? '' : 's'}`;
     const cut = result.cutCount > 0
       ? ` Split ${result.cutCount} time${result.cutCount === 1 ? '' : 's'} to fit the rectangle.`
       : '';
@@ -400,7 +434,7 @@ export async function tagRectSelection(role) {
       : '';
     setStatus(result.relabelled
       ? `Retagged as ${role}.${cut}${removed}`
-      : `Tagged ${what} as ${role}.${cut}${removed}`);
+      : `${headline}${cut}${removed}`);
   } catch (err) {
     reportError(`Could not tag the selection as ${role}`, err);
   }

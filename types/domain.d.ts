@@ -201,6 +201,12 @@ export interface RectSelection {
   endIndex: number | null;
   /** Where this run's own leading list marker ends, when it has one. */
   labelSplit?: number | null;
+  /**
+   * Which list item this run belongs to. Runs sharing one become a single
+   * LI - how an entry spanning several lines, or several leaves, stays one
+   * item. Absent means one item per run.
+   */
+  itemIndex?: number | null;
 }
 
 /**
