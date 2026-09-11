@@ -671,14 +671,7 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
       // over the whole moved block (mirrors moveSelectedBlock()).
       const freshParent = newParentPath ? resolveNodeByPath(newParentPath) : null;
       const movedIds = (freshParent?.children || []).slice(newIndex, newIndex + topLevelIds.length).map((c) => c.id);
-      if (movedIds.length > 0) {
-        state.selectedNodeIds = new Set(movedIds);
-        state.selectedNodeId = movedIds[movedIds.length - 1];
-        state.selectionAnchorId = movedIds[0];
-        expandAncestors(state.selectedNodeId);
-        renderTree();
-        refreshDetailsForSelection();
-      }
+      if (movedIds.length > 0) selectNodes(movedIds);
       setStatus(`Moved ${topLevelIds.length} tags.`);
     } catch (err) {
       reportError('Could not move tags', err);
@@ -738,6 +731,32 @@ export function selectNode(nodeId) {
   state.selectionAnchorId = nodeId;
   state.selectedNodeId = nodeId;
   expandAncestors(nodeId);
+  renderTree();
+  refreshDetailsForSelection();
+}
+
+// The multi-tag form of selectNode(): hands the selection to a whole batch
+// of tags an edit just produced - the paragraphs a conversion made, the
+// block a drag moved. The last one becomes the active tag (what the
+// properties pane shows) and the first the shift+click anchor, so extending
+// the selection from here runs the way it would after shift-clicking the
+// batch by hand.
+//
+// Ids that no longer exist are dropped rather than trusted: a rebuild
+// reassigns every id (see the note above applyFreshTree()), so a caller
+// naming a tag that isn't there is naming a slot something else now
+// occupies. With nothing left to select this clears the selection, which is
+// the honest answer - and the one the tree's own keyboard handling reads.
+export function selectNodes(nodeIds) {
+  const ids = nodeIds.filter((id) => state.nodesById.has(id) && id !== state.hiddenDocumentId);
+  if (ids.length === 0) {
+    closeDetails();
+    return;
+  }
+  state.selectedNodeIds = new Set(ids);
+  state.selectionAnchorId = ids[0];
+  state.selectedNodeId = ids[ids.length - 1];
+  for (const id of ids) expandAncestors(id);
   renderTree();
   refreshDetailsForSelection();
 }

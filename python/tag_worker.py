@@ -1325,7 +1325,8 @@ def _flatten_container_to_paragraphs(doc, node_id):
     """Replaces the List/Span/Div struct element at `node_id` with the
     fully flattened contents of its whole subtree (see _paragraphize),
     spliced into its own parent in its place. The container itself is
-    always discarded."""
+    always discarded. Returns the elements that took its place, so the
+    caller can name them once the tree has been rebuilt."""
     parent_id = doc["parent_map"].get(node_id)
     if parent_id is None:
         raise ValueError("Cannot flatten the document root")
@@ -1343,6 +1344,7 @@ def _flatten_container_to_paragraphs(doc, node_id):
     _remove_kid(parent_obj, node_obj)
     for offset, repl in enumerate(replacements):
         _insert_kid(parent_obj, repl, index + offset)
+    return replacements
 
 
 def convert_to_paragraph(doc_id, node_ids):
@@ -1358,7 +1360,13 @@ def convert_to_paragraph(doc_id, node_ids):
     whether the rebuilt tree's node ids still line up with the ones the
     caller passed. A selection of plain tags - pressing 'P' on paragraphs
     that already are paragraphs, most often - is nothing but relabels, so
-    the host can keep the selection exactly where it was."""
+    the host can keep the selection exactly where it was.
+
+    Reports `newNodeIds` either way: every paragraph this produced, named in
+    the rebuilt tree, so a reshaping conversion can hand the selection on to
+    what it made rather than dropping it. Wrapping a run of leaves inserts a
+    tag per leaf, which shifts every id after the first, so the ids the
+    caller sent are no use to it afterwards."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -1372,19 +1380,26 @@ def convert_to_paragraph(doc_id, node_ids):
 
     _push_undo_snapshot(doc)
     reshaped = False
+    paragraphs = []
     for node_id in top_level:
         if doc["node_kind"].get(node_id) == "element":
             role = str(doc["elements"][node_id].get("/S", "")).lstrip("/")
             if role in ("L", "Span", "Div"):
-                _flatten_container_to_paragraphs(doc, node_id)
+                paragraphs.extend(_flatten_container_to_paragraphs(doc, node_id))
                 reshaped = True
             else:
                 doc["elements"][node_id]["/S"] = pikepdf.Name("/P")
+                paragraphs.append(doc["elements"][node_id])
         else:
-            _wrap_leaf(doc, node_id, "P")
+            paragraphs.append(_wrap_leaf(doc, node_id, "P"))
             reshaped = True
 
-    return {"tree": _rebuild_after_mutation(doc_id), "reshaped": reshaped, **_undo_state(doc)}
+    tree = _rebuild_after_mutation(doc_id)
+    return {
+        "tree": tree, "reshaped": reshaped,
+        "newNodeIds": _node_ids_for_objects(doc, paragraphs),
+        **_undo_state(doc),
+    }
 
 
 def _collect_leaf_ids(doc, node_id):
@@ -4421,6 +4436,29 @@ def _node_id_for_object(doc, obj):
     meaningful for an object that was already part of the tree before the
     current command started mutating it."""
     return next((nid for nid, o in doc["elements"].items() if _same_object(o, obj)), None)
+
+
+def _node_ids_for_objects(doc, objs):
+    """_node_id_for_object() for a whole batch of objects - every tag a
+    command created or kept - resolved in one pass over the registry rather
+    than one scan of it per object, which is what turns naming the output of
+    flattening a long list from quadratic into linear. Same answer, same
+    freshness caveat; objects that aren't registered are skipped, and the
+    order given is kept."""
+    by_objgen = {}
+    for node_id, obj in doc["elements"].items():
+        if getattr(obj, "is_indirect", False):
+            by_objgen.setdefault(obj.objgen, node_id)
+
+    ids = []
+    for obj in objs:
+        # A direct (non-indirect) struct element has no objgen to match on -
+        # rare, but legal - so it falls back to the scanning form.
+        node_id = (by_objgen.get(obj.objgen) if getattr(obj, "is_indirect", False)
+                   else _node_id_for_object(doc, obj))
+        if node_id is not None:
+            ids.append(node_id)
+    return ids
 
 
 def _document_insertion_parent(doc):

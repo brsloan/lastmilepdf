@@ -445,6 +445,47 @@ async function editTests(fixture) {
     assertEqual(countNodes(result.tree), countNodes(doc.tree) + 1, 'no wrapper tag was added');
   }));
 
+  await test('converting a run of content leaves names every paragraph it made', () => withDoc(fixture, async (doc) => {
+    // Pressing 'P' on several leaves at once. Each wrap inserts a tag, so
+    // the ids the caller sent slide out from under it after the first one -
+    // the renderer selects `newNodeIds` instead (see
+    // convertSelectionToParagraph() in renderer/editing.js). Selecting the
+    // sent ids left the user holding a partial selection of other people's
+    // tags, which is the bug this guards.
+    const parent = allNodes(doc.tree).find(
+      (n) => (n.children || []).filter((c) => c.type === 'content').length >= 3);
+    if (!parent) skip('no tag with three content leaves in this fixture');
+    const ids = parent.children.filter((c) => c.type === 'content').map((c) => c.id);
+
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: ids });
+    assertEqual(result.newNodeIds.length, ids.length, 'not one paragraph reported per leaf');
+    for (const id of result.newNodeIds) {
+      assertEqual(findById(result.tree, id)?.role, 'P', `reported id ${id} is not a paragraph`);
+    }
+    assertEqual(new Set(result.newNodeIds).size, ids.length, 'the same paragraph was reported twice');
+  }));
+
+  await test('relabelling to paragraph names the tags it relabelled', () => withDoc(fixture, async (doc) => {
+    // The no-reshape case reports the ids it was given back, unchanged -
+    // which is what lets the renderer leave the selection alone.
+    const paras = byRole(doc.tree, 'P').slice(0, 3).map((n) => n.id);
+    if (paras.length === 0) skip('no P in this fixture');
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: paras });
+    assertEqual(result.newNodeIds.join(), paras.join(), 'a pure relabel renamed its own tags');
+  }));
+
+  await test('flattening a list to paragraphs names all of them', () => withDoc(fixture, async (doc) => {
+    // A container doesn't become one paragraph - it becomes however many its
+    // contents make, and the selection should end up holding all of them.
+    const list = firstByRole(doc.tree, 'L');
+    if (!list) skip('no L in this fixture');
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: [list.id] });
+    assert(result.newNodeIds.length > 0, 'flattening reported no paragraphs');
+    for (const id of result.newNodeIds) {
+      assertEqual(findById(result.tree, id)?.role, 'P', `reported id ${id} is not a paragraph`);
+    }
+  }));
+
   await test('deleting a tag survives save and reopen', () => withDoc(fixture, async (doc) => {
     const para = firstByRole(doc.tree, 'P');
     if (!para) skip('no P in this fixture');

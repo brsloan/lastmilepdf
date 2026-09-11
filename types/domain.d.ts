@@ -139,9 +139,14 @@ export interface OrphanedContentCount {
  * was simply relabelled to /P - no container flattened, no leaf wrapped -
  * which means the rebuilt tree's node ids still name the same tags, so the
  * caller can keep its selection rather than dropping it.
+ *
+ * `newNodeIds` names every paragraph the conversion produced, in the rebuilt
+ * tree - what the selection moves to when it did reshape, since the ids sent
+ * in no longer name those tags.
  */
 export interface ParagraphResult extends MutationResult {
   reshaped: boolean;
+  newNodeIds: string[];
 }
 
 /** `insert_paragraph_after()`'s result: the tag it just created. */

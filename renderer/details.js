@@ -15,7 +15,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { refreshSplitContentPanel, resetSplitContentPanel } from './split-content.js';
 import { state } from './state.js';
 import { renderTablePreview } from './table-preview.js';
-import { alignSelectedTagTreeRow, applyFreshTree, selectNode } from './tree-view.js';
+import { alignSelectedTagTreeRow, applyFreshTree, renderTree, selectNode } from './tree-view.js';
 import { clearHighlight, highlightNodeOnPage } from './viewer.js';
 
 // The Actual Text field's placeholder as authored in index.html - restored
@@ -291,6 +291,14 @@ export function closeDetails() {
   el.listPreviewContainer.innerHTML = '';
   state.highlightToken += 1; // invalidate any highlight computation still in flight
   clearHighlight();
+  // The tree paints its selection from state.selectedNodeIds as it renders,
+  // so dropping the selection without redrawing leaves rows still looking
+  // selected while every keyboard handler reads an empty selection and does
+  // nothing. Callers that clear the selection after an edit hit this the
+  // hardest: applyFreshTree() has just drawn the rebuilt tree, highlighting
+  // whichever ids happened to survive the rebuild, and those rows then sit
+  // there as a claim about the selection that isn't true.
+  renderTree();
 }
 
 // Swaps the Actual Text field's placeholder for the tag's own content text

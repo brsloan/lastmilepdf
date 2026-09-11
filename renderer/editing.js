@@ -14,7 +14,7 @@ import { firstLeafText, isListLabelLeaf, leadingListLabelLength, looksLikeListLa
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { isDescendant } from './tree-index.js';
-import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { applyFreshTree, renderTree, selectNode, selectNodes } from './tree-view.js';
 import { hangingIndentItems, listItemPieces } from './rect-select.js';
 import { refreshPdfPreviewBytes } from './viewer.js';
 
@@ -490,11 +490,13 @@ export async function applyRoleShortcut(role) {
 // and there's nothing to press the next shortcut against until they click
 // back in.
 //
-// Otherwise it reselects on a single target the same way applyRoleShortcut()
-// does - the old id still resolves to whatever now occupies that slot,
-// whether that's a wrapped leaf or (for a flattened container) the first of
-// its replacements. A multi-target conversion can restructure arbitrarily
-// much of the tree at once, so it just clears the selection instead.
+// Otherwise the worker names the paragraphs it produced (`newNodeIds`,
+// resolved against the rebuilt tree), and the selection moves to those: the
+// ids the caller sent can't do the job, because wrapping a leaf inserts a
+// tag and so shifts the id of everything after it. Converting a run of
+// leaves used to land on that - some of the sent ids still existed, now
+// naming other tags, and the rest were dropped - which left the user with a
+// partial selection of tags they hadn't picked.
 export async function convertSelectionToParagraph() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
@@ -509,10 +511,10 @@ export async function convertSelectionToParagraph() {
       // applyFreshTree() has already kept (and re-rendered) the selection -
       // only the details panel still needs to catch up with the new role.
       refreshDetailsForSelection();
-    } else if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
-      selectNode(topLevelIds[0]);
     } else {
-      closeDetails();
+      // selectNodes() drops any id the rebuild didn't keep, and clears the
+      // selection outright if none of them survived.
+      selectNodes(result.newNodeIds || []);
     }
     setStatus(`Converted ${topLevelIds.length} tag${topLevelIds.length === 1 ? '' : 's'} to paragraph.`);
   } catch (err) {

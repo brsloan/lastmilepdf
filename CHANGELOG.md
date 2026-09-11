@@ -11,6 +11,12 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Fixed
+- Pressing `P` on several content elements at once now leaves the paragraphs
+  it made selected. It used to hand back a partial selection of whichever
+  other tags had inherited those positions, because wrapping each element in
+  a paragraph shifts everything after it along.
+- Clearing the selection now redraws the tag tree, so rows can no longer be
+  left looking selected when nothing is.
 - Pressing `P` on tags that are already paragraphs no longer clears the
   selection, which left the tree without a focused tag until it was clicked
   back into. Any conversion that only relabels now keeps the selection put.
