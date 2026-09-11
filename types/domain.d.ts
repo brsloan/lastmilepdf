@@ -134,6 +134,16 @@ export interface OrphanedContentCount {
   pageCount: number;
 }
 
+/**
+ * `convert_to_paragraph()`'s result. `reshaped` is false when every target
+ * was simply relabelled to /P - no container flattened, no leaf wrapped -
+ * which means the rebuilt tree's node ids still name the same tags, so the
+ * caller can keep its selection rather than dropping it.
+ */
+export interface ParagraphResult extends MutationResult {
+  reshaped: boolean;
+}
+
 /** `insert_paragraph_after()`'s result: the tag it just created. */
 export interface InsertResult extends MutationResult {
   newNodeId: string;

@@ -1352,7 +1352,13 @@ def convert_to_paragraph(doc_id, node_ids):
     its List-Item/inline kids nested beneath it wouldn't make it an actual
     paragraph. Anything else - including a content/object-ref leaf - is
     set-or-wrapped to /P the same way set_role_or_wrap() handles H1-H6/LI.
-    Backs the tag tree's 'P' shortcut."""
+    Backs the tag tree's 'P' shortcut.
+
+    Reports `reshaped`: whether any target was flattened or wrapped, i.e.
+    whether the rebuilt tree's node ids still line up with the ones the
+    caller passed. A selection of plain tags - pressing 'P' on paragraphs
+    that already are paragraphs, most often - is nothing but relabels, so
+    the host can keep the selection exactly where it was."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -1365,17 +1371,20 @@ def convert_to_paragraph(doc_id, node_ids):
     top_level = _top_level_selection(doc, node_ids)
 
     _push_undo_snapshot(doc)
+    reshaped = False
     for node_id in top_level:
         if doc["node_kind"].get(node_id) == "element":
             role = str(doc["elements"][node_id].get("/S", "")).lstrip("/")
             if role in ("L", "Span", "Div"):
                 _flatten_container_to_paragraphs(doc, node_id)
+                reshaped = True
             else:
                 doc["elements"][node_id]["/S"] = pikepdf.Name("/P")
         else:
             _wrap_leaf(doc, node_id, "P")
+            reshaped = True
 
-    return {"tree": _rebuild_after_mutation(doc_id), **_undo_state(doc)}
+    return {"tree": _rebuild_after_mutation(doc_id), "reshaped": reshaped, **_undo_state(doc)}
 
 
 def _collect_leaf_ids(doc, node_id):

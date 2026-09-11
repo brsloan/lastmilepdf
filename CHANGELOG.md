@@ -11,6 +11,9 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Fixed
+- Pressing `P` on tags that are already paragraphs no longer clears the
+  selection, which left the tree without a focused tag until it was clicked
+  back into. Any conversion that only relabels now keeps the selection put.
 - Join no longer refuses tags that sit on the same page but disagree about
   where their `/Pg` is written - the case that blocked joining paragraphs
   holding `Sub` tags. Joining across a page break works too: the moved

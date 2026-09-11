@@ -417,6 +417,34 @@ async function editTests(fixture) {
     });
   }));
 
+  await test('converting paragraphs to paragraphs reports no reshaping', () => withDoc(fixture, async (doc) => {
+    // What the 'P' shortcut does to tags that are already paragraphs: pure
+    // relabels, so every node id still names the same tag afterwards. The
+    // renderer leans on `reshaped` being false here to leave the selection
+    // (and the tree's keyboard focus) exactly where the user left it - see
+    // convertSelectionToParagraph() in renderer/editing.js.
+    const paras = byRole(doc.tree, 'P');
+    if (paras.length === 0) skip('no P in this fixture');
+    const ids = paras.slice(0, 3).map((n) => n.id);
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: ids });
+    assertEqual(result.reshaped, false, 'relabelling paragraphs reported a reshaped tree');
+    assertEqual(countNodes(result.tree), countNodes(doc.tree), 'the tree changed shape');
+    for (const id of ids) {
+      assertEqual(findById(result.tree, id)?.role, 'P', `node ${id} is no longer the P it was`);
+    }
+  }));
+
+  await test('converting a content leaf to a paragraph reports reshaping', () => withDoc(fixture, async (doc) => {
+    // The other half of the same flag: wrapping a bare leaf inserts a tag,
+    // which shifts every id after it, so the renderer must not hold onto
+    // the ids it sent.
+    const leaf = contentLeaves(doc.tree)[0];
+    if (!leaf) skip('no content leaf in this fixture');
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: [leaf.id] });
+    assertEqual(result.reshaped, true, 'wrapping a leaf reported an unchanged tree');
+    assertEqual(countNodes(result.tree), countNodes(doc.tree) + 1, 'no wrapper tag was added');
+  }));
+
   await test('deleting a tag survives save and reopen', () => withDoc(fixture, async (doc) => {
     const para = firstByRole(doc.tree, 'P');
     if (!para) skip('no P in this fixture');

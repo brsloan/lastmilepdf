@@ -237,7 +237,7 @@ const api = {
   /**
    * @param {string} docId
    * @param {string[]} nodeIds
-   * @returns {Promise<MutationResult>}
+   * @returns {Promise<import('./types/domain').ParagraphResult>}
    */
   convertToParagraph: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:convert-to-paragraph', { docId, nodeIds }),

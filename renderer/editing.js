@@ -479,12 +479,22 @@ export async function applyRoleShortcut(role) {
 
 // Backs the 'P' shortcut: converts each selected tag to a Paragraph, except
 // a List/Span/Div, which gets flattened into paragraphs instead (see
-// convert_to_paragraph() in tag_worker.py for why). Reselects on a single
-// target the same way applyRoleShortcut() does - the old id still resolves
-// to whatever now occupies that slot, whether that's the relabeled tag, a
-// wrapped leaf, or (for a flattened container) the first of its
-// replacements. A multi-target conversion can restructure arbitrarily much
-// of the tree at once, so it just clears the selection instead.
+// convert_to_paragraph() in tag_worker.py for why).
+//
+// A conversion that only relabelled (`reshaped` false - no container
+// flattened, no leaf wrapped, which is exactly what pressing 'P' on tags
+// that are already paragraphs does) leaves every id where it was, so the
+// selection simply stays put, the same way a pure batch of role relabels
+// does in applyRoleShortcut(). Clearing it there dropped the user out of
+// the tree mid-pass: with nothing selected, the arrow keys stop stepping
+// and there's nothing to press the next shortcut against until they click
+// back in.
+//
+// Otherwise it reselects on a single target the same way applyRoleShortcut()
+// does - the old id still resolves to whatever now occupies that slot,
+// whether that's a wrapped leaf or (for a flattened container) the first of
+// its replacements. A multi-target conversion can restructure arbitrarily
+// much of the tree at once, so it just clears the selection instead.
 export async function convertSelectionToParagraph() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));
@@ -495,7 +505,11 @@ export async function convertSelectionToParagraph() {
     applyFreshTree(result.tree);
     applyUndoState(result);
 
-    if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
+    if (!result.reshaped) {
+      // applyFreshTree() has already kept (and re-rendered) the selection -
+      // only the details panel still needs to catch up with the new role.
+      refreshDetailsForSelection();
+    } else if (topLevelIds.length === 1 && state.nodesById.has(topLevelIds[0])) {
       selectNode(topLevelIds[0]);
     } else {
       closeDetails();
