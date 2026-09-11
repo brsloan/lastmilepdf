@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-11
+
 ### Changed
 - Tightened the in-app Help text throughout, and moved the shortcut list out of
   Help in favour of pointing at Help > Shortcuts.
@@ -112,7 +114,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/brsloan/lastmilepdf/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/brsloan/lastmilepdf/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/brsloan/lastmilepdf/compare/v0.3.0...v0.4.0
