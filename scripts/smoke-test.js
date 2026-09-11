@@ -168,6 +168,13 @@ function contentFingerprint(tree) {
  * so this is how to ask what happened to one specific piece of content
  * across an edit that reshuffled the tags around it.
  */
+/** The tag holding `nodeId`, by id - ids are only stable within one tree. */
+function parentOf(tree, nodeId) {
+  const owner = allNodes(tree).find((n) => (n.children || []).some((c) => c.id === nodeId));
+  if (!owner) throw new Error(`node ${nodeId} has no parent in this tree`);
+  return owner;
+}
+
 function ownerOfLeaf(tree, page, mcid) {
   const leaf = contentLeaves(tree).find((n) => n.page === page && n.mcid === mcid);
   if (!leaf) {
@@ -1521,6 +1528,53 @@ async function crossPageTests(fixture) {
         'the list body lost its page again on save');
       assertEqual(ownerOfLeaf(reopened.tree, 1, 3).page, 1,
         'the paragraph under the Div lost its page again on save');
+    });
+  }));
+
+  // Joining empties a tag out of the tree, so it faces the same question
+  // flatten does: whatever that tag's /Pg was telling its kids has to end up
+  // written down somewhere. It used to refuse the move instead, which caught
+  // two cases that aren't actually a page change at all.
+  await test('joining a paragraph that names no page keeps its content put', () => withDoc(fixture, async (doc) => {
+    const contentBefore = contentFingerprint(doc.tree);
+    const target = ownerOfLeaf(doc.tree, 0, 3);   // the Sub inside the /Pg-less P
+    const source = ownerOfLeaf(doc.tree, 0, 4);   // the P that carries /Pg itself
+    const targetP = parentOf(doc.tree, target.id);
+    assertEqual(targetP.page, null, 'fixture: the joining target already names a page');
+    assertEqual(source.role, 'P', 'fixture: mcid 4 on page 0 is not held by a paragraph');
+
+    const result = await worker.call('join_tags', { docId: doc.docId, nodeIds: [targetP.id, source.id] });
+    assertEqual(contentFingerprint(result.tree), contentBefore,
+      'joining two same-page paragraphs moved content to another page');
+    assertEqual(ownerOfLeaf(result.tree, 0, 4).page, 0,
+      'the joined-in paragraph text lost the page it was on');
+
+    await saveAndReopen(doc.docId, 'crosspage-join-pageless', (reopened) => {
+      assertEqual(contentFingerprint(reopened.tree), contentBefore,
+        'the saved file moved the joined content off its page');
+    });
+  }));
+
+  await test('joining across a page break carries the page with the content', () => withDoc(fixture, async (doc) => {
+    const contentBefore = contentFingerprint(doc.tree);
+    const target = ownerOfLeaf(doc.tree, 0, 5);   // first half, page 0
+    const source = ownerOfLeaf(doc.tree, 1, 4);   // second half, page 1
+    assertEqual(target.page, 0, 'fixture: the first half is not on page 0');
+    assertEqual(source.page, 1, 'fixture: the second half is not on page 1');
+
+    const result = await worker.call('join_tags', { docId: doc.docId, nodeIds: [target.id, source.id] });
+    // Page 1's MCID 4 is now held by a paragraph committed to page 0, so it
+    // only still names its own text if it carries the page itself.
+    assertEqual(contentFingerprint(result.tree), contentBefore,
+      'the page-1 half was repointed at page 0 when it moved');
+    const joined = ownerOfLeaf(result.tree, 1, 4);
+    assertEqual(joined.page, 0, 'the two halves did not end up in one paragraph');
+    assert(contentLeaves(joined).some((n) => n.page === 0),
+      'the joined paragraph lost the page-0 half it started with');
+
+    await saveAndReopen(doc.docId, 'crosspage-join', (reopened) => {
+      assertEqual(contentFingerprint(reopened.tree), contentBefore,
+        'the saved file has the joined half pointing at the wrong page');
     });
   }));
 }

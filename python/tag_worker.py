@@ -3473,7 +3473,17 @@ def join_tags(doc_id, node_ids):
     The target keeps its own node id afterward: nothing before it in
     document order changes, and ids are assigned by depth-first position
     (see _rebuild_after_mutation), so its slot in that ordering is
-    untouched by removing tags that only ever sat after it."""
+    untouched by removing tags that only ever sat after it.
+
+    A source tag disappears, so anything under it that was reading its page
+    off it (/Pg is inheritable - see the module docstring) has that page
+    written down before the move, exactly as dissolving an organizational
+    tag does: the target adopts the page if it has none of its own,
+    otherwise each stranded kid carries it, via _rehome_flattened_kid. This
+    used to refuse the join instead, which turned a paragraph split by a
+    page break - the very thing joining is for - into an error, and also
+    fired on same-page tags whenever only some of them carried a /Pg (the
+    rest resolving to no page at all, which is not a *different* page)."""
     doc = documents[doc_id]
     if not node_ids:
         raise ValueError("No tags selected")
@@ -3514,31 +3524,36 @@ def join_tags(doc_id, node_ids):
     if doc["node_kind"].get(target_id) != "element":
         raise ValueError("Can only join into a tag, not content")
 
-    # Bail before mutating anything if moving a bare MCID leaf (whose page
-    # is inherited from its containing element - see the module docstring)
-    # out of a source tag into a target on a different page would silently
-    # mislabel which page it points at - same restriction reorder_node()/
-    # reorder_many() apply to a plain move.
-    target_page = doc["node_pages"].get(target_id)
-    for src_id in source_ids:
-        for child_id in _direct_child_ids(doc, src_id):
-            if doc["node_kind"].get(child_id) == "content-int" and doc["node_pages"].get(child_id) != target_page:
-                raise ValueError("Can't join: marked content would move to a tag on a different page")
-
     _push_undo_snapshot(doc)
     target_obj = doc["elements"][target_id]
+    target_page = doc["node_pages"].get(target_id)
 
     for src_id in source_ids:
         src_obj = doc["elements"][src_id]
+        # The page the source's own /Pg-less kids were resolving against.
+        # Emptying the source removes it from the tree, so whatever it was
+        # saying about their page has to survive the move - see
+        # _rehome_flattened_kid, which is the same problem dissolving an
+        # organizational tag poses, and the same two ways out.
+        src_page = doc["node_pages"].get(src_id)
         moved = _iter_kids(src_obj)
         if "/K" in src_obj:
             del src_obj["/K"]
 
+        # Cheapest path first: a target that resolves to no page at all can
+        # simply adopt the source's, which keeps every bare MCID bare (and
+        # so still editable here). Its own /Pg-less kids pick that page up
+        # too, but only ever from having had none whatsoever.
+        if target_page is None and src_page is not None:
+            target_obj["/Pg"] = doc["pdf"].pages[src_page].obj
+            target_page = src_page
+
         insertion_index = len(_iter_kids(target_obj))
         for child_obj in moved:
+            # Reparents surviving struct elements (/P) as well as rehoming
+            # the page; an /MCR or /OBJR has no /P of its own to update.
+            child_obj = _rehome_flattened_kid(doc, child_obj, target_obj, src_page, target_page)
             _insert_kid(target_obj, child_obj, insertion_index)
-            if isinstance(child_obj, pikepdf.Dictionary):
-                child_obj["/P"] = target_obj
             insertion_index += 1
 
         src_parent_id = doc["parent_map"].get(src_id)

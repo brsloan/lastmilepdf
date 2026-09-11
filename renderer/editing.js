@@ -686,8 +686,8 @@ export function groupSelectionIntoTr() {
 // rebuild (see join_tags()'s docstring for why), so it's computed here
 // up front purely to know what to reselect on success - the backend is the
 // one source of truth for whether the join is actually valid (shared
-// parent, previous-sibling existence, same-page marked content), and a
-// rejected join just surfaces via reportError like any other op here.
+// parent, previous-sibling existence), and a rejected join just surfaces
+// via reportError like any other op here.
 export async function joinSelection() {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   const topLevelIds = ids.filter((id) => !ids.some((other) => other !== id && isDescendant(other, id)));

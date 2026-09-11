@@ -1,6 +1,6 @@
 """Builds test-crosspage-spans.pdf - a tagged two-page PDF whose
 organizational wrappers are the only thing saying which page the content
-under them belongs to.
+under them belongs to, plus paragraph pairs whose /Pg disagrees.
 
 /Pg is inheritable: a bare MCID has no dictionary of its own, so it is
 numbered against whichever ancestor last set /Pg. A Span that carries a /Pg
@@ -32,6 +32,24 @@ content vanishing:
       Div by adoption when the Span dissolves, and the P has to pick it up
       from the Div in turn.
 
+join_tags() has the same problem from the other end - emptying a tag deletes
+whatever its /Pg was telling its kids - so the fixture also carries two pairs
+of paragraphs to join, both of which the old cross-page *refusal* rejected:
+
+  P (no /Pg, holding a Span that names p1) + P (/Pg=p1, bare MCID)
+      Both paragraphs' content is on page 1; they just disagree about where
+      the /Pg saying so is written. Resolving to no page is not the same as
+      resolving to a *different* one, and joining these has always been safe
+      - the target simply adopts the page. This is the shape a real document
+      hit: three same-page paragraphs that would only join once their Sub
+      tags were flattened away (which hands the page up, exactly as above).
+
+  P (/Pg=p1, bare MCID) + P (/Pg=p2, bare MCID)
+      Genuinely two pages - a paragraph broken across a page break, which is
+      the main reason to join two paragraphs at all. The moved bare MCID has
+      to carry its page as an /MCR or it lands on MCID 4 of page 1, which is
+      real text belonging to somebody else.
+
     python scripts/make-crosspage-fixture.py
 """
 
@@ -47,12 +65,16 @@ PAGE_ONE = [
     (0, "Page one, owned by the paragraph that swallows a page-two Span."),
     (1, "Page one, in a paragraph that nothing is nested inside."),
     (2, "1."),
+    (3, "Page one, in a Span inside a paragraph that names no page."),
+    (4, "Page one, in a paragraph that names the page itself."),
+    (5, "Page one, the first half of a paragraph broken by the page break."),
 ]
 PAGE_TWO = [
     (0, "Page two, in a Span the page-one paragraph wraps."),
     (1, "Page two, in a paragraph with no page of its own."),
     (2, "Page two, the body of a list item whose label is on page one."),
     (3, "Page two, under a Div that wraps a Span."),
+    (4, "Page two, the second half of a paragraph broken by the page break."),
 ]
 
 
@@ -126,17 +148,32 @@ def build():
     wrapping_div = elem("Div", K=pikepdf.Array([buried_span]))
     buried_p = elem("P", K=pikepdf.Array([wrapping_div]))
 
+    # Two paragraphs to join, both on page one - one saying so through a Sub,
+    # the other on its own /Pg. Nothing here resolves to the wrong page; the
+    # pair exists so that joining them can't be mistaken for a page change.
+    spanned_sub = elem("Sub", Pg=p1, K=3)
+    pageless_p = elem("P", K=pikepdf.Array([spanned_sub]))
+    paged_p = elem("P", Pg=p1, K=4)
+
+    # Two paragraphs to join that really are on different pages: one half of
+    # a passage on each side of the page break.
+    first_half_p = elem("P", Pg=p1, K=5)
+    second_half_p = elem("P", Pg=p2, K=4)
+
     struct_root = pdf.make_indirect(pikepdf.Dictionary({
         "/Type": pikepdf.Name("/StructTreeRoot"),
     }))
     document = elem("Document", K=pikepdf.Array([
         straddling_p, plain_p, the_list, buried_p,
+        pageless_p, paged_p, first_half_p, second_half_p,
     ]))
     document["/P"] = struct_root
     struct_root["/K"] = pikepdf.Array([document])
 
     for parent, kids in (
-        (document, [straddling_p, plain_p, the_list, buried_p]),
+        (document, [straddling_p, plain_p, the_list, buried_p,
+                    pageless_p, paged_p, first_half_p, second_half_p]),
+        (pageless_p, [spanned_sub]),
         (straddling_p, [inner_span]),
         (inner_span, [nested_p]),
         (the_list, [list_item]),
@@ -153,8 +190,10 @@ def build():
     # only has to be right for the file as built.
     struct_root["/ParentTree"] = pdf.make_indirect(pikepdf.Dictionary({
         "/Nums": pikepdf.Array([
-            0, pikepdf.Array([straddling_p, plain_p, label]),
-            1, pikepdf.Array([inner_span, nested_p, body_span, buried_span]),
+            0, pikepdf.Array([straddling_p, plain_p, label,
+                              spanned_sub, paged_p, first_half_p]),
+            1, pikepdf.Array([inner_span, nested_p, body_span, buried_span,
+                              second_half_p]),
         ]),
     }))
     struct_root["/ParentTreeNextKey"] = 2

@@ -10,6 +10,12 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Fixed
+- Join no longer refuses tags that sit on the same page but disagree about
+  where their `/Pg` is written - the case that blocked joining paragraphs
+  holding `Sub` tags. Joining across a page break works too: the moved
+  content now carries its own page instead of being rejected.
+
 ## [0.4.3] - 2026-09-11
 
 ### Changed
