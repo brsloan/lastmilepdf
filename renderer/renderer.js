@@ -962,6 +962,48 @@ el.btnFixActualText.addEventListener('click', async () => {
   }
 });
 
+// Writes a Figure's or Formula's Alt text from a picture of the tag itself -
+// the same crop machinery Fix with AI uses (see page-crop.js), except that
+// here the image is the entire input rather than a check on text the app
+// already has, so there is nothing to fall back to if no crop can be made.
+//
+// Shown only for those two roles (see refreshDetailsForSelection() in
+// details.js), and the role goes with the request because the two want
+// different answers from the same picture - see ALT_TEXT_PROMPTS in
+// main.js.
+//
+// The result is written into the field and committed like any other edit, so
+// it lands in the undo stack - it is a first draft for the user to read and
+// correct, not an answer to be trusted unread, which is why the status line
+// says so.
+el.btnFillAltAi.addEventListener('click', async () => {
+  const nodeId = el.fieldNodeId.value;
+  if (!nodeId) return;
+  try {
+    setStatus('Writing Alt text with AI…');
+    el.btnFillAltAi.disabled = true;
+    const images = await cropNodeImages(nodeId);
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+    if (images.length === 0) {
+      setStatus("Could not make an image of this tag's content to send.");
+      return;
+    }
+    const role = state.nodesById.get(nodeId)?.node.role || '';
+    const alt = await window.api.describeForAltText(images, role);
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+    el.fieldAlt.value = alt;
+    // Same reason as Fix with AI above: the click never focused the field,
+    // so the form's native 'change' event won't fire and the new text would
+    // otherwise sit unsaved.
+    await applyDetailsChange();
+    setStatus('Filled Alt text with AI - read it over before saving.');
+  } catch (err) {
+    reportError('Could not fill Alt text with AI', err);
+  } finally {
+    if (el.fieldNodeId.value === nodeId) el.btnFillAltAi.disabled = false;
+  }
+});
+
 // Not user-dismissable - it just reflects an in-flight request, so Escape
 // (which would otherwise fire 'cancel' then close the native <dialog>) is
 // suppressed; only hideAiBatchProgress() ever closes it.

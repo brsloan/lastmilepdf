@@ -23,6 +23,12 @@ import { clearHighlight, highlightNodeOnPage } from './viewer.js';
 // (see updateActualTextPlaceholder()).
 const DEFAULT_ACTUAL_TEXT_PLACEHOLDER = el.fieldActualText.placeholder;
 
+// The roles whose Alt text can be written from a picture of the tag's own
+// region, and so get the "Fill with AI" button - see the click handler in
+// renderer.js and ALT_TEXT_PROMPTS in main.js, which keys the prompt off the
+// same role names.
+const ALT_TEXT_AI_ROLES = new Set(['Figure', 'Formula']);
+
 // The Actual Text field's label as authored in index.html, and the suffixed
 // form used while the field is only *previewing* content - see
 // updateActualTextLabel().
@@ -151,6 +157,17 @@ export function refreshDetailsForSelection() {
   el.btnPullContent.disabled = multi;
   el.btnFixActualText.disabled = multi;
 
+  // "Fill with AI" writes the alt text from a picture of the tag's own
+  // region (see the handler in renderer.js), which only answers the question
+  // for the two roles whose Alt text describes what is drawn there: a Figure
+  // (what it depicts) and a Formula (the expression read aloud). Every other
+  // tag's Alt text, where it has one at all, stands for something the crop
+  // wouldn't show. Hidden rather than disabled elsewhere: a permanently
+  // greyed-out button on every Paragraph reads as something broken rather
+  // than something inapplicable.
+  el.btnFillAltAi.hidden = multi || !ALT_TEXT_AI_ROLES.has(node.role);
+  el.btnFillAltAi.disabled = false;
+
   el.fieldDocInfoSection.hidden = true;
   el.fieldRoleWrap.hidden = false;
   el.fieldAltWrap.hidden = state.proofreadMode;
@@ -247,6 +264,7 @@ function showRootDetails(nodeId) {
 
   el.btnPullContent.disabled = true;
   el.btnFixActualText.disabled = true;
+  el.btnFillAltAi.hidden = true;
 
   el.fieldDocInfoSection.hidden = false;
   setFieldValueUnlessFocused(el.fieldDocTitle, state.docInfo.title || '', sameNode);
@@ -277,6 +295,8 @@ export function closeDetails() {
   el.fieldLang.disabled = false;
   el.btnPullContent.disabled = false;
   el.btnFixActualText.disabled = false;
+  el.btnFillAltAi.hidden = true;
+  el.btnFillAltAi.disabled = false;
   el.thSection.hidden = true;
   el.fieldScopeWrap.hidden = true;
   el.fieldRoleWrap.hidden = false;

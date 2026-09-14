@@ -564,6 +564,17 @@ const api = {
    */
   fixActualText: (text, images = []) => ipcRenderer.invoke('ai:fix-actual-text', { text, images }),
   /**
+   * Writes alt text for a Figure or Formula from crop(s) of the page region
+   * it covers (see renderer/page-crop.js). The image is the whole input
+   * here, so unlike fixActualText() there is no text-only fallback - an
+   * empty `images` is rejected, as is a provider that won't take images.
+   * @param {PageCrop[]} images
+   * @param {string} role The tag's role - picks between describing a figure
+   *   and reading a formula aloud.
+   * @returns {Promise<string>} The suggested alt text.
+   */
+  describeForAltText: (images, role) => ipcRenderer.invoke('ai:describe-for-alt-text', { images, role }),
+  /**
    * @param {AiBatchEntry[]} items
    * @returns {Promise<AiBatchEntry[]>} One entry per input id, same ids.
    */

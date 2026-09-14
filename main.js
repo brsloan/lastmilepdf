@@ -1732,19 +1732,20 @@ Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hy
 
 When an image of the page region the text was read from is included, it is the authority on what the page says. Use it to correct the text wherever the OCR misread the page, and leave names, numbers, dates, citations and unusual spellings exactly as given unless the image clearly shows otherwise. Transcribe only the text you were given, not anything else visible in the image, and where the image is illegible keep the text as it is.`;
 
-// The single-tag fix sends the tag's text with crops of the page region it
-// came from (see renderer/page-crop.js). Each crop is a base64 PNG straight
-// from a canvas, so the only checks worth making are on shape and count -
-// the renderer already caps how many it makes, and a hand-built payload
-// through the bridge can't do worse than waste the user's own API quota.
-const MAX_FIX_ACTUAL_TEXT_IMAGES = 3;
+// The single-tag fix, and Fill with AI for a Figure's alt text, both send
+// crops of the page region a tag covers (see renderer/page-crop.js). Each
+// crop is a base64 PNG straight from a canvas, so the only checks worth
+// making are on shape and count - the renderer already caps how many it
+// makes, and a hand-built payload through the bridge can't do worse than
+// waste the user's own API quota.
+const MAX_PAGE_CROPS = 3;
 
 /** @returns {import('./types/domain').PageCrop[]} */
 function sanitizePageCrops(images) {
   if (!Array.isArray(images)) return [];
   return images
     .filter((img) => img && img.mediaType === 'image/png' && typeof img.data === 'string' && img.data.length > 0)
-    .slice(0, MAX_FIX_ACTUAL_TEXT_IMAGES)
+    .slice(0, MAX_PAGE_CROPS)
     .map((img) => ({ mediaType: /** @type {const} */ ('image/png'), data: img.data, page: Number(img.page) || 0 }));
 }
 
@@ -1823,6 +1824,26 @@ async function fixActualTextWithCrops(text, crops) {
   }
 }
 
+// Turns a provider SDK failure into the sentence the renderer should put in
+// front of the user - which for an auth failure has to name where the key is
+// set, since nothing else in the app will. Anything that isn't an Anthropic
+// API error (including the custom-provider path's own already-worded errors)
+// comes back untouched, so callers can `throw friendlyProviderError(err)`
+// unconditionally.
+/** @returns {Error} */
+function friendlyProviderError(err) {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return new Error('Rate limited by the Anthropic API - try again in a moment.');
+  }
+  if (err instanceof Anthropic.APIError) {
+    return new Error(`Anthropic API error: ${err.message}`);
+  }
+  return err;
+}
+
 ipcMain.handle('ai:fix-actual-text', async (_event, { text, images }) => {
   if (!text || !text.trim()) {
     throw new Error('There is no text to fix.');
@@ -1830,16 +1851,106 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text, images }) => {
   try {
     return await fixActualTextWithCrops(text, sanitizePageCrops(images));
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
+    throw friendlyProviderError(err);
+  }
+});
+
+// The two tags whose Alt text a picture of the tag itself can actually
+// answer for, and what to ask the model for in each case. A Figure wants a
+// description of what is depicted; a Formula wants the expression read
+// aloud, which is a different job with different failure modes - a model
+// told to "describe" an equation tends to say what kind of equation it is
+// instead of reading it, which is no use to someone who needs to hear the
+// maths. Any other role never gets the button (see
+// refreshDetailsForSelection() in renderer/details.js) and falls back to the
+// Figure wording here.
+const ALT_TEXT_PROMPTS = {
+  Figure: {
+    system: `You write the alternate text (/Alt) for a figure in a tagged PDF - the description a screen reader speaks in place of a figure its reader cannot see.
+
+You will be given an image of the figure, cropped from the page it sits on. Describe what it shows, leading with the content itself rather than with "image of", "figure showing" or the like - the screen reader already announces that it is a figure. Where the figure carries information - a chart, a diagram, a map, a screenshot - give that information rather than describing the appearance, and transcribe any text in the figure that carries meaning exactly as it is written. Write in the language of the text in the figure, or English if it has none.
+
+Keep it to one or two sentences unless the figure genuinely needs more. Describe only what the image shows: do not guess at the identity of people, places or works unless the figure itself names them, do not infer what the surrounding document says about it, and do not comment on the quality of the image. Reply with only the description and nothing else - no preamble, no explanation, no quotation marks.`,
+    // The user turn carried alongside the crop(s). The instructions all live
+    // in the system prompt, but both provider paths still want a text part -
+    // an image with no text at all reads as an incomplete turn to some
+    // OpenAI-compatible endpoints.
+    user: 'Write the alternate text for this figure.',
+  },
+  Formula: {
+    system: `You write the alternate text (/Alt) for a formula in a tagged PDF - what a screen reader speaks in place of an equation its reader cannot see.
+
+You will be given an image of the formula, cropped from the page it sits on. Read the expression out in words, the way someone would say it aloud to a listener who has to reconstruct it: words for the operators and for the structure ("the square root of x squared plus y squared", "the integral from zero to infinity of"), and variables, subscripts, superscripts and symbol names exactly as they are written. Make the grouping unambiguous - say where a fraction, a root or a bracketed group begins and ends, rather than leaving a listener to guess what a run of terms belongs to.
+
+Read only what the image shows. Do not name the formula, say what field it comes from, explain what it means, define its variables, or solve it. Where part of the image is illegible, say so in place of that part rather than guessing at it. Reply with only the reading and nothing else - no preamble, no explanation, no quotation marks.`,
+    user: 'Write the alternate text for this formula.',
+  },
+};
+
+/**
+ * Writes alt text for a tag from crop(s) of the page region it occupies.
+ * Unlike Fix with AI there is no text-only fallback: the image is the entire
+ * input, so a provider that won't take one has nothing to answer from.
+ * @param {import('./types/domain').PageCrop[]} images
+ * @param {string} role The selected tag's role - picks the prompt.
+ * @returns {Promise<string>}
+ */
+async function describeForAltText(images, role) {
+  const { system, user } = ALT_TEXT_PROMPTS[role] || ALT_TEXT_PROMPTS.Figure;
+  const providerId = getAiProvider();
+  if (providerId !== 'anthropic') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig(providerId);
+    return customChatCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      system,
+      prompt: user,
+      jsonMode: false,
+      maxTokens: 1024,
+      images,
+    });
+  }
+
+  const { apiKey, baseUrl, model } = getAnthropicClientConfig();
+  const client = new Anthropic({ apiKey, baseURL: baseUrl });
+  const response = await client.messages.create({
+    model,
+    max_tokens: 1024,
+    output_config: { effort: 'low' },
+    system,
+    // Images ahead of the text, the ordering Anthropic's vision guidance
+    // recommends for "here is a document, now do this with it".
+    messages: [{
+      role: 'user',
+      content: [
+        ...images.map((img) => ({
+          type: /** @type {const} */ ('image'),
+          source: { type: /** @type {const} */ ('base64'), media_type: img.mediaType, data: img.data },
+        })),
+        { type: /** @type {const} */ ('text'), text: user },
+      ],
+    }],
+  });
+  const textBlock = response.content.find((block) => block.type === 'text');
+  if (!textBlock || !textBlock.text.trim()) {
+    throw new Error('The AI did not return any text.');
+  }
+  return textBlock.text.trim();
+}
+
+ipcMain.handle('ai:describe-for-alt-text', async (_event, { images, role }) => {
+  const crops = sanitizePageCrops(images);
+  if (crops.length === 0) {
+    throw new Error("There is no image of this tag's content to send.");
+  }
+  try {
+    return await describeForAltText(crops, role);
+  } catch (err) {
+    if (imageRejected(err)) {
+      throw new Error('The AI provider did not accept the image. Filling Alt text needs a provider and model that can read images - check File > Settings.');
     }
-    if (err instanceof Anthropic.RateLimitError) {
-      throw new Error('Rate limited by the Anthropic API - try again in a moment.');
-    }
-    if (err instanceof Anthropic.APIError) {
-      throw new Error(`Anthropic API error: ${err.message}`);
-    }
-    throw err;
+    throw friendlyProviderError(err);
   }
 });
 
@@ -2026,16 +2137,7 @@ ipcMain.handle('ai:fix-actual-text-batch', async (_event, { items }) => {
       validateBatchResultIds(items, response.parsed_output.items);
       resultItems = response.parsed_output.items;
     } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) {
-        throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');
-      }
-      if (err instanceof Anthropic.RateLimitError) {
-        throw new Error('Rate limited by the Anthropic API - try again in a moment.');
-      }
-      if (err instanceof Anthropic.APIError) {
-        throw new Error(`Anthropic API error: ${err.message}`);
-      }
-      throw err;
+      throw friendlyProviderError(err);
     }
   }
 

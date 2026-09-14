@@ -73,6 +73,7 @@ export const el = {
   fieldRole: asInput('field-role'),
   fieldAlt: asTextarea('field-alt'),
   fieldAltWrap: asElement('field-alt-wrap'),
+  btnFillAltAi: asButton('btn-fill-alt-ai'),
   fieldActualText: asTextarea('field-actual-text'),
   fieldActualTextLabel: asElement('field-actual-text-label'),
   fieldActualTextWrap: asElement('field-actual-text-wrap'),

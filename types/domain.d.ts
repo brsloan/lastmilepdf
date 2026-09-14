@@ -280,8 +280,9 @@ export interface HeadingRef {
  */
 /**
  * A PNG crop of the page region a tag's content occupies, rendered by
- * cropNodeImages() in renderer/page-crop.js and sent with "Fix with AI" so
- * the model can check the OCR text against the scan itself.
+ * cropNodeImages() in renderer/page-crop.js. Sent with "Fix with AI" so the
+ * model can check the OCR text against the scan itself, and with "Fill with
+ * AI" on a Figure, where the crop of the figure is the whole input.
  */
 export interface PageCrop {
   mediaType: 'image/png';

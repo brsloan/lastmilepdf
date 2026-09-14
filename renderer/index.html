@@ -195,10 +195,15 @@
           </label>
         </div>
 
-        <label class="field" id="field-alt-wrap">
-          <span class="field-label">Alt text</span>
+        <div class="field" id="field-alt-wrap">
+          <span class="field-label-row">
+            <label class="field-label" for="field-alt">Alt text</label>
+            <span class="field-label-btns">
+              <button type="button" id="btn-fill-alt-ai" class="field-label-btn" title="Use AI to fill in the alt text from an image of this figure or formula (requires an AI provider API key - see Settings)" hidden>Fill with AI</button>
+            </span>
+          </span>
           <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>
-        </label>
+        </div>
 
         <div class="field field-grow" id="field-actual-text-wrap">
           <span class="field-label-row">
@@ -444,7 +449,7 @@
           <div class="help-item"><dt>Language</dt><dd>An optional language override (e.g. <code>en-US</code>) for just this tag's content. When the document root (<code>/Document</code>) is selected, this instead shows and edits the PDF's overall primary language.</dd></div>
           <div class="help-item"><dt>Scope / Column span / Row span</dt><dd>Shown for TH (table header) cells &mdash; whether the header applies to its Row, Column, or Both, and how many columns/rows the cell spans.</dd></div>
           <div class="help-item"><dt>Title / Author</dt><dd>Shown when the document root is selected &mdash; edits the PDF's document metadata, not a tag.</dd></div>
-          <div class="help-item"><dt>Alt text</dt><dd>The description read aloud for a Figure or Formula tag.</dd></div>
+          <div class="help-item"><dt>Alt text</dt><dd>The description read aloud for a Figure or Formula tag. On either of those, <strong>Fill with AI</strong> sends an image of just that tag's own part of the page to the configured AI provider and writes what comes back into the field (requires an API key &mdash; see File &gt; Settings &gt; API Key&hellip;). A Figure gets a description of what it shows; a Formula gets the expression read out in words, the way it would be spoken aloud. The provider and model have to be able to read images, since the picture is all the AI gets. Treat the result as a first draft: read it against the page and edit it, especially where the figure or formula carries information the alt text has to get right.</dd></div>
           <div class="help-item"><dt>Actual text</dt><dd>Replacement text a screen reader speaks instead of the tag's real content. When the tag has no Actual Text of its own, the field shows that tag's extracted content as a preview and the label reads "Actual text (preview)" &mdash; it's just shown so you can check it for OCR/transcription errors. Clicking into the field allows editing it as Actual Text. <strong>Fix with AI</strong> sends this tag's text to the configured AI provider to correct OCR/transcription errors, together with an image of the part of the page it was read from, so the AI checks the text against the scan rather than guessing from the words alone &mdash; names, numbers and unusual spellings stay as they are unless the image shows otherwise (requires an API key &mdash; see File &gt; Settings &gt; API Key&hellip;). If the provider can't take images, the fix is retried with the text alone and the status bar says so. <strong>Pull Content</strong> re-imports the extracted content into the Actual Text field if you need to start over.</dd></div>
           <div class="help-item"><dt>Table preview</dt><dd>Shown for Table tags &mdash; a quick read-only preview, with a <strong>Table Editor</strong> button that opens the full editor (see below).</dd></div>
         </dl>

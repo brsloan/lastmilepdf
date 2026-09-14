@@ -10,6 +10,16 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Added
+- A **Fill with AI** button beside the Alt text label when a Figure or a
+  Formula is selected. It sends an image of just that tag's own part of the
+  page to the configured AI provider and writes what comes back into the
+  field: a description of what a figure shows, or a formula read out in
+  words the way it would be spoken aloud. The picture is all the AI gets, so
+  the provider and model have to be able to read images - there is no
+  text-only fallback the way there is for Fix with AI. What it writes is a
+  first draft: read it against the page before saving.
+
 ### Changed
 - Fix with AI now sends an image of the part of the page the tag's text was
   read from along with the text, so the AI corrects the OCR against the scan
