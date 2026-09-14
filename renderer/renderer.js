@@ -19,7 +19,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
 import { walkTree } from './tree-index.js';
-import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
+import { applyFreshTree, extendSelectionTo, filterRendersFlatRows, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { deleteCurrentScript, loadScripts, newScript, openScriptsDialog, runActiveScript, saveCurrentScript, selectScriptForEditing, updateRunScriptButtonState } from './scripts.js';
 import { renderVerifyResults } from './verify.js';
 import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
@@ -56,19 +56,27 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // --- tag tree: filtering ---------------------------------------------------
 //
-// "Headings" swaps the nested tree for a flat, document-order list of just
-// the matching tags (any heading level counts as a match, ignoring how deep
-// they're nested) - handy for skimming an outline without wading through
-// containers. Since it's a flat list, drag reordering doesn't apply here:
-// filtered rows are plain, non-draggable, and get no drop handlers, which is
-// what disables moving tags while filtered.
-// "Figures" and "Table" instead keep each matching node's real subtree
-// intact - only the path down to each match is flattened/skipped, not its
-// contents - so alt text, captions, rows/cells, and other nested structure
-// stay browsable with normal collapse/expand (rendered via renderTreeNode,
-// same as the unfiltered tree). A match nested inside another match of the
-// same filter isn't listed again at the top level; it just shows up as part
-// of its parent's subtree.
+// The filters split into two shapes, listed in NESTED_FILTERS /
+// STOP_AT_MATCH_FILTERS in tree-view.js.
+// "Headings", "Flagged", "Alt Missing" and "Empty" swap the nested tree for
+// a flat, document-order list of just the matching tags (for Headings, any
+// level counts, ignoring how deep they're nested) - handy for skimming an
+// outline, or working down a list of tags needing attention, without wading
+// through containers. Since it's a flat list, drag reordering doesn't apply
+// here: filtered rows are plain, non-draggable, and get no drop handlers,
+// which is what disables moving tags while filtered.
+// "Figures", "Lists" and "Table" instead keep each matching node's real
+// subtree intact - only the path down to each match is flattened/skipped,
+// not its contents - so alt text, captions, list items, rows/cells, and
+// other nested structure stay browsable with normal collapse/expand
+// (rendered via renderTreeNode, same as the unfiltered tree). A match
+// nested inside another match of the same filter isn't listed again at the
+// top level; it just shows up as part of its parent's subtree.
+// The three "needs attention" filters are views over what the tree already
+// draws as badges rather than new judgements of their own: "Flagged" lists
+// the tags carrying an AI-fix or AT-change badge, "Alt Missing" the ones
+// carrying a "no alt text" badge, and "Empty" the tags holding no page
+// content at all (which get no badge, having nothing to show one against).
 // Up/down arrow navigation keeps working unchanged, since it just walks
 // whatever `.tree-row.selectable` rows are currently in the DOM.
 
@@ -1769,6 +1777,10 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
+
+  // Every other flat filter (Flagged, Alt Missing, Empty) has no toggles
+  // on screen either, so there's nothing for these keys to act on.
+  if (filterRendersFlatRows()) return;
 
   const entry = state.nodesById.get(state.selectedNodeId);
   if (!entry || entry.node.type !== 'element') return;

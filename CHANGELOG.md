@@ -19,6 +19,16 @@ they summarise each release rather than record every change as it landed.
   the provider and model have to be able to read images - there is no
   text-only fallback the way there is for Fix with AI. What it writes is a
   first draft: read it against the page before saving.
+- Four more filters in the dropdown above the tag tree. **Lists** narrows to
+  L tags (and any LI orphaned from one), keeping each list's items browsable
+  underneath it the way Figures and Tables already do. **Flagged** lists the
+  tags carrying a badge in the tree - an AI fix applied to their Actual Text,
+  or, once Show AT Changes has swept the document, Actual Text that no longer
+  matches the content underneath. **Alt Missing** lists the Figure and Formula
+  tags with no alt text. **Empty** lists tags holding no page content at all,
+  showing only the outermost one where they're nested inside each other. All
+  four are view filters only, like the existing ones - they don't change the
+  document.
 
 ### Changed
 - Fix with AI now sends an image of the part of the page the tag's text was

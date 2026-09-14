@@ -244,12 +244,101 @@ export function renderTree() {
   applyRovingTabIndex(hadFocus);
 }
 
+// Filters whose matches keep their own subtree rendered underneath them
+// (renderTreeNode) instead of collapsing to a single flat row - see the
+// "tag tree: filtering" comment in renderer.js.
+const NESTED_FILTERS = new Set(['figures', 'table', 'lists']);
+
+// Filters that don't go looking for more matches inside a match they've
+// already found: an L inside an LI, a Figure inside a Figure, a Div nested
+// in an empty Div. The outermost one is the one worth listing - for the
+// nested filters because its subtree already shows the rest, and for
+// 'empty' because a tag with nothing in it can only be holding other tags
+// with nothing in them, and listing every one of them buries the container
+// that is actually the thing to delete.
+const STOP_AT_MATCH_FILTERS = new Set(['figures', 'table', 'lists', 'empty']);
+
+// What the tree says when a filter matches nothing. 'No matching tags.' is
+// true but unhelpful for the three filters that can legitimately come up
+// empty on a perfectly good document - and for Flagged it would read as
+// "nothing is wrong" when the likelier answer is that the sweep that
+// produces half of those flags hasn't been run.
+const FILTER_EMPTY_MESSAGES = {
+  flagged: 'No flagged tags. AI fixes appear here as they are applied; Actual Text changes only after Tools > Show AT Changes has swept the document.',
+  'alt-missing': 'No Figure or Formula tags are missing alt text.',
+  empty: 'No empty tags.',
+};
+
+/**
+ * Node ids of tags with nothing in them - recomputed once per filtered
+ * render pass rather than per node, since answering it for one tag means
+ * walking its whole subtree and the tree would otherwise be re-walked from
+ * every level of every branch. Only populated while the 'empty' filter is
+ * on; an empty Set the rest of the time.
+ */
+let emptyNodeIds = new Set();
+
+/**
+ * One post-order pass marking every element whose subtree contains nothing
+ * that puts ink on the page.
+ *
+ * "Nothing" means no marked-content leaf and no object reference anywhere
+ * below it - so a Div of Divs of Divs is empty all the way up, and a Link
+ * holding only its /OBJR annotation is not. The /Layout /BBox exception is
+ * for the tags the Add Figure draw tool makes over a region with no
+ * isolable image object: those carry no /K at all by design (see
+ * figure_from_rect() in tag_worker.py) and point at their region with a
+ * bbox instead, so they're real tags rather than leftovers.
+ */
+function computeEmptyNodeIds() {
+  const ids = new Set();
+  if (!state.tree) return ids;
+  /** @returns {boolean} whether anything in `node`'s subtree, or `node` itself, is content */
+  function walk(node) {
+    if (node.type === 'content' || node.type === 'object-ref') return true;
+    if (node.bbox && node.bbox.length > 0) return true;
+    let filled = false;
+    for (const child of node.children || []) {
+      if (walk(child)) filled = true;
+    }
+    if (!filled && node.type === 'element') ids.add(node.id);
+    return filled;
+  }
+  walk(state.tree);
+  return ids;
+}
+
 function nodeMatchesFilter(node) {
   if (state.filter === 'all') return true;
   if (node.type !== 'element') return false;
+  // The hidden /Document wrapper has no row of its own in the ordinary
+  // tree (see findHiddenDocumentWrapperId()), so it shouldn't gain one by
+  // being filtered to - and being a pure container it's the tag most
+  // likely to turn up under 'empty' on a document with no content tagged
+  // yet, where listing it would just offer up the wrapper itself.
+  if (node.id === state.hiddenDocumentId) return false;
   if (state.filter === 'headings') return categoryForRole(node.role) === 'heading';
   if (state.filter === 'figures') return node.role === 'Figure';
   if (state.filter === 'table') return node.role === 'Table';
+  // LI as well as L, so an item orphaned from its list (a real thing to go
+  // looking for) still shows up. It costs nothing on a well-formed list:
+  // STOP_AT_MATCH_FILTERS means the items inside a matched L are never
+  // tested, they're just part of its subtree.
+  if (state.filter === 'lists') return node.role === 'L' || node.role === 'LI';
+  // Mirrors the "no alt text" badge appendElementChipAndFlag() draws, down
+  // to treating a whitespace-only /Alt as present - the filter and the
+  // badge disagreeing about the same tag would be worse than either rule.
+  if (state.filter === 'alt-missing') return (node.role === 'Figure' || node.role === 'Formula') && !node.alt;
+  // Both kinds of badge the tree can draw on a tag, in one list: an AI fix
+  // already applied to its Actual Text, or Actual Text that no longer
+  // matches the content underneath it. atChangeFlags is emptied when the
+  // toggle goes off, so the showAtChanges check is belt-and-braces - it's
+  // there because the badge does the same, and the two should read alike.
+  if (state.filter === 'flagged') {
+    return state.aiProposals.has(node.id)
+      || (state.showAtChanges && state.atChangeFlags.has(node.id));
+  }
+  if (state.filter === 'empty') return emptyNodeIds.has(node.id);
   return true;
 }
 
@@ -262,14 +351,15 @@ function collectFilteredNodes(node, matches, stopAtMatch) {
 }
 
 function renderFilteredTree(hadFocus) {
-  const nested = state.filter === 'figures' || state.filter === 'table';
+  emptyNodeIds = state.filter === 'empty' ? computeEmptyNodeIds() : new Set();
+  const nested = NESTED_FILTERS.has(state.filter);
   const matches = [];
-  collectFilteredNodes(state.tree, matches, nested);
+  collectFilteredNodes(state.tree, matches, STOP_AT_MATCH_FILTERS.has(state.filter));
 
   if (matches.length === 0) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
-    p.textContent = 'No matching tags.';
+    p.textContent = FILTER_EMPTY_MESSAGES[state.filter] || 'No matching tags.';
     el.tagTreeContent.appendChild(p);
     return;
   }
@@ -281,6 +371,18 @@ function renderFilteredTree(hadFocus) {
   el.tagTreeContent.appendChild(ul);
   markPageBreaks();
   applyRovingTabIndex(hadFocus);
+}
+
+/**
+ * Whether the dropdown filter currently in force renders its matches as
+ * plain flat rows - no toggle, no children, nothing to collapse. The
+ * keyboard handlers that expand/collapse a tag ask before acting: with
+ * flat rows there's nothing on screen for the keystroke to do, and letting
+ * it through would silently rewrite collapse state that only becomes
+ * visible again after the filter is switched off.
+ */
+export function filterRendersFlatRows() {
+  return state.filter !== 'all' && !NESTED_FILTERS.has(state.filter);
 }
 
 function renderFilteredRow(node) {

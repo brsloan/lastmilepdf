@@ -197,7 +197,7 @@ export interface AppState {
   /** Which details-pane tab is showing. */
   activePanel: 'properties' | 'bookmarks';
   /** Which tags the tree shows - see renderFilteredTree(). */
-  filter: 'all' | 'headings' | 'figures' | 'table';
+  filter: 'all' | 'headings' | 'figures' | 'lists' | 'table' | 'alt-missing' | 'empty' | 'flagged';
   /** nodeId -> explicit user toggle; absence means the role-based default. */
   collapseOverrides: Map<string, boolean>;
   /** The stored Appearance preference, which is why 'auto' is in here. The

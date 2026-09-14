@@ -109,7 +109,7 @@ export const state = {
   tableEditorSelectedRowId: null, // TR node id, set only when tableEditorSelectionKind === 'row'
   tableEditorSelectedColIndex: null, // logical column index, set only when tableEditorSelectionKind === 'column'
   collapseOverrides: new Map(), // nodeId -> boolean, explicit user toggles (absence = use the role-based default)
-  filter: 'all',                // 'all' | 'headings' | 'figures' | 'table' - see renderFilteredTree()
+  filter: 'all',                // 'all' | 'headings' | 'figures' | 'lists' | 'table' | 'alt-missing' | 'empty' | 'flagged' - see renderFilteredTree()
   walking: false,               // true while the Walk button's auto-advance is running
   walkTimerId: null,
   walkSpeed: loadWalkSpeed(),   // tags per second; persisted across sessions, see loadWalkSpeed()/saveWalkSpeed()
