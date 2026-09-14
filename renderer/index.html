@@ -200,9 +200,9 @@
           <textarea id="field-alt" rows="2" placeholder="Describes a figure/formula for screen readers"></textarea>
         </label>
 
-        <label class="field field-grow" id="field-actual-text-wrap">
+        <div class="field field-grow" id="field-actual-text-wrap">
           <span class="field-label-row">
-            <span class="field-label" id="field-actual-text-label">Actual text</span>
+            <label class="field-label" id="field-actual-text-label" for="field-actual-text">Actual text</label>
             <span class="field-label-btns">
               <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
               <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text (requires an AI provider API key - see Settings)">Fix with AI</button>
@@ -216,7 +216,7 @@
             <span id="actual-text-review-label" class="actual-text-review-label">AI fix applied &ndash; changes highlighted</span>
             <button type="button" id="btn-revert-ai-fix" class="btn btn-ghost" title="Discard the AI fix and restore this tag's Actual Text from its content">Revert</button>
           </div>
-        </label>
+        </div>
 
         <div class="field field-grow" id="field-table-preview" hidden>
           <span class="field-label-row">
