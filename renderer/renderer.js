@@ -13,6 +13,7 @@ import {
 } from './rect-select.js';
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
+import { cropNodeImages } from './page-crop.js';
 import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
@@ -912,6 +913,12 @@ el.btnPullContent.addEventListener('click', async () => {
 // the field in place. Opt-in per click rather than run automatically on
 // every pull - an accessibility-critical field is worse off silently
 // "fixed" wrong than left as raw OCR output the user can still review.
+//
+// The text goes with a crop of the page region it was read from (see
+// page-crop.js for why), so the model checks the OCR against the scan
+// rather than guessing from the text alone. The crop is best-effort: if it
+// can't be made, or the provider won't take images, the fix runs text-only
+// as it always did, and the status line says which happened.
 el.btnFixActualText.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
@@ -923,9 +930,16 @@ el.btnFixActualText.addEventListener('click', async () => {
   try {
     setStatus('Fixing Actual Text with AI…');
     el.btnFixActualText.disabled = true;
-    const fixed = await window.api.fixActualText(text);
+    let images = [];
+    try {
+      images = await cropNodeImages(nodeId);
+    } catch (err) {
+      console.error('Could not crop the page for Fix with AI; sending the text alone:', err);
+    }
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
-    el.fieldActualText.value = fixed;
+    const result = await window.api.fixActualText(text, images);
+    if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+    el.fieldActualText.value = result.text;
     updateActualTextLabel();
     // Commit explicitly rather than relying on the form's native 'change'
     // event (el.detailsForm's 'change' listener, see applyDetailsChange()
@@ -934,7 +948,13 @@ el.btnFixActualText.addEventListener('click', async () => {
     // focused the field, so it would otherwise sit there unsaved until the
     // user happened to edit it further.
     await applyDetailsChange();
-    setStatus('Fixed Actual Text with AI.');
+    if (result.imageUsed) {
+      setStatus('Fixed Actual Text with AI, checked against the page image.');
+    } else if (images.length > 0) {
+      setStatus('Fixed Actual Text with AI from the text alone - the provider did not accept the page image.');
+    } else {
+      setStatus('Fixed Actual Text with AI from the text alone - no page image could be made for this tag.');
+    }
   } catch (err) {
     reportError('Could not fix Actual Text with AI', err);
   } finally {

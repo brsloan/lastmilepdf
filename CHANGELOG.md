@@ -10,6 +10,14 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Changed
+- Fix with AI now sends an image of the part of the page the tag's text was
+  read from along with the text, so the AI corrects the OCR against the scan
+  instead of guessing from the words alone. Names, numbers, dates and unusual
+  spellings are left as they are unless the image clearly shows otherwise. A
+  provider that can't accept images gets the text alone, as before, and the
+  status bar says which happened. Fix All Actual Text (AI) is unchanged.
+
 ## [0.5.0] - 2026-09-14
 
 ### Added

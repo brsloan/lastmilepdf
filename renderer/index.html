@@ -204,7 +204,7 @@
           <span class="field-label-row">
             <label class="field-label" id="field-actual-text-label" for="field-actual-text">Actual text</label>
             <span class="field-label-btns">
-              <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text (requires an AI provider API key - see Settings)">Fix with AI</button>
+              <button type="button" id="btn-fix-actual-text" class="field-label-btn" title="Use AI to fix OCR/transcription errors in this text, checked against an image of the page (requires an AI provider API key - see Settings)">Fix with AI</button>
               <button type="button" id="btn-pull-content" class="field-label-btn" title="Copy this tag's content text into Actual Text">Pull Content</button>
             </span>
           </span>
@@ -445,7 +445,7 @@
           <div class="help-item"><dt>Scope / Column span / Row span</dt><dd>Shown for TH (table header) cells &mdash; whether the header applies to its Row, Column, or Both, and how many columns/rows the cell spans.</dd></div>
           <div class="help-item"><dt>Title / Author</dt><dd>Shown when the document root is selected &mdash; edits the PDF's document metadata, not a tag.</dd></div>
           <div class="help-item"><dt>Alt text</dt><dd>The description read aloud for a Figure or Formula tag.</dd></div>
-          <div class="help-item"><dt>Actual text</dt><dd>Replacement text a screen reader speaks instead of the tag's real content. When the tag has no Actual Text of its own, the field shows that tag's extracted content as a preview and the label reads "Actual text (preview)" &mdash; it's just shown so you can check it for OCR/transcription errors. Clicking into the field allows editing it as Actual Text. <strong>Fix with AI</strong> sends just this tag's text to the configured AI provider to correct OCR/transcription errors (requires an API key &mdash; see File &gt; Settings &gt; API Key&hellip;). <strong>Pull Content</strong> re-imports the extracted content into the Actual Text field if you need to start over.</dd></div>
+          <div class="help-item"><dt>Actual text</dt><dd>Replacement text a screen reader speaks instead of the tag's real content. When the tag has no Actual Text of its own, the field shows that tag's extracted content as a preview and the label reads "Actual text (preview)" &mdash; it's just shown so you can check it for OCR/transcription errors. Clicking into the field allows editing it as Actual Text. <strong>Fix with AI</strong> sends this tag's text to the configured AI provider to correct OCR/transcription errors, together with an image of the part of the page it was read from, so the AI checks the text against the scan rather than guessing from the words alone &mdash; names, numbers and unusual spellings stay as they are unless the image shows otherwise (requires an API key &mdash; see File &gt; Settings &gt; API Key&hellip;). If the provider can't take images, the fix is retried with the text alone and the status bar says so. <strong>Pull Content</strong> re-imports the extracted content into the Actual Text field if you need to start over.</dd></div>
           <div class="help-item"><dt>Table preview</dt><dd>Shown for Table tags &mdash; a quick read-only preview, with a <strong>Table Editor</strong> button that opens the full editor (see below).</dd></div>
         </dl>
       </section>

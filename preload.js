@@ -26,6 +26,8 @@ const { contextBridge, ipcRenderer } = require('electron');
  * @typedef {import('./types/domain').OpenResult} OpenResult
  * @typedef {import('./types/domain').HeadingRef} HeadingRef
  * @typedef {import('./types/domain').AiBatchEntry} AiBatchEntry
+ * @typedef {import('./types/domain').PageCrop} PageCrop
+ * @typedef {import('./types/domain').FixActualTextResult} FixActualTextResult
  * @typedef {import('./types/domain').AiBatchEstimate} AiBatchEstimate
  * @typedef {import('./types/domain').DiscardChoice} DiscardChoice
  * @typedef {import('./types/domain').LeafTextResult} LeafTextResult
@@ -555,9 +557,12 @@ const api = {
 
   /**
    * @param {string} text
-   * @returns {Promise<string>} The corrected text.
+   * @param {PageCrop[]} [images] Crops of the page region(s) the text was
+   *   read from (see renderer/page-crop.js), for the model to check the OCR
+   *   against. Empty or omitted sends the text alone.
+   * @returns {Promise<FixActualTextResult>}
    */
-  fixActualText: (text) => ipcRenderer.invoke('ai:fix-actual-text', { text }),
+  fixActualText: (text, images = []) => ipcRenderer.invoke('ai:fix-actual-text', { text, images }),
   /**
    * @param {AiBatchEntry[]} items
    * @returns {Promise<AiBatchEntry[]>} One entry per input id, same ids.

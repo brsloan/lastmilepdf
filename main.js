@@ -1593,7 +1593,17 @@ function requireCustomProviderConfig(providerId) {
  * "could not be parsed as JSON" failure than the model just getting the
  * format wrong.
  */
-async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, jsonMode, maxTokens }) {
+async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, jsonMode, maxTokens, images = [] }) {
+  // With images the user turn takes the content-parts form (text part plus
+  // one image_url part per crop, as a data: URL) that vision-capable
+  // OpenAI-compatible endpoints accept; without them it stays the plain
+  // string every endpoint accepts, so text-only callers see no change.
+  const userContent = images.length === 0
+    ? prompt
+    : [
+      { type: 'text', text: prompt },
+      ...images.map((img) => ({ type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.data}` } })),
+    ];
   let response;
   try {
     response = await fetch(baseUrl, {
@@ -1610,7 +1620,7 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: prompt },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -1626,7 +1636,15 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
       throw new Error('Rate limited by the custom AI endpoint - try again in a moment.');
     }
     const bodyText = await response.text().catch(() => '');
-    throw new Error(`Custom AI endpoint error (${response.status}): ${bodyText.slice(0, 500) || response.statusText}`);
+    const err = new Error(`Custom AI endpoint error (${response.status}): ${bodyText.slice(0, 500) || response.statusText}`);
+    // A 4xx on a request that carried images is most often the endpoint (or
+    // a text-only model behind it) refusing the content-parts form - see
+    // imageRejected() below. Rate-limit and auth failures were handled
+    // above, so they can't be mistaken for this.
+    if (images.length > 0 && response.status >= 400 && response.status < 500) {
+      Object.assign(err, { imageRejected: true });
+    }
+    throw err;
   }
 
   /** @type {any} */
@@ -1710,17 +1728,49 @@ function isContextLengthError(message) {
 
 const FIX_ACTUAL_TEXT_SYSTEM_PROMPT = `You clean up text pulled from a PDF's content stream for use as the PDF's /ActualText - the text a screen reader speaks instead of the visible content.
 
-Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation, while preserving the original wording, meaning, and language exactly. Do not summarize, translate, rephrase, or add commentary. Reply with only the corrected text and nothing else - no preamble, no explanation, no quotation marks.`;
+Fix OCR/transcription errors, garbled characters, broken ligatures, and stray hyphenation, while preserving the original wording, meaning, and language exactly. Do not summarize, translate, rephrase, or add commentary. Reply with only the corrected text and nothing else - no preamble, no explanation, no quotation marks.
 
-ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
-  if (!text || !text.trim()) {
-    throw new Error('There is no text to fix.');
-  }
+When an image of the page region the text was read from is included, it is the authority on what the page says. Use it to correct the text wherever the OCR misread the page, and leave names, numbers, dates, citations and unusual spellings exactly as given unless the image clearly shows otherwise. Transcribe only the text you were given, not anything else visible in the image, and where the image is illegible keep the text as it is.`;
 
+// The single-tag fix sends the tag's text with crops of the page region it
+// came from (see renderer/page-crop.js). Each crop is a base64 PNG straight
+// from a canvas, so the only checks worth making are on shape and count -
+// the renderer already caps how many it makes, and a hand-built payload
+// through the bridge can't do worse than waste the user's own API quota.
+const MAX_FIX_ACTUAL_TEXT_IMAGES = 3;
+
+/** @returns {import('./types/domain').PageCrop[]} */
+function sanitizePageCrops(images) {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((img) => img && img.mediaType === 'image/png' && typeof img.data === 'string' && img.data.length > 0)
+    .slice(0, MAX_FIX_ACTUAL_TEXT_IMAGES)
+    .map((img) => ({ mediaType: /** @type {const} */ ('image/png'), data: img.data, page: Number(img.page) || 0 }));
+}
+
+// Whether an error from a request that carried images means "this endpoint
+// or model doesn't take images" rather than anything else - the case where
+// retrying with the text alone is the right move, since that is exactly what
+// Fix with AI did before crops existed and the user configured this
+// provider expecting it to work. An OpenAI-compatible endpoint answers with
+// a 4xx (flagged in customChatCompletion()); a non-vision model behind an
+// Anthropic-style proxy answers with a 400.
+function imageRejected(err) {
+  return err?.imageRejected === true || err instanceof Anthropic.BadRequestError;
+}
+
+/**
+ * One attempt at the fix, with or without crops. Provider errors come out
+ * raw; the handler below translates them.
+ * @param {string} text
+ * @param {import('./types/domain').PageCrop[]} images
+ * @returns {Promise<string>}
+ */
+async function fixActualTextOnce(text, images) {
   const providerId = getAiProvider();
   if (providerId !== 'anthropic') {
     const { apiKey, baseUrl, model } = requireCustomProviderConfig(providerId);
-    const content = await customChatCompletion({
+    return customChatCompletion({
       apiKey,
       baseUrl,
       model,
@@ -1728,25 +1778,57 @@ ipcMain.handle('ai:fix-actual-text', async (_event, { text }) => {
       prompt: text,
       jsonMode: false,
       maxTokens: 4096,
+      images,
     });
-    return content;
   }
 
   const { apiKey, baseUrl, model } = getAnthropicClientConfig();
   const client = new Anthropic({ apiKey, baseURL: baseUrl });
+  // Images go ahead of the text, which is the ordering Anthropic's vision
+  // guidance recommends for "here is a document, now do this with it".
+  /** @type {import('@anthropic-ai/sdk').Anthropic.MessageParam['content']} */
+  const content = images.length === 0
+    ? text
+    : [
+      ...images.map((img) => ({
+        type: /** @type {const} */ ('image'),
+        source: { type: /** @type {const} */ ('base64'), media_type: img.mediaType, data: img.data },
+      })),
+      { type: /** @type {const} */ ('text'), text },
+    ];
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    output_config: { effort: 'low' },
+    system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content }],
+  });
+  const textBlock = response.content.find((block) => block.type === 'text');
+  if (!textBlock || !textBlock.text.trim()) {
+    throw new Error('The AI did not return any text.');
+  }
+  return textBlock.text.trim();
+}
+
+/** @returns {Promise<import('./types/domain').FixActualTextResult>} */
+async function fixActualTextWithCrops(text, crops) {
   try {
-    const response = await client.messages.create({
-      model,
-      max_tokens: 4096,
-      output_config: { effort: 'low' },
-      system: FIX_ACTUAL_TEXT_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: text }],
-    });
-    const textBlock = response.content.find((block) => block.type === 'text');
-    if (!textBlock || !textBlock.text.trim()) {
-      throw new Error('The AI did not return any text.');
-    }
-    return textBlock.text.trim();
+    const fixed = await fixActualTextOnce(text, crops);
+    return { text: fixed, imageUsed: crops.length > 0 };
+  } catch (err) {
+    if (crops.length === 0 || !imageRejected(err)) throw err;
+    console.error('[ai] provider rejected the page image; retrying Fix with AI with the text alone:', err.message);
+    const fixed = await fixActualTextOnce(text, []);
+    return { text: fixed, imageUsed: false };
+  }
+}
+
+ipcMain.handle('ai:fix-actual-text', async (_event, { text, images }) => {
+  if (!text || !text.trim()) {
+    throw new Error('There is no text to fix.');
+  }
+  try {
+    return await fixActualTextWithCrops(text, sanitizePageCrops(images));
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
       throw new Error('That Anthropic API key was rejected. Check it via File > Settings > API Key…');

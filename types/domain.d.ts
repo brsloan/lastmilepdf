@@ -278,6 +278,31 @@ export interface HeadingRef {
  * request and comes back as the result - `id` is the tag id, `text` is the
  * current text on the way in and the corrected text on the way back.
  */
+/**
+ * A PNG crop of the page region a tag's content occupies, rendered by
+ * cropNodeImages() in renderer/page-crop.js and sent with "Fix with AI" so
+ * the model can check the OCR text against the scan itself.
+ */
+export interface PageCrop {
+  mediaType: 'image/png';
+  /** Base64 PNG bytes, without any data: URL prefix. */
+  data: string;
+  /** 1-based page number the crop was taken from. */
+  page: number;
+}
+
+/** Result of window.api.fixActualText(). */
+export interface FixActualTextResult {
+  /** The corrected text. */
+  text: string;
+  /**
+   * Whether the reply was produced with the page crop(s) in front of the
+   * model. False when none were sent, or when the provider rejected them and
+   * the request was retried with the text alone.
+   */
+  imageUsed: boolean;
+}
+
 export interface AiBatchEntry {
   id: string;
   text: string;

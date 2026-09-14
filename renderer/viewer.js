@@ -12,27 +12,10 @@
 
 import { pdfjsLib } from './pdfjs.js';
 import { el } from './dom.js';
-import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport, pullContentTextWithRuns } from './page-content.js';
+import { bboxRectInViewport, clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport, pullContentTextWithRuns } from './page-content.js';
 import { discardRectSelectIfPageChanged } from './rect-select.js';
 import { PAGE_SCALE, state } from './state.js';
 import { base64ToUint8Array, categoryForRole, diffOldTextChanges, extractMcidFromItemId, pointInRect, unionRects, wordDiffIsAffordable } from './util.js';
-
-// Same corners-through-viewport-transform approach as itemRectInViewport()
-// above, for a plain page-space [x0, y0, x1, y1] rect (a tag's /Layout
-// /BBox) rather than a text item's glyph box.
-function bboxRectInViewport(bbox, viewport) {
-  const [x0, y0, x1, y1] = bbox;
-  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-    .map((p) => pdfjsLib.Util.applyTransform(p, viewport.transform));
-  const xs = corners.map((c) => c[0]);
-  const ys = corners.map((c) => c[1]);
-  return {
-    x: Math.min(...xs),
-    y: Math.min(...ys),
-    width: Math.max(...xs) - Math.min(...xs),
-    height: Math.max(...ys) - Math.min(...ys),
-  };
-}
 
 export function computeHighlightRects(textContent, viewport, mcidSet) {
   const rects = [];
