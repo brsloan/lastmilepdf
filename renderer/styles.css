@@ -143,6 +143,15 @@
      the light grounds the same expression came out at 1.02:1 against the
      panel and the yellow cue vanished. Stated per theme instead. */
   --ai-highlight-tint: #434237;
+  /* The Actual Text caret while a diff is showing. It has to be legible on
+     two grounds at once - the field's own --panel-alt, and the pale yellow
+     of a <mark> it can sit inside - and the two pull in opposite
+     directions on a dark theme, where --text would vanish on the mark and
+     --ai-highlight-ink would vanish off it. A caret is a meaningful
+     graphic (1.4.11, 3:1), and the band of luminances that clears 3:1
+     against BOTH is only about 0.005 wide, so this value is close to the
+     only one that works - re-run test:contrast before nudging it. */
+  --caret-review: #73777f;
 
   --pass-text: #7fd9a8;
   --fail-text: #e8848c;
@@ -214,6 +223,8 @@
   --ai-highlight-border: #4a3800;
   --ai-highlight-text: #4a3800;
   --ai-highlight-tint: #efe3a0;
+  /* No conflict on a light theme: black clears both grounds handily. */
+  --caret-review: #000000;
 
   --pass-text: #005230;
   --fail-text: #8a0016;
@@ -1109,19 +1120,27 @@ body.proofread-mode .tree-pane {
 }
 
 /* --- Actual Text inline AI-diff highlight ---
-   #field-actual-text-highlight sits ON TOP of the textarea (z-index below,
-   since absolutely-positioned siblings otherwise stack in DOM order - the
-   textarea comes second in the HTML, so without this it painted over the
-   highlight and hid it entirely) and renders the exact same text, with
-   changed words wrapped in <mark>. It has a transparent background and
-   pointer-events: none, so the textarea's own background/border still show
-   through underneath it and clicks/typing still reach the textarea. The
-   textarea's own text is made transparent in turn (only while reviewing a
-   proposal - see .actual-text-reviewing) so what the user sees is entirely
-   the highlighted copy on top, while typing/selection/caret keep working
-   natively since the textarea is still the real, focused, editable element.
-   Both layers fill `.actual-text-box` edge to edge with identical box
-   metrics so the two texts line up exactly. */
+   #field-actual-text-highlight sits BEHIND the textarea and renders the
+   exact same text, with changed words wrapped in <mark>. The textarea's
+   own text is made transparent in turn (only while reviewing a proposal -
+   see .actual-text-reviewing) so what the user reads is entirely the
+   highlighted copy showing through from underneath, while typing,
+   selection and the caret keep working natively since the textarea is
+   still the real, focused, editable element. Both layers fill
+   `.actual-text-box` edge to edge with identical box metrics so the two
+   texts line up exactly.
+
+   The highlight used to sit on top instead, which was simpler - the
+   textarea could keep its own background - but a <mark>'s fill is opaque,
+   so it painted over the native caret and the caret disappeared for
+   exactly as long as it sat inside a highlighted word. Nothing in CSS
+   lifts a caret above a later-painted layer, so the layers are the other
+   way round now: the textarea is on top and carries the caret, the
+   highlight below it carries the background the field used to draw
+   itself, and .actual-text-reviewing turns the textarea transparent so
+   that background (and the marks on it) show through. The highlight keeps
+   pointer-events: none regardless, so clicks land on the textarea rather
+   than on a layer that only exists to be looked at. */
 
 .actual-text-box {
   position: relative;
@@ -1150,12 +1169,23 @@ body.proofread-mode .tree-pane {
   resize: none;
   background: var(--panel-alt);
   color: var(--text);
-  z-index: 1;
+  z-index: 2;
 }
 
+/* Transparent all the way down to the highlight layer, except the caret -
+   see --caret-review for why that one cannot just be --text. */
 .actual-text-box textarea.actual-text-reviewing {
+  background: transparent;
   color: transparent;
-  caret-color: var(--text);
+  caret-color: var(--caret-review);
+}
+
+/* The selection now paints above the marks rather than below them, so a
+   solid fill would blank out the very diff the user selected text to look
+   at. Translucent enough to read the mark through, opaque enough to still
+   read as a selection. */
+.actual-text-box textarea.actual-text-reviewing::selection {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .actual-text-box textarea::placeholder {
@@ -1165,11 +1195,14 @@ body.proofread-mode .tree-pane {
 .actual-text-highlight {
   pointer-events: none;
   overflow: hidden;
-  background: transparent;
+  /* The field's background lives here while reviewing, since the textarea
+     above has given its own up. visibility: hidden takes this with it the
+     rest of the time, when the opaque textarea is the one painting it. */
+  background: var(--panel-alt);
   border-color: transparent;
   color: var(--text);
   visibility: hidden;
-  z-index: 2;
+  z-index: 1;
 }
 
 .actual-text-highlight.visible {

@@ -186,6 +186,14 @@ for (const { name, tokens: t, text: min } of THEMES) {
   require_(name, 'warn-text on fill', ratio(t['--warn-text'], t['--warn-bg']), min);
   require_(name, 'ai mark ink on fill', ratio(t['--ai-highlight-ink'], t['--ai-highlight-bg']), min);
 
+  // The Actual Text caret while a diff is showing. It crosses two grounds -
+  // the field itself and any <mark> it moves into - and has to stay visible
+  // on both, which is what made --text unusable there: a caret nobody can
+  // see inside a highlighted word is the bug this token exists to fix.
+  require_(name, 'review caret', Math.min(ratio(t['--caret-review'], t['--panel-alt']),
+    ratio(t['--caret-review'], t['--ai-highlight-bg'])),
+    3, 'caret on the field and on a mark, 1.4.11');
+
   // The trough the PDF page floats in has to stay distinct from the page, or
   // a white page on a white ground loses its edge entirely.
   require_(name, 'page edge', ratio(t['--canvas-ground'], dark['--page-ground']), 1.5,
