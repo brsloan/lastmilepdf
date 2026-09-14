@@ -1043,6 +1043,188 @@ async function editTests(fixture) {
     });
   }));
 
+  // tag_rect_table() - the same cuts, laid out as a grid of cells rather
+  // than gathered into one tag. table-grid.js is what sends these; the
+  // shapes here are the ones its grid can produce: a plain grid, a merged
+  // cell across columns, one down rows, a cell left empty, and a cell fed
+  // two separate runs of the same leaf.
+  async function cellTexts(doc, cell) {
+    const texts = [];
+    for (const child of cell.children) {
+      texts.push((await worker.call('get_leaf_text', { docId: doc.docId, nodeId: child.id })).text);
+    }
+    return texts;
+  }
+
+  await test('a 2x2 grid over one leaf builds a table with one run per cell', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough for four cells');
+    const { leaf, text, offsets } = target;
+    const quarter = Math.floor(offsets.length / 4);
+    const bounds = [0, offsets[quarter], offsets[quarter * 2], offsets[quarter * 3], null];
+    const run = (i) => ({ nodeId: leaf.id, startIndex: bounds[i], endIndex: bounds[i + 1] });
+    const cell = (role, selections, spans = {}) => ({ role, colSpan: 1, rowSpan: 1, selections, ...spans });
+
+    const result = await worker.call('tag_rect_table', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      rows: [
+        [cell('TH', [run(0)]), cell('TH', [run(1)])],
+        [cell('TD', [run(2)]), cell('TD', [run(3)])],
+      ],
+    });
+
+    assertEqual(result.cutCount, 3, 'four runs of one leaf need three cuts');
+    assert(result.pdfBase64, 'a cut must hand back fresh page bytes for the preview');
+    assertEqual(result.rowCount, 2, 'rowCount should report the grid');
+    assertEqual(result.cellCount, 4, 'cellCount should report the grid');
+
+    const table = findById(result.tree, result.newNodeId);
+    assertEqual(table.role, 'Table', 'the new tag should be a Table');
+    const rows = collectTableRows(table);
+    assertEqual(rows.length, 2, 'the table should have two rows');
+    const cells = rows.map(collectRowCells);
+    assertEqual(cells[0].map((c) => c.role).join(','), 'TH,TH', 'the first row should be header cells');
+    assertEqual(cells[1].map((c) => c.role).join(','), 'TD,TD', 'the second row should be data cells');
+    for (const th of cells[0]) assertEqual(th.scope, 'Column', 'a header row cell should get Column scope');
+
+    const expected = [text.slice(bounds[0], bounds[1]), text.slice(bounds[1], bounds[2]),
+      text.slice(bounds[2], bounds[3]), text.slice(bounds[3])];
+    const actual = [];
+    for (const row of cells) {
+      for (const c of row) {
+        const texts = await cellTexts(doc, c);
+        assertEqual(texts.length, 1, 'each cell should hold exactly its one run');
+        actual.push(texts[0]);
+      }
+    }
+    assertEqual(actual.join('|'), expected.join('|'), 'the cells do not hold the runs asked for');
+
+    await saveAndReopen(doc.docId, 'rect-table', (reopened) => {
+      const saved = byRole(reopened.tree, 'Table')
+        .find((t) => collectTableRows(t).length === 2
+          && collectRowCells(collectTableRows(t)[0]).every((c) => c.role === 'TH' && c.scope === 'Column'));
+      assert(saved, 'the table, its header row and its scopes did not survive save');
+    });
+  }));
+
+  await test('a merged cell spans columns and an empty cell is still made', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc, 40);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, text, offsets } = target;
+    const half = offsets[Math.floor(offsets.length / 2)];
+
+    const result = await worker.call('tag_rect_table', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      rows: [
+        [{ role: 'TH', colSpan: 2, rowSpan: 1, selections: [{ nodeId: leaf.id, startIndex: 0, endIndex: half }] }],
+        [{ role: 'TD', colSpan: 1, rowSpan: 1, selections: [{ nodeId: leaf.id, startIndex: half, endIndex: null }] },
+          { role: 'TD', colSpan: 1, rowSpan: 1, selections: [] }],
+      ],
+    });
+
+    assertEqual(result.cutCount, 1, 'two runs of one leaf need one cut');
+    const rows = collectTableRows(findById(result.tree, result.newNodeId));
+    assertEqual(rows.length, 2, 'the table should have two rows');
+    const [header] = collectRowCells(rows[0]);
+    assertEqual(collectRowCells(rows[0]).length, 1, 'the header row holds one spanning cell');
+    assertEqual(header.colSpan, 2, 'the header cell should span both columns');
+    assertEqual(header.scope, 'Column', 'the spanning header should still get Column scope');
+    const data = collectRowCells(rows[1]);
+    assertEqual(data.length, 2, 'the data row should keep both cells');
+    assertEqual((await cellTexts(doc, data[0])).join(''), text.slice(half), 'the data cell holds the wrong run');
+    assertEqual(data[1].role, 'TD', 'the empty cell should still be a TD');
+    assertEqual(data[1].children.length, 0, 'the empty cell should hold nothing');
+  }));
+
+  await test('a merged cell spans rows and its row below holds only the rest', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough for three cells');
+    const { leaf, offsets } = target;
+    const third = Math.floor(offsets.length / 3);
+    const bounds = [0, offsets[third], offsets[third * 2], null];
+    const run = (i) => ({ nodeId: leaf.id, startIndex: bounds[i], endIndex: bounds[i + 1] });
+
+    const result = await worker.call('tag_rect_table', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      rows: [
+        [{ role: 'TH', colSpan: 1, rowSpan: 2, selections: [run(0)] },
+          { role: 'TH', colSpan: 1, rowSpan: 1, selections: [run(1)] }],
+        [{ role: 'TD', colSpan: 1, rowSpan: 1, selections: [run(2)] }],
+      ],
+    });
+
+    const rows = collectTableRows(findById(result.tree, result.newNodeId));
+    assertEqual(rows.length, 2, 'the table should have two rows');
+    const top = collectRowCells(rows[0]);
+    assertEqual(top.length, 2, 'the top row holds both cells');
+    assertEqual(top[0].rowSpan, 2, 'the first cell should span down');
+    assertEqual(collectRowCells(rows[1]).length, 1, 'the second row holds only the cell that starts in it');
+  }));
+
+  await test('a cell may take several runs of one leaf', () => withDoc(fixture, async (doc) => {
+    // A wrapped cell in a scan painted line by line, with another cell's
+    // text painted between its lines: two pieces of one leaf, one TD.
+    const target = await pickCuttableLeaf(doc, 60);
+    if (!target) skip('fixture has no measurable leaf long enough for four runs');
+    const { leaf, text, offsets } = target;
+    const quarter = Math.floor(offsets.length / 4);
+    const bounds = [0, offsets[quarter], offsets[quarter * 2], offsets[quarter * 3], null];
+    const run = (i) => ({ nodeId: leaf.id, startIndex: bounds[i], endIndex: bounds[i + 1] });
+
+    const result = await worker.call('tag_rect_table', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      rows: [
+        [{ role: 'TH', colSpan: 1, rowSpan: 1, selections: [run(0)] }],
+        [{ role: 'TD', colSpan: 1, rowSpan: 1, selections: [run(1), run(3)] }],
+        [{ role: 'TD', colSpan: 1, rowSpan: 1, selections: [run(2)] }],
+      ],
+    });
+
+    const rows = collectTableRows(findById(result.tree, result.newNodeId));
+    assertEqual(rows.length, 3, 'the table should have three rows');
+    const shared = collectRowCells(rows[1])[0];
+    const texts = await cellTexts(doc, shared);
+    assertEqual(texts.length, 2, 'the cell should hold both of its runs');
+    assertEqual(texts.join('|'), `${text.slice(bounds[1], bounds[2])}|${text.slice(bounds[3])}`,
+      'the shared cell holds the wrong runs');
+    assertEqual((await cellTexts(doc, collectRowCells(rows[2])[0])).join(''), text.slice(bounds[2], bounds[3]),
+      'the cell between them holds the wrong run');
+  }));
+
+  await test('a malformed table grid is refused before anything is cut', () => withDoc(fixture, async (doc) => {
+    const target = await pickCuttableLeaf(doc, 40);
+    if (!target) skip('fixture has no measurable leaf long enough to cut');
+    const { leaf, offsets } = target;
+    const before = countNodes(doc.tree);
+    const whole = { nodeId: leaf.id, startIndex: 0, endIndex: null };
+    const part = (a, b) => ({ nodeId: leaf.id, startIndex: offsets[a], endIndex: offsets[b] });
+    const td = (selections, spans = {}) => ({ role: 'TD', colSpan: 1, rowSpan: 1, selections, ...spans });
+
+    const bad = [
+      { label: 'no content at all', pageIndex: leaf.page, rows: [[td([])]] },
+      { label: 'a cell role that is not TH or TD', pageIndex: leaf.page, rows: [[{ role: 'P', colSpan: 1, rowSpan: 1, selections: [whole] }]] },
+      { label: 'ragged rows', pageIndex: leaf.page, rows: [[td([part(0, 2)]), td([part(2, 4)])], [td([part(4, 6)])]] },
+      { label: 'a span past the last row', pageIndex: leaf.page, rows: [[td([whole], { rowSpan: 2 })]] },
+      { label: 'the wrong page', pageIndex: leaf.page + 1, rows: [[td([whole])]] },
+    ];
+    for (const { label, pageIndex, rows } of bad) {
+      let threw = false;
+      try {
+        await worker.call('tag_rect_table', { docId: doc.docId, pageIndex, rows });
+      } catch {
+        threw = true;
+      }
+      assert(threw, `${label} was accepted`);
+    }
+    // Refused up front, so nothing was cut, built, or put on the undo stack.
+    const after = await worker.call('undo', { docId: doc.docId }).catch(() => null);
+    assert(!after || countNodes(after.tree) === before, 'a refused grid left an undo step behind');
+  }));
+
   await test('undoing a cut hands back the page it restores', () => withDoc(fixture, async (doc) => {
     // The renderer keeps its own pdf.js parse of the page bytes. Most edits
     // only move tags about and leave that parse valid, but a cut rewrites

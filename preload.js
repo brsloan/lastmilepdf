@@ -142,6 +142,17 @@ const api = {
   tagRectContent: (docId, pageIndex, selections, role, useLabel = false) =>
     ipcRenderer.invoke('tags:tag-rect-content', { docId, pageIndex, selections, role, useLabel }),
   /**
+   * Builds a Table from the grid drawn over a rectangle selection: one row
+   * per entry of `rows`, holding the cells that start in it in column
+   * order, each cut to the runs it covers. One undo step.
+   * @param {string} docId
+   * @param {number} pageIndex 0-based
+   * @param {import('./types/domain').TableCellSpec[][]} rows
+   * @returns {Promise<import('./types/domain').TagRectTableResult>}
+   */
+  tagRectTable: (docId, pageIndex, rows) =>
+    ipcRenderer.invoke('tags:tag-rect-table', { docId, pageIndex, rows }),
+  /**
    * @param {string} docId
    * @returns {Promise<import('./types/domain').ScopeTablesResult>}
    */

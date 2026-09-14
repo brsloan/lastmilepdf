@@ -126,6 +126,50 @@ export interface RectSelectHit {
   run: { startIndex: number; endIndex: number } | null;
 }
 
+/** One cell of the Select Content table grid - see table-grid.js. */
+export interface TableGridCell {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  role: 'TH' | 'TD';
+}
+
+/** What one grid cell will receive: the worker's selections, plus what the overlay draws. */
+export interface TableGridCellContent {
+  /** Runs to cut and place in this cell, as tag_rect_table() takes them. */
+  selections: { nodeId: string; startIndex: number; endIndex: number | null }[];
+  /** The text cut to fit this cell, merged per line, drawn solid. */
+  outlines: ViewportRect[];
+  /** Leaves taken whole whose painted extent reaches outside this cell, drawn dashed. */
+  overhangs: ViewportRect[];
+}
+
+/** The Select Content table grid in progress - see table-grid.js. */
+export interface TableGridState {
+  phase: 'columns' | 'rows' | 'cells';
+  /** The dragged rectangle: the table's outer boundary, in viewport space. */
+  box: ViewportRect;
+  /** Interior column dividers (x), ascending. */
+  columns: number[];
+  /** Interior row dividers (y), ascending. */
+  rows: number[];
+  /** Where the divider following the cursor would go; null when the cursor is outside the box. */
+  hover: number | null;
+  drag:
+    | { kind: 'line'; index: number; origin: number; moved: boolean; fresh: boolean }
+    | { kind: 'select'; current: number }
+    | null;
+  /** The cells, once the dividers are settled; null in the divider phases. */
+  cells: TableGridCell[] | null;
+  /** Indices into `cells`. */
+  selected: Set<number>;
+  /** The cell a Shift+click extends from, as an index into `cells`. */
+  anchor: number | null;
+  /** cell index -> what it will hold; null in the divider phases. */
+  contents: Map<number, TableGridCellContent> | null;
+}
+
 export interface AppState {
   // --- the open document ------------------------------------------------
   /** Worker handle for the open document; null when nothing is open. */
@@ -254,6 +298,10 @@ export interface AppState {
   rectSelectIndex: Map<number, string> | null;
   /** 1-based page the selection belongs to; rendering any other page discards it. */
   rectSelectPage: number | null;
+  /** The finished drag, in viewport space - the table grid's outer boundary. */
+  rectSelectBox: ViewportRect | null;
+  /** The table grid in progress over that box, or null - see table-grid.js. */
+  tableGrid: TableGridState | null;
 
   // --- Actual Text review ----------------------------------------------
   /** nodeId -> an AI fix already applied, kept to render the inline diff. */

@@ -73,6 +73,9 @@ Most of the tagging keys work this way, but a few have special roles in Select C
 <kbd>Ctrl/Cmd</kbd>+<kbd>L</kbd>
 : Build a list from text with a **hanging indent** instead of a bullet/number/etc. — an academic reference list, most often, where each entry starts at the margin and its continuation lines are pushed in.
 
+<kbd>T</kbd>
+: Lay a table grid over the selection instead of tagging it outright. The rectangle becomes the table's outer edge. First, click inside it to place **column** dividers (click a divider to remove it, drag one to move it), then press <kbd>Enter</kbd> and place **row** dividers the same way. <kbd>Enter</kbd> again shows the cells with the text each will receive outlined inside it — solid where the text is cut to fit, dashed where a run can't be cut and comes along whole. The top row starts as header cells. Click, drag or <kbd>Shift</kbd>+click to select cells; <kbd>M</kbd> merges the selection into one spanning cell (or splits a merged cell back up); <kbd>H</kbd> switches the selection between header (TH) and data (TD). <kbd>Enter</kbd> builds the table in one undo step, with header scope set the way **Scope Tables** would set it. <kbd>Backspace</kbd> goes back a step; <kbd>Esc</kbd> drops the grid and keeps the selection.
+
 <kbd>Esc</kbd>
 : Drops the pending selection without tagging it; pressing it again leaves rectangle-select mode.
 

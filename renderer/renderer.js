@@ -11,6 +11,7 @@ import {
   MIN_RECT_SELECT_PX, clearRectSelect, normalizedDragBox,
   refreshRectSelectPreview, setRectSelectActive,
 } from './rect-select.js';
+import { handleTableGridKey, handleTableGridMouseDown, handleTableGridMouseMove, handleTableGridMouseUp, startTableGrid } from './table-grid.js';
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { cropNodeImages } from './page-crop.js';
@@ -798,8 +799,10 @@ el.canvas.addEventListener('click', async (e) => {
   // (mousedown and mouseup landed on the same element) - while Add Figure's
   // draw mode is active, that click means "finished drawing", not "select
   // the tag under the cursor", so it's handled entirely by the mouseup
-  // listener below instead.
-  if (!state.pdfDoc || state.figureDrawActive) return;
+  // listener below instead. Likewise while a table grid is up: a click there
+  // places a divider or picks a cell, and jumping the tree to whatever tag
+  // sits under it would only be a distraction.
+  if (!state.pdfDoc || state.figureDrawActive || state.tableGrid) return;
   const rect = el.canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) * (el.canvas.width / rect.width);
   const y = (e.clientY - rect.top) * (el.canvas.height / rect.height);
@@ -1891,9 +1894,10 @@ function findTagShortcutAction(key) {
 // The role each tagging shortcut produces when it's applied to a pending
 // rectangle selection rather than to tags already in the tree. Only the
 // actions that mean "make this content into a tag with role X" are here:
-// list/listItem/table/tr/join restructure tags that already exist, which
-// isn't a thing a fresh rectangle selection can do, so those fall through
-// to their normal behaviour (see the handler below).
+// tr/join restructure tags that already exist, which isn't a thing a fresh
+// rectangle selection can do, so those are answered with a hint instead
+// (see the handler below). table is its own case: it opens the grid tool
+// (table-grid.js) over the selection rather than tagging it outright.
 const RECT_SELECT_ROLES = {
   h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
   paragraph: 'P', listItem: 'LI', list: 'L', td: 'TD', th: 'TH',
@@ -1908,6 +1912,7 @@ window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey && !e.metaKey) return;
   if (e.altKey || e.shiftKey || e.key.toLowerCase() !== 'l') return;
   if (!state.rectSelectPending || state.rectSelectPending.length === 0) return;
+  if (state.tableGrid) return; // the box is spoken for until the grid is done or dropped
 
   const focused = document.activeElement?.tagName;
   if (focused === 'INPUT' || focused === 'TEXTAREA' || focused === 'SELECT') return;
@@ -1934,11 +1939,17 @@ window.addEventListener('keydown', (e) => {
   // in the tree instead, which is about the least helpful thing it could do.
   if (state.rectSelectPending && state.rectSelectPending.length > 0) {
     e.preventDefault();
+    if (action === 'table') {
+      // A table isn't one tag over the selection but a grid of them, and
+      // where the grid lines fall is the user's call - see table-grid.js.
+      if (state.rectSelectBox) startTableGrid(state.rectSelectBox);
+      return;
+    }
     const role = RECT_SELECT_ROLES[action];
     if (role) {
       tagRectSelection(role);
     } else {
-      // table/tr/join all regroup tags that already exist, which isn't
+      // tr/join both regroup tags that already exist, which isn't
       // something a rectangle full of content can be turned into in one step.
       const label = TAG_SHORTCUT_ACTIONS.find((a) => a.id === action)?.label || action;
       setStatus(`"${label}" works on tags in the tree, not on a selection from the page.`
@@ -1986,6 +1997,19 @@ window.addEventListener('keydown', (e) => {
       break;
   }
 });
+
+// While a table grid is up it owns the keyboard: Enter/Backspace step
+// through its phases, Esc drops it, M and H act on cells, and any other
+// letter is swallowed so the tagging shortcuts can't reach the pending
+// rectangle underneath. Capture phase, registered ahead of the Esc handlers
+// further down, so it is asked first.
+window.addEventListener('keydown', (e) => {
+  if (!state.tableGrid) return;
+  if (handleTableGridKey(e)) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+}, true);
 
 // --- accessibility verify --------------------------------------------------
 //
@@ -2165,6 +2189,12 @@ el.canvas.addEventListener('mousedown', (e) => {
 // intercepts before the normal per-tag shortcut behaviour.
 
 el.canvas.addEventListener('mousedown', (e) => {
+  // With a grid up, a press on the page places or picks up a divider, or
+  // selects a cell - never starts a new rectangle.
+  if (state.tableGrid) {
+    handleTableGridMouseDown(e);
+    return;
+  }
   if (!state.rectSelectActive || !state.pdfDoc) return;
   e.preventDefault();
   const p = canvasPointFromEvent(e);
@@ -2191,6 +2221,14 @@ window.addEventListener('mousemove', async (e) => {
   if (!state.rectSelectRect) return;
   state.rectSelectRect.current = canvasPointFromEvent(e);
   await refreshRectSelectPreview();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (state.tableGrid) handleTableGridMouseMove(e);
+});
+
+window.addEventListener('mouseup', () => {
+  if (state.tableGrid) handleTableGridMouseUp();
 });
 
 window.addEventListener('mouseup', async () => {
@@ -2250,6 +2288,7 @@ window.addEventListener('mouseup', async () => {
   }
 
   state.rectSelectPending = hits.map((h) => h.nodeId);
+  state.rectSelectBox = box; // the table grid's outer boundary, should T follow
   const noun = hits.length === 1 ? 'item' : 'items';
   // Two counts worth reporting, because they mean different things to the
   // user: how many leaves will be trimmed to the rectangle (good, and
@@ -2262,7 +2301,8 @@ window.addEventListener('mouseup', async () => {
   if (willOverhang > 0) {
     detail += `, ${willOverhang} that can't be split and will bring the dashed text along`;
   }
-  setStatus(`${hits.length} ${noun} selected${detail} - press a tagging shortcut to tag them.`);
+  const tableKey = (state.tagShortcuts.table || 't').toUpperCase();
+  setStatus(`${hits.length} ${noun} selected${detail} - press a tagging shortcut to tag them, or ${tableKey} to lay out a table.`);
 });
 
 el.btnAddFigure.addEventListener('click', () => {

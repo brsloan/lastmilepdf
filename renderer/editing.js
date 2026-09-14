@@ -407,6 +407,33 @@ export async function tagRectSelection(role) {
 // hanging-indent list - because everything from the call onwards is the
 // same: re-feed pdf.js if a cut moved the bytes under it, adopt the tree,
 // select what was made, and say what happened.
+// The table grid's commit (table-grid.js): the same round trip as
+// commitRectSelection() below, against tag_rect_table() instead. Kept
+// beside it so a worker result is handled in one place - the fresh page
+// bytes, the rebuilt tree, the undo state and the selection all land the
+// same way.
+export async function commitTableGrid(rows) {
+  const pageIndex = state.currentPage - 1;
+  try {
+    const result = await window.api.tagRectTable(state.docId, pageIndex, rows);
+    if (result.pdfBase64) await refreshPdfPreviewBytes(result.pdfBase64);
+    applyFreshTree(result.tree);
+    applyUndoState(result);
+    if (result.newNodeId && state.nodesById.has(result.newNodeId)) selectNode(result.newNodeId);
+    else closeDetails();
+
+    const cut = result.cutCount > 0
+      ? ` Split ${result.cutCount} time${result.cutCount === 1 ? '' : 's'} to fit the cells.`
+      : '';
+    const removed = result.removedTagCount > 0
+      ? ` ${result.removedTagCount} emptied tag${result.removedTagCount === 1 ? '' : 's'} discarded.`
+      : '';
+    setStatus(`Tagged a ${result.rowCount}-row table with ${result.cellCount} cells.${cut}${removed}`);
+  } catch (err) {
+    reportError('Could not tag the table', err);
+  }
+}
+
 async function commitRectSelection(role, selections, headline, useLabel = false) {
   const pageIndex = state.currentPage - 1;
   try {

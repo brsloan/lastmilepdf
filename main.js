@@ -1230,6 +1230,10 @@ ipcMain.handle('tags:tag-rect-content', async (_event, { docId, pageIndex, selec
   return callWorker('tag_rect_content', { docId, pageIndex, selections, role, useLabel });
 });
 
+ipcMain.handle('tags:tag-rect-table', async (_event, { docId, pageIndex, rows }) => {
+  return callWorker('tag_rect_table', { docId, pageIndex, rows });
+});
+
 ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
   return callWorker('scope_tables', { docId });
 });

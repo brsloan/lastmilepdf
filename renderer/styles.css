@@ -705,6 +705,77 @@ body.proofread-mode .tree-pane {
   border: 1.5px dashed var(--overlay-warn);
 }
 
+/* Select Content -> Table (table-grid.js): the grid drawn over a rectangle
+   before it becomes a Table tag. The box, dividers and cells use the same
+   selection colour as the runs they will cut; the divider following the
+   cursor borrows the Add Figure amber so the one not yet placed reads as
+   provisional. Everything sits on the page, so only the overlay tokens
+   contrast-check.js already measures against the page are used, and the
+   washes stay at or below the alphas it verifies. */
+.table-grid-box {
+  position: absolute;
+  border: 1.5px solid var(--overlay-primary);
+  box-shadow: inset 0 0 0 1px var(--overlay-halo);
+  pointer-events: none;
+}
+
+.table-grid-line {
+  position: absolute;
+  pointer-events: none;
+}
+
+.table-grid-line-v {
+  border-left: 2px solid var(--overlay-primary);
+  margin-left: -1px;
+}
+
+.table-grid-line-h {
+  border-top: 2px solid var(--overlay-primary);
+  margin-top: -1px;
+}
+
+.table-grid-line-hover.table-grid-line-v {
+  border-left-color: var(--overlay-draw);
+  border-left-style: dashed;
+}
+
+.table-grid-line-hover.table-grid-line-h {
+  border-top-color: var(--overlay-draw);
+  border-top-style: dashed;
+}
+
+.table-grid-cell {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--overlay-primary);
+  pointer-events: none;
+}
+
+/* Header cells carry a faint amber wash so the header row reads as one
+   at a glance; a selected cell the same wash the selected runs use. */
+.table-grid-cell-th {
+  background: color-mix(in srgb, var(--overlay-wash-draw) 18%, transparent);
+}
+
+.table-grid-cell-selected {
+  background: color-mix(in srgb, var(--overlay-wash-alt) 26%, transparent);
+  border-width: 2px;
+}
+
+/* TH/TD in the cell's corner: halo-on-primary is the same pair the
+   selected-tag outline draws, 6.6:1. */
+.table-grid-cell-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 1px 3px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--overlay-halo);
+  background: var(--overlay-primary);
+}
+
 /* --- tag tree --- */
 
 .tag-tree {

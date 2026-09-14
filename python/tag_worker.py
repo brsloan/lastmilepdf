@@ -663,18 +663,22 @@ _DIVIDED_TAG_KEYS = ("/S", "/Pg", "/Lang")
 
 
 def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label,
-                         label_split=None, li_items=None):
+                         label_split=None, li_items=None, table_rows=None):
     """Fills a freshly built tag's /K with the leaves the rectangle picked.
 
-    Two roles never hold bare leaves. An LI's content is always the
+    Three roles never hold bare leaves. An LI's content is always the
     Lbl/LBody pair, so it goes through the same _set_li_content() the 'I'
-    shortcut uses; and a list holds LI elements, one per run the rectangle
-    covered, rather than the runs themselves."""
+    shortcut uses; a list holds LI elements, one per run the rectangle
+    covered, rather than the runs themselves; and a table holds rows of
+    cells, laid out by the grid the user drew (see _fill_table())."""
     if role == "LI":
         _set_li_content(doc, elem, leaf_ids, use_label, label_split)
         return
     if role == "L" and li_items:
         _fill_list(doc, elem, li_items)
+        return
+    if role == "Table" and table_rows:
+        _fill_table(doc, elem, table_rows)
         return
     for leaf_obj in leaf_objs:
         if isinstance(leaf_obj, pikepdf.Dictionary):
@@ -696,6 +700,49 @@ def _fill_list(doc, list_elem, li_items):
         _set_li_content(doc, li, item["leafIds"], item["useLabel"])
         lis.append(li)
     list_elem["/K"] = pikepdf.Array(lis)
+
+
+def _fill_table(doc, table_elem, table_rows):
+    """Populates a new /Table from the grid the Select Content grid tool
+    drew (table-grid.js): one /TR per row, one /TH or /TD per cell, each
+    holding the leaves already cut to fit it. `table_rows` is row-major,
+    each cell {"role", "colSpan", "rowSpan", "leafIds"}; a cell spanning
+    down into later rows appears only in the row it starts in, which is
+    also the TR it belongs to. A cell with no leaves is still made, empty,
+    so every row keeps its full width - and a row whose every column is
+    spanned into from above becomes an empty TR for the same reason.
+
+    ColSpan/RowSpan go on the cell's /Table attribute object only when
+    above 1, the way the Table Editor writes them. Scope on the TH cells
+    follows the same header-shape rule as the Scope Tables button, so a
+    table built here needs no second pass to satisfy Verify."""
+    page_obj = table_elem.get("/Pg")
+    trs = []
+    for row in table_rows:
+        tr = doc["pdf"].make_indirect(pikepdf.Dictionary({
+            "/Type": pikepdf.Name("/StructElem"),
+            "/S": pikepdf.Name("/TR"),
+            "/P": table_elem,
+        }))
+        if page_obj is not None:
+            tr["/Pg"] = page_obj
+        cells = []
+        for cell in row:
+            cell_elem = _make_leaf_container(doc, cell["role"], cell["leafIds"])
+            cell_elem["/P"] = tr
+            if page_obj is not None and "/Pg" not in cell_elem:
+                cell_elem["/Pg"] = page_obj
+            for key, pdf_key in (("colSpan", "/ColSpan"), ("rowSpan", "/RowSpan")):
+                span = int(cell.get(key) or 1)
+                if span > 1:
+                    _ensure_table_attr_obj(doc, cell_elem)[pdf_key] = span
+            cells.append(cell_elem)
+        if cells:
+            tr["/K"] = pikepdf.Array(cells)
+        trs.append(tr)
+    table_elem["/K"] = pikepdf.Array(trs)
+    for cell_obj, scope_value in _table_scope_changes(trs):
+        _set_cell_scope(doc, cell_obj, scope_value)
 
 
 def _sibling_split_plan(doc, ordered_ids, stop_ids):
@@ -737,7 +784,8 @@ def _sibling_split_plan(doc, ordered_ids, stop_ids):
 
 
 def _split_container_around(doc_id, plan, ordered_ids, role, page_index,
-                            use_label=False, label_split=None, li_items=None):
+                            use_label=False, label_split=None, li_items=None,
+                            table_rows=None):
     """Divides a tag so the selected run becomes its sibling rather than its
     child: [before] [new tag] [after], dropping either outer piece when the
     selection sits at that end. The original element keeps the leading half
@@ -766,7 +814,8 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index,
         leaf_obj = doc["elements"][node_id]
         _remove_kid(parent_obj, leaf_obj)
         moved.append(leaf_obj)
-    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split,
+                         li_items, table_rows)
 
     # The original element is always kept, holding whichever half is left,
     # so its own attributes stay with text they were written for. A fresh
@@ -808,9 +857,10 @@ def _split_container_around(doc_id, plan, ordered_ids, role, page_index,
     }
 
 
-def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None, li_items=None):
-    """wrap_leaves() without the undo snapshot, so tag_rect_content() can run
-    its cuts and this under a single one."""
+def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None, li_items=None,
+                      table_rows=None):
+    """wrap_leaves() without the undo snapshot, so tag_rect_content() and
+    tag_rect_table() can run their cuts and this under a single one."""
     doc = documents[doc_id]
     page_index = _validate_leaf_selection(doc, node_ids)
 
@@ -843,6 +893,8 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None,
                 _set_li_content(doc, relabelled_elem, ordered_ids, use_label, label_split)
             elif role == "L" and li_items:
                 _fill_list(doc, relabelled_elem, li_items)
+            elif role == "Table" and table_rows:
+                _fill_table(doc, relabelled_elem, table_rows)
             tree = _rebuild_after_mutation(doc_id)
             return {
                 "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
@@ -854,7 +906,7 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None,
     plan = _sibling_split_plan(doc, ordered_ids, stop_ids)
     if plan is not None:
         return _split_container_around(doc_id, plan, ordered_ids, role, page_index,
-                                       use_label, label_split, li_items)
+                                       use_label, label_split, li_items, table_rows)
 
     # Where the new tag goes, decided against the tree as it stands now -
     # before anything is unlinked and the positions move.
@@ -887,7 +939,8 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None,
             _remove_kid(source_parent_obj, leaf_obj)
             source_parent_ids.append(source_parent_id)
         moved.append(leaf_obj)
-    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split, li_items)
+    _set_new_tag_content(doc, new_elem, ordered_ids, moved, role, use_label, label_split,
+                         li_items, table_rows)
 
     _insert_kid(anchor_parent_obj, new_elem, insert_index)
     removed_count = _prune_emptied(doc, source_parent_ids, stop_ids)
@@ -898,6 +951,102 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None,
         "tree": tree, "newNodeId": new_node_id, "removedTagCount": removed_count,
         "relabelled": False, **_undo_state(doc),
     }
+
+
+def _plan_cuts(doc, selections, carry):
+    """Resolves each rectangle selection to the mcid it names, ahead of any
+    cutting: node ids stop being trustworthy the moment the first cut lands
+    (nothing is re-indexed until the end), but an mcid names the same
+    marked content throughout. Raises before the caller has taken its undo
+    snapshot, so a selection naming something uncuttable leaves no trace.
+
+    `carry` maps a key each kept entry should carry to the selection key it
+    is read from - tag_rect_content() carries a run's list marker and item,
+    tag_rect_table() which cell the run belongs to - so the cutting never
+    has to know what will be built from the survivors."""
+    planned = []
+    for selection in selections:
+        node_id = selection["nodeId"]
+        _, mcid = _leaf_page_and_mcid(doc, node_id)
+        planned.append({
+            "nodeId": node_id,
+            "mcid": mcid,
+            "start": int(selection.get("startIndex", 0) or 0),
+            "end": selection.get("endIndex"),
+            **{key: selection.get(source) for key, source in carry.items()},
+        })
+    return planned
+
+
+def _apply_cuts(doc, doc_id, page_index, planned):
+    """Makes the cuts _plan_cuts() planned, and returns (kept, cuts_made):
+    one entry per selection, in document order, holding the mcid of the
+    marked content that now contains exactly the selected run plus whatever
+    the plan carried. The caller has already taken the undo snapshot; the
+    registry is rebuilt once here, at the end.
+
+    Cut order matters twice over:
+      - Within a leaf, the *end* cut goes first. The first half of a cut
+        keeps the original MCID, so cutting at the end leaves the run we
+        want inside a leaf still addressable by that same mcid; cutting at
+        the start first would move it into a freshly minted one we'd then
+        have to go and find.
+      - Across leaves, later ones first. Each cut rewrites the page content
+        stream and mints an MCID from it, and working backwards keeps the
+        offsets we were handed pointing at the text they were computed
+        against.
+    """
+    # Document order, so "later ones first" below is a real reversal rather
+    # than whatever order the renderer happened to send. Several selections
+    # can name the same leaf - a list painted as one run contributes one per
+    # item, a table row painted as one run contributes one per cell - so
+    # where they start breaks the tie, and cutting back to front keeps every
+    # earlier offset pointing at the text it was measured against (the left
+    # half of a cut keeps the original MCID).
+    order = {nid: i for i, nid in enumerate(doc["parent_map"])}
+    planned.sort(key=lambda p: (order.get(p["nodeId"], 0), p["start"]))
+
+    cuts_made = 0
+    kept = []
+    for plan in reversed(planned):
+        node_id = _leaf_id_for_mcid(doc, page_index, plan["mcid"])
+        if node_id is None:
+            raise ValueError("Lost track of a content leaf while splitting it")
+
+        start = max(0, plan["start"])
+        keep_mcid = plan["mcid"]
+        carried = {k: v for k, v in plan.items() if k not in ("nodeId", "mcid", "start", "end")}
+
+        if start == 0 and plan["end"] is None:
+            # The whole leaf, so nothing to cut - and nothing to decode
+            # either. Worth short-circuiting rather than merely skipping the
+            # cut: this is exactly the case a caller uses for a leaf whose
+            # font it couldn't measure, and decoding one of those raises.
+            kept.append({"mcid": keep_mcid, **carried})
+            continue
+
+        codes = _decode_leaf(doc, node_id)[5]
+        total = sum(len(c["text"]) for c in codes)
+        end = total if plan["end"] is None else min(int(plan["end"]), total)
+        if start >= end:
+            raise ValueError("A selected run has no text in it")
+        if end < total:
+            _cut_leaf(doc, node_id, end)
+            cuts_made += 1
+            node_id = _leaf_id_for_mcid(doc, page_index, keep_mcid)
+        if start > 0:
+            # The tail of this cut is the run we want, so follow its mcid.
+            _, _, keep_mcid, _, _ = _cut_leaf(doc, node_id, start)
+            cuts_made += 1
+        kept.append({"mcid": keep_mcid, **carried})
+
+    _rebuild_after_mutation(doc_id)
+
+    # Cuts were applied back to front, so put the survivors into document
+    # order before anything cares which of them comes first.
+    position = {nid: i for i, nid in enumerate(doc["parent_map"])}
+    kept.sort(key=lambda k: position.get(_leaf_id_for_mcid(doc, page_index, k["mcid"]), 0))
+    return kept, cuts_made
 
 
 def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
@@ -919,17 +1068,9 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     `pdfBase64`, rather than one of each per cut: split_leaf() pays for both
     per call because it only ever makes one cut, and a rectangle crossing
     six paragraphs would otherwise snapshot the whole document six times.
-
-    Cut order matters twice over:
-      - Within a leaf, the *end* cut goes first. The first half of a cut
-        keeps the original MCID, so cutting at the end leaves the run we
-        want inside a leaf still addressable by that same mcid; cutting at
-        the start first would move it into a freshly minted one we'd then
-        have to go and find.
-      - Across leaves, later ones first. Each cut rewrites the page content
-        stream and mints an MCID from it, and working backwards keeps the
-        offsets we were handed pointing at the text they were computed
-        against.
+    The cutting itself is _plan_cuts() and _apply_cuts(), shared with
+    tag_rect_table(); the order the cuts go in matters, and is explained
+    there.
     """
     doc = documents[doc_id]
     if not selections:
@@ -942,74 +1083,10 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     if selected_page != page_index:
         raise ValueError("The selected content isn't on the page it was drawn on")
 
-    # Resolve every leaf's mcid up front: node ids stop being trustworthy the
-    # moment the first cut lands (nothing is re-indexed until the end), but
-    # an mcid names the same marked content throughout.
-    planned = []
-    for selection in selections:
-        node_id = selection["nodeId"]
-        _, mcid = _leaf_page_and_mcid(doc, node_id)
-        planned.append({
-            "nodeId": node_id,
-            "mcid": mcid,
-            "start": int(selection.get("startIndex", 0) or 0),
-            "end": selection.get("endIndex"),
-            # Where this run's own leading list marker ends, when it has one.
-            "label_split": selection.get("labelSplit"),
-            # Which list item this run belongs to. Runs sharing one become a
-            # single LI, which is how an entry spanning several lines - or
-            # several leaves, on a scan that gives every line its own -
-            # stays one item. Absent means one item per run.
-            "item_index": selection.get("itemIndex"),
-        })
+    planned = _plan_cuts(doc, selections, {"label_split": "labelSplit", "item_index": "itemIndex"})
 
     _push_undo_snapshot(doc)
-
-    # Document order, so "later ones first" below is a real reversal rather
-    # than whatever order the renderer happened to send. Several selections
-    # can name the same leaf - a list painted as one run contributes one per
-    # item - so where they start breaks the tie, and cutting back to front
-    # keeps every earlier offset pointing at the text it was measured
-    # against (the left half of a cut keeps the original MCID).
-    order = {nid: i for i, nid in enumerate(doc["parent_map"])}
-    planned.sort(key=lambda p: (order.get(p["nodeId"], 0), p["start"]))
-
-    cuts_made = 0
-    kept = []
-    for plan in reversed(planned):
-        node_id = _leaf_id_for_mcid(doc, page_index, plan["mcid"])
-        if node_id is None:
-            raise ValueError("Lost track of a content leaf while splitting it")
-
-        start = max(0, plan["start"])
-        keep_mcid = plan["mcid"]
-
-        if start == 0 and plan["end"] is None:
-            # The whole leaf, so nothing to cut - and nothing to decode
-            # either. Worth short-circuiting rather than merely skipping the
-            # cut: this is exactly the case a caller uses for a leaf whose
-            # font it couldn't measure, and decoding one of those raises.
-            kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
-                         "item_index": plan["item_index"]})
-            continue
-
-        codes = _decode_leaf(doc, node_id)[5]
-        total = sum(len(c["text"]) for c in codes)
-        end = total if plan["end"] is None else min(int(plan["end"]), total)
-        if start >= end:
-            raise ValueError("A selected run has no text in it")
-        if end < total:
-            _cut_leaf(doc, node_id, end)
-            cuts_made += 1
-            node_id = _leaf_id_for_mcid(doc, page_index, keep_mcid)
-        if start > 0:
-            # The tail of this cut is the run we want, so follow its mcid.
-            _, _, keep_mcid, _, _ = _cut_leaf(doc, node_id, start)
-            cuts_made += 1
-        kept.append({"mcid": keep_mcid, "label_split": plan["label_split"],
-                     "item_index": plan["item_index"]})
-
-    tree = _rebuild_after_mutation(doc_id)
+    kept, cuts_made = _apply_cuts(doc, doc_id, page_index, planned)
 
     def ids_for(mcids):
         out = []
@@ -1019,11 +1096,6 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
                 raise ValueError("Lost track of a content leaf after splitting it")
             out.append(leaf_id)
         return out
-
-    # Cuts were applied back to front, so put the survivors into document
-    # order before anything cares which of them comes first.
-    position = {nid: i for i, nid in enumerate(doc["parent_map"])}
-    kept.sort(key=lambda k: position.get(_leaf_id_for_mcid(doc, page_index, k["mcid"]), 0))
 
     # Each run's own marker gets cut off here rather than in
     # _set_li_content(), which by then is holding leaves already detached
@@ -1070,6 +1142,119 @@ def tag_rect_content(doc_id, page_index, selections, role, use_label=False):
     # The one command here besides split_leaf() that rewrites a page's
     # content stream, so the renderer's pdf.js copy needs the new bytes -
     # see split_leaf()'s docstring for why a struct-tree-only edit doesn't.
+    if cuts_made:
+        result["pdfBase64"] = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
+    return result
+
+
+_TABLE_CELL_ROLES = ("TH", "TD")
+
+
+def _span_of(cell, key):
+    """A cell's colSpan/rowSpan as a positive int, defaulting to 1."""
+    try:
+        value = int(cell.get(key) or 1)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a whole number")
+    if value < 1:
+        raise ValueError(f"{key} must be at least 1")
+    return value
+
+
+def _validate_table_grid(rows):
+    """Checks a tag_rect_table() grid is rectangular before anything is cut:
+    every row, once the cells spanning down into it from above are counted,
+    covers exactly the same columns as the first. The renderer builds its
+    grid so this always holds; it is here so a malformed request fails
+    loudly rather than producing a table Verify then flags."""
+    if not rows:
+        raise ValueError("The table has no rows")
+    width = None
+    carried = {}  # column -> rows below this one a cell above still covers
+    for row in rows:
+        occupied = set(carried)
+        new_carry = {}
+        col = 0
+        for cell in row:
+            if cell.get("role") not in _TABLE_CELL_ROLES:
+                raise ValueError(f"A table cell must be TH or TD, not {cell.get('role')}")
+            col_span = _span_of(cell, "colSpan")
+            row_span = _span_of(cell, "rowSpan")
+            while col in occupied:
+                col += 1
+            for c in range(col, col + col_span):
+                if c in occupied:
+                    raise ValueError("Table cells overlap")
+                occupied.add(c)
+                if row_span > 1:
+                    new_carry[c] = row_span - 1
+            col += col_span
+        if width is None:
+            width = len(occupied)
+        if occupied != set(range(width)):
+            raise ValueError("Rows have inconsistent column counts")
+        carried = {c: left - 1 for c, left in carried.items() if left > 1}
+        carried.update(new_carry)
+    if carried:
+        raise ValueError("A cell spans past the last row")
+
+
+def tag_rect_table(doc_id, page_index, rows):
+    """The Select Content grid tool (table-grid.js): builds a Table from a
+    grid of cells the user drew over a rectangle, cutting leaves at the
+    cell edges the same way tag_rect_content() cuts them at the rectangle's.
+
+    `rows` is row-major: [[{"role": "TH"|"TD", "colSpan", "rowSpan",
+    "selections": [{"nodeId", "startIndex", "endIndex"}, ...]}, ...], ...],
+    each selection naming one run of one leaf's decoded text exactly as
+    tag_rect_content() takes them. A cell spanning several rows appears
+    only in the row it starts in, in column order - the TR it will sit in.
+    A cell with no selections is still emitted, empty, so the grid stays
+    regular; one leaf may contribute runs to several cells, or several
+    runs to one (a wrapped cell in a leaf painted line by line).
+
+    Same undo shape as tag_rect_content(): one snapshot over the cuts and
+    the build, one fresh pdfBase64 when anything was cut."""
+    doc = documents[doc_id]
+    if page_index < 0 or page_index >= len(doc["pdf"].pages):
+        raise ValueError(f"Page {page_index} is out of range")
+    _validate_table_grid(rows)
+
+    selections = []
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row):
+            for selection in cell.get("selections") or []:
+                selections.append({**selection, "cell": (r, c)})
+    if not selections:
+        raise ValueError("No content in the table")
+    if _validate_leaf_selection(doc, [s["nodeId"] for s in selections]) != page_index:
+        raise ValueError("The selected content isn't on the page it was drawn on")
+    planned = _plan_cuts(doc, selections, {"cell": "cell"})
+
+    _push_undo_snapshot(doc)
+    kept, cuts_made = _apply_cuts(doc, doc_id, page_index, planned)
+
+    leaves_by_cell = {}
+    for entry in kept:
+        leaf_id = _leaf_id_for_mcid(doc, page_index, entry["mcid"])
+        if leaf_id is None:
+            raise ValueError("Lost track of a content leaf after splitting it")
+        leaves_by_cell.setdefault(entry["cell"], []).append(leaf_id)
+
+    table_rows = [
+        [{
+            "role": cell["role"],
+            "colSpan": _span_of(cell, "colSpan"),
+            "rowSpan": _span_of(cell, "rowSpan"),
+            "leafIds": leaves_by_cell.get((r, c), []),
+        } for c, cell in enumerate(row)]
+        for r, row in enumerate(rows)
+    ]
+    flat_ids = [leaf_id for row in table_rows for cell in row for leaf_id in cell["leafIds"]]
+    result = _wrap_leaves_impl(doc_id, flat_ids, "Table", table_rows=table_rows)
+    result["cutCount"] = cuts_made
+    result["rowCount"] = len(table_rows)
+    result["cellCount"] = sum(len(row) for row in table_rows)
     if cuts_made:
         result["pdfBase64"] = base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii")
     return result
@@ -2922,6 +3107,44 @@ def _set_cell_scope(doc, cell_obj, scope_value):
     _ensure_table_attr_obj(doc, cell_obj)["/Scope"] = pikepdf.Name("/" + scope_value)
 
 
+def _table_scope_changes(rows):
+    """The Scope each TH cell of one table should get, as [(cell_obj,
+    scope_value), ...], read off the shape of its header cells - see
+    scope_tables() for the three shapes. Empty when the table matches none
+    of them, or has no rows or no first-row cells. Shared by the Scope
+    Tables button and _fill_table(), so a table built from the Select
+    Content grid is scoped by the same rule as one scoped after the fact."""
+    if not rows:
+        return []
+    row_cells = [_collect_cells(row) for row in rows]
+    first_row_cells = row_cells[0]
+    other_rows_cells = row_cells[1:]
+    if not first_row_cells:
+        return []
+
+    first_row_all_th = all(_role_of(c) == "TH" for c in first_row_cells)
+    other_rows_begin_with_th = bool(other_rows_cells) and all(
+        cells and _role_of(cells[0]) == "TH" for cells in other_rows_cells
+    )
+    other_rows_have_no_th = all(
+        all(_role_of(c) != "TH" for c in cells) for cells in other_rows_cells
+    )
+    all_rows_begin_with_th = all(
+        cells and _role_of(cells[0]) == "TH" for cells in row_cells
+    )
+
+    table_changes = []
+    if first_row_all_th and other_rows_begin_with_th:
+        table_changes.append((first_row_cells[0], "Both"))
+        table_changes.extend((c, "Column") for c in first_row_cells[1:])
+        table_changes.extend((cells[0], "Row") for cells in other_rows_cells)
+    elif first_row_all_th and other_rows_have_no_th:
+        table_changes.extend((c, "Column") for c in first_row_cells)
+    elif all_rows_begin_with_th:
+        table_changes.extend((cells[0], "Row") for cells in row_cells)
+    return table_changes
+
+
 def scope_tables(doc_id):
     """Walks every Table tag in the document and sets its TH cells' Scope
     attribute from the shape of its header cells, backing the toolbar's
@@ -2944,36 +3167,7 @@ def scope_tables(doc_id):
     scoped = 0
     pending = []  # [(cell_obj, scope_value), ...] - collected before mutating anything
     for table in tables:
-        rows = _collect_rows(table)
-        if not rows:
-            continue
-        row_cells = [_collect_cells(row) for row in rows]
-        first_row_cells = row_cells[0]
-        other_rows_cells = row_cells[1:]
-        if not first_row_cells:
-            continue
-
-        first_row_all_th = all(_role_of(c) == "TH" for c in first_row_cells)
-        other_rows_begin_with_th = bool(other_rows_cells) and all(
-            cells and _role_of(cells[0]) == "TH" for cells in other_rows_cells
-        )
-        other_rows_have_no_th = all(
-            all(_role_of(c) != "TH" for c in cells) for cells in other_rows_cells
-        )
-        all_rows_begin_with_th = all(
-            cells and _role_of(cells[0]) == "TH" for cells in row_cells
-        )
-
-        table_changes = []
-        if first_row_all_th and other_rows_begin_with_th:
-            table_changes.append((first_row_cells[0], "Both"))
-            table_changes.extend((c, "Column") for c in first_row_cells[1:])
-            table_changes.extend((cells[0], "Row") for cells in other_rows_cells)
-        elif first_row_all_th and other_rows_have_no_th:
-            table_changes.extend((c, "Column") for c in first_row_cells)
-        elif all_rows_begin_with_th:
-            table_changes.extend((cells[0], "Row") for cells in row_cells)
-
+        table_changes = _table_scope_changes(_collect_rows(table))
         if table_changes:
             pending.extend(table_changes)
             scoped += 1
@@ -5170,6 +5364,8 @@ def main():
                     request["docId"], request["pageIndex"],
                     request["selections"], request["role"],
                     request.get("useLabel", False))
+            elif cmd == "tag_rect_table":
+                result = tag_rect_table(request["docId"], request["pageIndex"], request["rows"])
             elif cmd == "add_table_row":
                 result = add_table_row(request["docId"], request["tableId"])
             elif cmd == "add_table_column":

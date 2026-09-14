@@ -32,6 +32,10 @@
 // draws that overhang dashed so it can't pass unnoticed - retagging a leaf
 // that is 70% inside a heading's rectangle otherwise silently reads 30% of a
 // body paragraph out as part of the heading.
+//
+// One shortcut doesn't tag the selection straight away: the Group into
+// Table shortcut hands the box to table-grid.js, which lays a grid of cells
+// over it and cuts each leaf to the cells it crosses.
 
 import { el } from './dom.js';
 import { state } from './state.js';
@@ -77,6 +81,8 @@ export function clearRectSelect() {
   state.rectSelectPending = null;
   state.rectSelectIndex = null;
   state.rectSelectPage = null;
+  state.rectSelectBox = null;
+  state.tableGrid = null; // a grid is drawn over the selection, so it goes with it
   el.drawOverlay.innerHTML = '';
 }
 
@@ -114,7 +120,7 @@ export function buildLeafIndexForPage(pageIndex) {
   return index;
 }
 
-function intersectionArea(a, b) {
+export function intersectionArea(a, b) {
   const x0 = Math.max(a.x, b.x);
   const y0 = Math.max(a.y, b.y);
   const x1 = Math.min(a.x + a.width, b.x + b.width);
@@ -270,8 +276,9 @@ function textOfRun(glyphs, run) {
 
 // The glyph boxes a run covers, merged into one rect per line so the overlay
 // draws a few boxes rather than one per character - which at a few thousand
-// glyphs a page would be both slow and visually noisy.
-function glyphsInRun(glyphs, run) {
+// glyphs a page would be both slow and visually noisy. Shared with the table
+// grid's per-cell preview.
+export function glyphsInRun(glyphs, run) {
   let offset = 0;
   const lines = new Map();
   for (const g of glyphs) {

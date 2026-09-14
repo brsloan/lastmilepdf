@@ -271,6 +271,24 @@ export interface TagRectContentResult extends WrapLeavesResult {
 }
 
 /**
+ * One cell of the grid `tag_rect_table()` builds a Table from: its role,
+ * spans, and the runs it receives (each cut the way `tag_rect_content()`
+ * cuts them). A cell with no selections is still made, empty.
+ */
+export interface TableCellSpec {
+  role: 'TH' | 'TD';
+  colSpan: number;
+  rowSpan: number;
+  selections: RectSelection[];
+}
+
+/** `tag_rect_table()`'s result: the same shape as a rectangle tagging, plus the grid's size. */
+export interface TagRectTableResult extends TagRectContentResult {
+  rowCount: number;
+  cellCount: number;
+}
+
+/**
  * `figure_from_rect()`'s result. `method` records which of the two tagging
  * strategies the worker picked for the drawn rectangle - see the section
  * comment above figure_from_rect() in tag_worker.py.

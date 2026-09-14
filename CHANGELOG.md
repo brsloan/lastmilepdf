@@ -11,6 +11,20 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **Select Content → Table.** With a rectangle selected on the page, T no
+  longer just says that tables are built from the tree: it lays a grid over
+  the rectangle. Click to place column dividers, Enter, click to place row
+  dividers, Enter again to see the cells with the text each will receive
+  outlined inside it. Drag or Shift+click to select cells, M to merge them
+  into one spanning cell, H to switch header and data cells (the top row
+  starts as headers), then Enter builds the Table, TR and TH/TD tags in one
+  undo step, cutting every text run at the cell edges the same way the
+  rectangle already cuts at its own - so a scanned table whose OCR painted
+  each row as one run comes out one cell per column. Header scope is set as
+  Scope Tables would set it. The dividers are placed by hand on purpose:
+  the Table Editor can fix headers and spans afterwards but can't move text
+  between cells, so a guessed grid that's a few points off could only be
+  undone, not corrected. Esc drops the grid and keeps the selection.
 - A **Fill with AI** button beside the Alt text label when a Figure or a
   Formula is selected. It sends an image of just that tag's own part of the
   page to the configured AI provider and writes what comes back into the
