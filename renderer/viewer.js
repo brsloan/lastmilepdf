@@ -12,10 +12,10 @@
 
 import { pdfjsLib } from './pdfjs.js';
 import { el } from './dom.js';
-import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport } from './page-content.js';
+import { clearPageCaches, collectTargetBBoxes, collectTargetMcids, getPageGraphicRects, getPageTextContent, itemRectInViewport, pullContentTextWithRuns } from './page-content.js';
 import { discardRectSelectIfPageChanged } from './rect-select.js';
 import { PAGE_SCALE, state } from './state.js';
-import { base64ToUint8Array, categoryForRole, extractMcidFromItemId, pointInRect, unionRects } from './util.js';
+import { base64ToUint8Array, categoryForRole, diffOldTextChanges, extractMcidFromItemId, pointInRect, unionRects, wordDiffIsAffordable } from './util.js';
 
 // Same corners-through-viewport-transform approach as itemRectInViewport()
 // above, for a plain page-space [x0, y0, x1, y1] rect (a tag's /Layout
@@ -101,20 +101,25 @@ export function syncHighlightLayerBounds() {
   }
 }
 
+// Places an overlay element over viewport-space rect `r`, as percentages of
+// the viewport's own pixel size so it stays aligned even though the canvas
+// is scaled down by CSS (max-width: 100%).
+function positionOverlay(element, r, viewport) {
+  element.style.left = `${(100 * r.x / viewport.width).toFixed(3)}%`;
+  element.style.top = `${(100 * r.y / viewport.height).toFixed(3)}%`;
+  element.style.width = `${(100 * r.width / viewport.width).toFixed(3)}%`;
+  element.style.height = `${(100 * r.height / viewport.height).toFixed(3)}%`;
+}
+
 function renderHighlightRects(boxes, viewport) {
   el.highlightLayer.innerHTML = '';
   let activeBox = null;
   for (const { rect: r, active, isFigure, role } of boxes) {
     const box = document.createElement('div');
     box.className = active ? 'highlight-box' : 'highlight-box secondary';
-    // Percentages of the viewport's own pixel size so boxes stay aligned
-    // even though the canvas is scaled down by CSS (max-width: 100%).
+    positionOverlay(box, r, viewport);
     const leftPct = 100 * r.x / viewport.width;
     const topPct = 100 * r.y / viewport.height;
-    box.style.left = `${leftPct.toFixed(3)}%`;
-    box.style.top = `${topPct.toFixed(3)}%`;
-    box.style.width = `${(100 * r.width / viewport.width).toFixed(3)}%`;
-    box.style.height = `${(100 * r.height / viewport.height).toFixed(3)}%`;
     el.highlightLayer.appendChild(box);
     if (active) activeBox = box;
     if (isFigure) for (const line of buildCrosshair(r, viewport)) el.highlightLayer.appendChild(line);
@@ -234,6 +239,99 @@ export function clearHighlight() {
   el.highlightLayer.innerHTML = '';
 }
 
+// --- Proofread Mode: where the page's text differs from the Actual Text ---
+//
+// While the Actual Text field is showing a diff (an AI fix from this
+// session, or a Show AT Changes flag - see updateActualTextReviewUI() in
+// actual-text.js), Proofread Mode also marks on the page where the text
+// under the tag differs from the Actual Text: the field marks what went in,
+// these mark what was there, so the two can be compared at a glance. The
+// same word alignment drives both (diffWordTokens()/diffOldTextChanges() in
+// util.js), so they describe the same edit.
+//
+// Position comes from pdf.js's text items - for OCR output usually a word
+// or a line each - with a changed word's place inside its item estimated by
+// character count, since nothing here measures fonts. That's "close enough
+// to direct the eye", not exact. Rotated text is placed as if horizontal,
+// the same approximation itemRectInViewport() already makes.
+
+// The proposal the field is diffing against for `nodeId`, when the page
+// should mirror it - same precedence as updateActualTextReviewUI(). An AI
+// fix was diffed against the tag's *direct* content (pullDirectContentText()
+// in actions.js), a Show AT Changes flag against its whole subtree, so each
+// gets re-pulled the way it was made.
+function pageDiffProposalFor(nodeId) {
+  if (!state.proofreadMode || state.selectedNodeIds.size > 1) return null;
+  const aiProposal = state.aiProposals.get(nodeId);
+  if (aiProposal) return { proposal: aiProposal, directOnly: true };
+  const flag = state.showAtChanges ? state.atChangeFlags.get(nodeId) : null;
+  return flag ? { proposal: flag, directOnly: false } : null;
+}
+
+// The slice of a text item's box covering characters [from, to) of its
+// run, assuming the item's characters are evenly spaced.
+function subRunRect(run, from, to, viewport) {
+  const rect = itemRectInViewport(run.item, viewport);
+  const total = run.item.str.length || 1;
+  const x0 = rect.x + rect.width * ((from - run.start + run.itemStart) / total);
+  const x1 = rect.x + rect.width * ((to - run.start + run.itemStart) / total);
+  return { x: x0, y: rect.y, width: x1 - x0, height: rect.height };
+}
+
+// A thin bar for words that were added without replacing anything on the
+// page, standing in the gap just before `run`'s character `at` (or just
+// after its last character, for `at === run.end`). A little taller than the
+// line so it reads as a marker rather than a glyph.
+function insertionMarkerRect(run, at, viewport) {
+  const edge = subRunRect(run, at, at, viewport);
+  const width = Math.max(4, edge.height * 0.3);
+  return { x: edge.x - width / 2, y: edge.y - edge.height * 0.15, width, height: edge.height * 1.3 };
+}
+
+async function computeActualTextDiffRects(nodeId, { proposal, directOnly }, viewport) {
+  const { text, runs } = await pullContentTextWithRuns(nodeId, state.currentPage, { directOnly });
+  if (!text || runs.length === 0 || !wordDiffIsAffordable(text, proposal.suggested)) return [];
+  const marks = [];
+  for (const region of diffOldTextChanges(text, proposal.suggested)) {
+    if (region.kind === 'removed') {
+      for (const run of runs) {
+        const from = Math.max(region.start, run.start);
+        const to = Math.min(region.end, run.end);
+        if (to > from) marks.push({ rect: subRunRect(run, from, to, viewport), inserted: false });
+      }
+      continue;
+    }
+    // An insertion is anchored where its run of changes began, which may be
+    // whitespace or a line break with nothing painted for it - snap forward
+    // to the next visible character. Past the end of the text, the marker
+    // hangs off the last run, but only if that run really is the end of the
+    // text and not just the last of it on this page.
+    let at = region.start;
+    while (at < text.length && /\s/.test(text[at])) at++;
+    const run = at < text.length
+      ? runs.find((r) => r.start <= at && at < r.end)
+      : runs.find((r) => r.end === text.length);
+    if (run) marks.push({ rect: insertionMarkerRect(run, at, viewport), inserted: true });
+  }
+  return marks;
+}
+
+function renderActualTextDiffRects(marks, viewport) {
+  for (const { rect, inserted } of marks) {
+    const box = document.createElement('div');
+    box.className = inserted ? 'highlight-diff inserted' : 'highlight-diff';
+    positionOverlay(box, rect, viewport);
+    el.highlightLayer.appendChild(box);
+  }
+}
+
+// Drops just the diff marks, leaving the tag's own highlight box - for when
+// typing into the field takes the proposal away (see the 'input' listener
+// in renderer.js) without anything else about the selection changing.
+export function clearActualTextDiffOnPage() {
+  for (const box of el.highlightLayer.querySelectorAll('.highlight-diff')) box.remove();
+}
+
 export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
   const token = ++state.highlightToken;
   if (!state.pdfDoc || !nodeId) {
@@ -328,6 +426,14 @@ export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     setProofreadScrollSpacersActive(state.proofreadMode);
     syncHighlightLayerBounds();
     renderHighlightRects(boxes, viewport);
+
+    const review = pageDiffProposalFor(nodeId);
+    if (!review) return;
+    const marks = await computeActualTextDiffRects(nodeId, review, viewport);
+    // A newer selection/page change has redrawn the layer since, or typing
+    // into the field dropped the proposal while the pull was in flight.
+    if (token !== state.highlightToken || pageDiffProposalFor(nodeId)?.proposal !== review.proposal) return;
+    renderActualTextDiffRects(marks, viewport);
   } catch (err) {
     console.error('Could not compute tag highlight:', err);
   }

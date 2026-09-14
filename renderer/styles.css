@@ -603,6 +603,25 @@ body.proofread-mode .tree-pane {
   box-shadow: 0 0 0 0.5px var(--overlay-crosshair);
 }
 
+/* Proofread Mode: where the page's own text differs from the Actual Text,
+   drawn inside the selected tag's box (see computeActualTextDiffRects() in
+   viewer.js). The same yellow as the field's <mark> so the two read as one
+   diff; the outline is the amber the Add Figure band already uses on the
+   page, which clears 3:1 there. An insertion has no page text to wash, so
+   it is a solid bar with the halo around it instead. */
+.highlight-diff {
+  position: absolute;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--ai-highlight-bg) 45%, transparent);
+  border: 1.5px solid var(--overlay-draw);
+  border-radius: 2px;
+}
+
+.highlight-diff.inserted {
+  background: var(--overlay-draw);
+  border-color: var(--overlay-halo);
+}
+
 /* Selected tag's role, shown resting on its highlight box (File > Settings >
    Appearance > Show Tag Type Label): one copy above the box, one hanging
    below it, both left-aligned to the box. Anchored to the box's own left

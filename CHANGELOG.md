@@ -11,6 +11,12 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- In Proofread mode, the highlighted changes in the Actual Text field are now
+  mirrored on the page: while an AI fix or a Show AT Changes flag is showing
+  its diff, the words the OCR read differently are marked on the preview, and
+  a thin amber bar marks where words were added that the OCR missed
+  entirely. Positions within a line are estimated from character counts, so
+  they point at the right spot rather than outline it exactly.
 - The tag tree now shows where the PDF's pages break: a dotted red line
   between the two tags a break falls between, and through the middle of a tag
   whose own content carries over onto the next page. The line is drawn behind

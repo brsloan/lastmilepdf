@@ -131,6 +131,8 @@ View > Proofread Mode switches to a focused layout for reading through the docum
 
 <kbd>Page Up</kbd>/<kbd>Page Down</kbd> jump to the previous/next tag's Actual Text from anywhere, including while that field is focused. Pressing <kbd>↑</kbd>/<kbd>↓</kbd> on the first/last line of Actual Text will also jump to adjacent tags.
 
+While a tag is showing a highlighted diff (an AI fix, or a **Show AT Changes** flag), Proofread Mode also marks the same changes on the page: the words the OCR read differently are marked where they sit on the page, and a thin amber bar marks where words were added that the OCR missed. Positions within a line are estimated from character counts, so they point at the right spot rather than outline it exactly.
+
 ## Show AT Changes
 
 View > Show AT Changes flags every tag whose Actual Text no longer matches the real OCR content so you can find hand edits or old AI fixes even after saving, closing, and reopening the file (unlike an AI fix's own flag from **Fix All Actual Text (AI)** or **Fix with AI**, which only lasts the session). Selecting a flagged tag shows the same highlighted diff and Revert button as an AI fix.

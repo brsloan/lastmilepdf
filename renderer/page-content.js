@@ -279,7 +279,21 @@ export async function getPageMcidTextMap(pageNumber) {
   return dedupePageBuild('mcidText', pageNumber, state.mcidTextCache, async () => buildPageMcidTextMap(pageNumber));
 }
 
-async function buildPageMcidTextMap(pageNumber) {
+// A page's mcid -> { text, runs } lookup: the same trimmed text
+// getPageMcidTextMap() serves, plus where each pdf.js text item that
+// contributed to it sits inside that text. A run is { start, end, itemStart,
+// item }: start/end are offsets into the trimmed text, itemStart the offset
+// into item.str that `start` corresponds to (non-zero only for the first
+// item, when leading whitespace was trimmed off it), and item carries the
+// geometry (see itemRectInViewport()). The line breaks hasEOL adds belong
+// to no run.
+//
+// The cached text map is reduced from this rather than built separately,
+// so the two can never disagree about a character offset - see
+// pullContentTextWithRuns(). This itself is uncached: one linear walk of the
+// page's items, asked for once per selection change by the Proofread Mode
+// diff marks in viewer.js.
+export async function getPageMcidTextRuns(pageNumber) {
   const { textContent } = await getPageTextContent(pageNumber);
   const map = new Map();
   const mcidStack = [];
@@ -294,11 +308,33 @@ async function buildPageMcidTextMap(pageNumber) {
     }
     const currentMcid = mcidStack.length > 0 ? mcidStack[mcidStack.length - 1] : null;
     if (currentMcid === null || !item.str) continue;
-    const existing = map.get(currentMcid) || '';
-    map.set(currentMcid, existing + item.str + (item.hasEOL ? '\n' : ''));
+    let entry = map.get(currentMcid);
+    if (!entry) {
+      entry = { text: '', runs: [] };
+      map.set(currentMcid, entry);
+    }
+    entry.runs.push({ start: entry.text.length, end: entry.text.length + item.str.length, itemStart: 0, item });
+    entry.text += item.str + (item.hasEOL ? '\n' : '');
   }
-  for (const [mcid, text] of map) map.set(mcid, text.trim());
+  for (const entry of map.values()) {
+    const trimmed = entry.text.trim();
+    const lead = entry.text.length - entry.text.trimStart().length;
+    entry.runs = entry.runs
+      .map((run) => ({
+        start: Math.max(0, run.start - lead),
+        end: Math.min(trimmed.length, run.end - lead),
+        itemStart: Math.max(0, lead - run.start),
+        item: run.item,
+      }))
+      .filter((run) => run.end > run.start);
+    entry.text = trimmed;
+  }
   return map;
+}
+
+async function buildPageMcidTextMap(pageNumber) {
+  const runs = await getPageMcidTextRuns(pageNumber);
+  return new Map(Array.from(runs, ([mcid, entry]) => [mcid, entry.text]));
 }
 
 // Builds a page's mcid -> image-xobject rect(s) lookup, its mcid -> vector-
@@ -674,6 +710,36 @@ export async function pullDirectContentText(nodeId) {
     if (text) parts.push(text);
   }
   return parts.join(' ');
+}
+
+// Exactly pullContentText()'s (or, with directOnly, pullDirectContentText()'s)
+// text, plus where the parts of it that sit on `pageNumber` were painted:
+// `runs` are getPageMcidTextRuns() entries with start/end re-based to
+// offsets into the joined `text`. Parts on other pages, the single-space
+// joins between parts, and a leaf that resolved to an "[Image]"/"[Graphic]"
+// label rather than text all still contribute their characters - so an
+// offset into `text` means the same thing as into the plain pull - but no
+// runs. Backs the Proofread Mode diff marks on the page; see
+// computeActualTextDiffRects() in viewer.js.
+export async function pullContentTextWithRuns(nodeId, pageNumber, { directOnly = false } = {}) {
+  const targets = directOnly ? collectDirectContentMcids(nodeId) : collectTargetMcids(nodeId);
+  const anyOnPage = targets.some((target) => target.page + 1 === pageNumber);
+  const pageRuns = anyOnPage ? await getPageMcidTextRuns(pageNumber) : new Map();
+  let text = '';
+  const runs = [];
+  for (const target of targets) {
+    const part = await resolveMcidText(target.page, target.mcid);
+    if (!part) continue;
+    if (text) text += ' ';
+    const base = text.length;
+    const entry = target.page + 1 === pageNumber ? pageRuns.get(target.mcid) : null;
+    // entry.text !== part only for the "[Image]"/"[Graphic]" fallback.
+    if (entry && entry.text === part) {
+      for (const run of entry.runs) runs.push({ ...run, start: base + run.start, end: base + run.end });
+    }
+    text += part;
+  }
+  return { text, runs };
 }
 
 // Like pullContentText(), but for a table preview cell (see

@@ -21,7 +21,7 @@ import { walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { deleteCurrentScript, loadScripts, newScript, openScriptsDialog, runActiveScript, saveCurrentScript, selectScriptForEditing, updateRunScriptButtonState } from './scripts.js';
 import { renderVerifyResults } from './verify.js';
-import { findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // renderer.js
@@ -184,6 +184,7 @@ el.fieldActualText.addEventListener('input', () => {
   el.actualTextHighlight.classList.remove('visible');
   el.actualTextHighlight.innerHTML = '';
   el.actualTextReviewBar.hidden = true;
+  clearActualTextDiffOnPage(); // and the Proofread Mode marks on the page that mirrored it
   renderTree(); // drop that row's "AI fix"/"AT changed" flag
 });
 
@@ -647,12 +648,17 @@ el.preferencesNotifyChime.addEventListener('change', () => {
   window.api.setNotifyChime(state.notifyChime);
 });
 
+// The re-highlight after each branch is for Proofread Mode's diff marks on
+// the page, which are drawn as part of the tag's highlight (see
+// highlightNodeOnPage() in viewer.js) and so only follow the flags when it
+// runs again.
 window.api.onMenuShowAtChanges(async (_event, checked) => {
   state.showAtChanges = checked;
   if (!checked) {
     state.atChangeFlags = new Map();
     renderTree();
     updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
+    if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
     setStatus('Hid Actual Text change highlighting.');
     return;
   }
@@ -660,6 +666,7 @@ window.api.onMenuShowAtChanges(async (_event, checked) => {
   await computeAtChangeFlags();
   renderTree();
   updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
+  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
   setStatus(state.atChangeFlags.size > 0
     ? `Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content - flagged in the tag tree.`
     : 'No tags have Actual Text that differs from their pulled content.');

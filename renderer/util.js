@@ -21,15 +21,34 @@ export function categoryForRole(role) {
   return ROLE_CATEGORY[role] || 'inline';
 }
 
-// Word-level diff (classic O(n*m) LCS over whitespace-preserving tokens) so
-// only the spans that actually changed get marked, not the whole field.
-// Tag-level text is short enough (a sentence/caption/heading, not a whole
-// document) that the DP table is cheap - see the size guard in
-// renderActualTextDiff() below for the pathological-input fallback.
-export function diffWordTokens(oldText, newText) {
-  const tokenize = (text) => text.split(/(\s+)/).filter((token) => token.length > 0);
-  const oldTokens = tokenize(oldText);
-  const newTokens = tokenize(newText);
+// --- word-level diff -------------------------------------------------------
+//
+// Classic O(n*m) LCS over whitespace-preserving tokens, so only the spans
+// that actually changed get marked, not the whole field. Tag-level text is
+// short enough (a sentence/caption/heading, not a whole document) that the
+// DP table is cheap - see wordDiffIsAffordable() for the pathological-input
+// guard both consumers apply.
+
+function tokenizeWords(text) {
+  return text.split(/(\s+)/).filter((token) => token.length > 0);
+}
+
+// The DP table is O(n*m) cells - a pathological pair of texts would do
+// multi-million-cell work on every selection. Callers fall back to a plain
+// (unhighlighted but still correct) display when this says no.
+export function wordDiffIsAffordable(oldText, newText) {
+  const roughTokens = (oldText.length + newText.length) / 4;
+  return roughTokens * roughTokens <= 4_000_000;
+}
+
+// The full alignment, one op per token on either side, in order:
+// { type: 'common' | 'removed' | 'added', text }. 'removed' tokens exist
+// only in the old text, 'added' only in the new. The tie-break (prefer
+// skipping an old token over emitting a new one) is what fixes where an
+// insertion lands relative to its neighbors, so both consumers below see
+// the same alignment - the field's marks and the page's marks describe the
+// same edit.
+function alignWordTokens(oldTokens, newTokens) {
   const n = oldTokens.length;
   const m = newTokens.length;
   const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
@@ -40,28 +59,84 @@ export function diffWordTokens(oldText, newText) {
         : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
-  // Only "common" (unchanged) and "added" tokens are emitted, in new-text
-  // order - a token only in the old text is simply skipped, since the field
-  // always displays the suggested text, never a two-sided before/after view.
-  const parts = [];
+  const ops = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
     if (oldTokens[i] === newTokens[j]) {
-      parts.push({ text: newTokens[j], added: false });
+      ops.push({ type: 'common', text: newTokens[j] });
       i++; j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ type: 'removed', text: oldTokens[i] });
       i++;
     } else {
-      parts.push({ text: newTokens[j], added: true });
+      ops.push({ type: 'added', text: newTokens[j] });
       j++;
     }
   }
-  while (j < m) {
-    parts.push({ text: newTokens[j], added: true });
-    j++;
+  while (i < n) ops.push({ type: 'removed', text: oldTokens[i++] });
+  while (j < m) ops.push({ type: 'added', text: newTokens[j++] });
+  return ops;
+}
+
+// The new text's tokens in order, each flagged as added or not - what the
+// Actual Text field's highlight overlay renders. A token only in the old
+// text is simply left out, since the field always displays the suggested
+// text, never a two-sided before/after view.
+export function diffWordTokens(oldText, newText) {
+  return alignWordTokens(tokenizeWords(oldText), tokenizeWords(newText))
+    .filter((op) => op.type !== 'removed')
+    .map((op) => ({ text: op.text, added: op.type === 'added' }));
+}
+
+// The other side of the same diff: where in the OLD text each change sits,
+// as character offsets into it - what the page preview needs, since the old
+// text is the one that was actually painted on the page. Each maximal run of
+// changed tokens becomes one region:
+//   - 'removed': [start, end) covers the old tokens that were replaced or
+//     dropped, with whitespace trimmed off both ends ("m34ns" in
+//     "This m34ns war" -> "This means war").
+//   - 'inserted': a zero-width marker (start === end) where new words were
+//     added but nothing of substance was removed ("This war" -> "This means
+//     war" marks the spot just before "war"). Anchored where the run begins
+//     in the old text; that may be whitespace or a line break, so a
+//     consumer should snap forward to the next visible character.
+// A run that only changes whitespace (a line break becoming a space) yields
+// nothing - there is no ink on the page to point at.
+export function diffOldTextChanges(oldText, newText) {
+  const ops = alignWordTokens(tokenizeWords(oldText), tokenizeWords(newText));
+  const regions = [];
+  let oldPos = 0;
+  let hunk = null; // { start, end, addedInk } for the run of changed ops in progress
+  const flush = () => {
+    if (!hunk) return;
+    let s = hunk.start;
+    let e = hunk.end;
+    while (s < e && /\s/.test(oldText[s])) s++;
+    while (e > s && /\s/.test(oldText[e - 1])) e--;
+    if (e > s) {
+      regions.push({ start: s, end: e, kind: 'removed' });
+    } else if (hunk.addedInk) {
+      regions.push({ start: hunk.start, end: hunk.start, kind: 'inserted' });
+    }
+    hunk = null;
+  };
+  for (const op of ops) {
+    if (op.type === 'common') {
+      flush();
+      oldPos += op.text.length;
+      continue;
+    }
+    if (!hunk) hunk = { start: oldPos, end: oldPos, addedInk: false };
+    if (op.type === 'removed') {
+      oldPos += op.text.length;
+      hunk.end = oldPos;
+    } else if (op.text.trim()) {
+      hunk.addedInk = true;
+    }
   }
-  return parts;
+  flush();
+  return regions;
 }
 
 export function extractMcidFromItemId(id) {
