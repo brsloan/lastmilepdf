@@ -62,7 +62,11 @@ Scope / known limitations (read this before extending):
     to the struct tree at all by whatever tool produced the PDF - and
     applies the same `/Artifact BMC` rewrite. All three touch content
     streams in a narrowly scoped, mechanically verified way - never a
-    free-form rewrite.
+    free-form rewrite. Two further commands touch neither the struct tree
+    nor a content stream: set_structure_tab_order() writes /Tabs on page
+    dictionaries and set_pdf_ua_identifier() writes the XMP metadata packet,
+    both backing a Verify panel action (see the "PDF/UA document-level
+    verification" section).
   - Undo/redo works by snapshotting the *entire* pikepdf.Pdf (serialized to
     bytes) before each mutation, rather than recording inverse edits. Simple
     and correct by construction, at the cost of an O(document size) copy per
@@ -4614,6 +4618,324 @@ def insert_paragraph_after(doc_id, node_id):
     return {"tree": tree, "newNodeId": new_node_id, **_undo_state(doc)}
 
 
+# --- PDF/UA document-level verification ------------------------------------
+#
+# The half of the Verify panel's report that can't be answered from the tag
+# tree the renderer already holds. Everything here reads a part of the
+# document `_walk()` never puts in the tree at all - the XMP metadata packet,
+# each page's own dictionary, the page /Annots arrays, and the raw content
+# streams - so it lives on this side of the IPC boundary and is handed over
+# as one bundle by verify_document_facts().
+#
+# Strictly read-only, like count_orphaned_marked_content(): no undo snapshot,
+# nothing written, safe to call every time Verify runs (which, since Verify
+# re-runs itself after each save, is often). The two *fixes* the panel offers
+# off the back of it - set_structure_tab_order() and set_pdf_ua_identifier() -
+# are separate, explicitly-invoked commands.
+
+
+def _pdf_ua_part(doc):
+    """The PDF/UA conformance level declared in the document's XMP metadata
+    (`pdfuaid:part`, "1" for PDF/UA-1) as a string, or None if there's no
+    identifier there.
+
+    Read through pikepdf's open_metadata() *without* entering it as a
+    context manager: only the `with` form writes the packet back, so merely
+    asking this question never dirties a document - the same reason
+    _get_doc_info() reads the trailer directly rather than through
+    Pdf.docinfo. A document with no /Metadata at all reads as empty here
+    rather than having one vivified for it."""
+    try:
+        meta = doc["pdf"].open_metadata()
+        part = meta.get("pdfuaid:part")
+    except Exception:
+        # A malformed or unparseable XMP packet isn't something a report
+        # should die on - it just means no identifier could be read, which
+        # is what the check is going to say anyway.
+        return None
+    return str(part) if part is not None else None
+
+
+def _pages_without_structure_tab_order(doc):
+    """1-based numbers of the pages whose /Tabs is not /S.
+
+    /Tabs says what order a viewer walks a page's annotations in when the
+    user tabs through them; PDF/UA requires /S ("follow the structure
+    tree"), and Acrobat's Full Check fails a page that leaves it unset or
+    sets it to /R (row order) or /C (column order). A page with no
+    annotations at all is still flagged, because Acrobat flags it too - the
+    entry is a property of the page, not of what happens to be on it, and a
+    later edit that adds a link shouldn't quietly reintroduce the
+    failure."""
+    return [
+        index + 1
+        for index, page in enumerate(doc["pdf"].pages)
+        if str(page.obj.get("/Tabs", "")) != "/S"
+    ]
+
+
+def _link_elements_by_annotation(doc):
+    """Which /Link struct element, if any, claims each link annotation:
+    ({annotation objgen: Link element node id}, [(annotation, node id), ...]).
+
+    A tagged link is an /OBJR leaf pointing at the annotation, sitting
+    directly under a struct element whose role is Link - that /OBJR is the
+    only thing connecting the annotation to the tag tree, so this walks the
+    registry's content-dict leaves rather than the page /Annots arrays.
+
+    The second return value carries the rare annotation that is a *direct*
+    (non-indirect) object and so has no objgen to key on; it's matched by
+    identity instead. In practice a link annotation is always indirect (the
+    page's /Annots and the /OBJR both reference it), but a hand-built PDF
+    can be otherwise, and falling through to "untagged" for one would be a
+    lie."""
+    by_objgen = {}
+    direct = []
+    for node_id, kind in doc["node_kind"].items():
+        if kind != "content-dict":
+            continue
+        obj = doc["elements"][node_id]
+        if not isinstance(obj, pikepdf.Dictionary) or str(obj.get("/Type")) != "/OBJR":
+            continue
+        parent_id = doc["parent_map"].get(node_id)
+        parent_obj = doc["elements"].get(parent_id) if parent_id is not None else None
+        if not isinstance(parent_obj, pikepdf.Dictionary) or _role_of(parent_obj) != "Link":
+            continue
+        target = obj.get("/Obj")
+        if not isinstance(target, (pikepdf.Dictionary, pikepdf.Stream)):
+            continue
+        if getattr(target, "is_indirect", False):
+            by_objgen.setdefault(target.objgen, parent_id)
+        else:
+            direct.append((target, parent_id))
+    return by_objgen, direct
+
+
+def _link_annotation_report(doc):
+    """Every /Link annotation in the document, paired with what the two link
+    checks need to know about it:
+
+        [{"page": 1-based, "nodeId": Link element id or None,
+          "described": bool}, ...]
+
+    "described" is the PDF/UA requirement that a link carry an alternate
+    description a screen reader can announce in place of the raw
+    destination. Either half satisfies it: the annotation's own /Contents
+    (what Acrobat writes, and what its own fix for the rule sets), or /Alt
+    on the Link struct element that claims it (what this editor's Tag
+    Properties panel writes). Checking only one of the two would fail links
+    the other tool had made perfectly accessible.
+
+    Widget, Popup and every other annotation subtype is out of scope:
+    "tagged annotations" is a broader rule than this app can act on, and
+    links are the subtype it can actually point the user at."""
+    by_objgen, direct = _link_elements_by_annotation(doc)
+    report = []
+    for page_index, page in enumerate(doc["pdf"].pages):
+        annots = page.obj.get("/Annots")
+        if not isinstance(annots, pikepdf.Array):
+            continue
+        for annot in annots:
+            if not isinstance(annot, pikepdf.Dictionary) or str(annot.get("/Subtype")) != "/Link":
+                continue
+            if getattr(annot, "is_indirect", False):
+                node_id = by_objgen.get(annot.objgen)
+            else:
+                node_id = next((nid for obj, nid in direct if _same_object(obj, annot)), None)
+            contents = _get_string(annot, "/Contents") or ""
+            alt = ""
+            if node_id is not None:
+                elem = doc["elements"].get(node_id)
+                if isinstance(elem, pikepdf.Dictionary):
+                    alt = _get_string(elem, "/Alt") or ""
+            report.append({
+                "page": page_index + 1,
+                "nodeId": node_id,
+                "described": bool(contents.strip() or alt.strip()),
+            })
+    return report
+
+
+# Text-showing operators, as opposed to the state-setting ones (Tf, Tm, Td,
+# BT/ET) that surround them. The same four _decode_leaf_content() decodes;
+# here we only need to know that one *happened*, not what it said.
+_TEXT_SHOWING_OPERATORS = frozenset(["Tj", "'", '"', "TJ"])
+
+# Byte values a text-showing operand can carry that put no visible mark on
+# the page: an ASCII space, the padding half of a 2-byte CID code, and the
+# few control bytes that reach a string operand in practice. Anything else
+# counts as a glyph. Deliberately a byte test rather than a decode:
+# _decode_leaf_content() refuses outright when a font can't be decoded with
+# certainty (correct, when the answer is about to be *written back* into the
+# content stream), whereas this only ever raises a warning - so it can answer
+# "is there text here at all" for every font, including the ones carrying no
+# /ToUnicode at all.
+_BLANK_TEXT_BYTES = frozenset(b" \t\r\n\x00")
+
+
+def _operand_shows_glyphs(instr):
+    """Whether a text-showing instruction actually paints something, i.e.
+    carries at least one string operand with a non-blank byte in it. A TJ's
+    operand is an array mixing strings with kerning numbers, so it's
+    unwrapped a level and the numbers ignored."""
+    def visible(pdf_string):
+        return any(byte not in _BLANK_TEXT_BYTES for byte in bytes(pdf_string))
+
+    for operand in instr.operands:
+        if isinstance(operand, pikepdf.String):
+            if visible(operand):
+                return True
+        elif isinstance(operand, pikepdf.Array):
+            if any(isinstance(el, pikepdf.String) and visible(el) for el in operand):
+                return True
+    return False
+
+
+def _figure_mcids_by_page(doc):
+    """{page_index: {mcid: figure node id}} over every Figure/Formula in the
+    tree - which marked content each one owns, keyed the way a content
+    stream names it."""
+    by_page = {}
+    for node_id, kind in doc["node_kind"].items():
+        if kind != "element":
+            continue
+        obj = doc["elements"][node_id]
+        if not isinstance(obj, pikepdf.Dictionary) or _role_of(obj) not in ("Figure", "Formula"):
+            continue
+        for leaf_id in _collect_leaf_ids(doc, node_id):
+            page_index = doc["node_pages"].get(leaf_id)
+            if page_index is None:
+                continue
+            leaf_obj = doc["elements"][leaf_id]
+            if doc["node_kind"].get(leaf_id) == "content-int":
+                mcid = int(leaf_obj)
+            elif isinstance(leaf_obj, pikepdf.Dictionary) and "/MCID" in leaf_obj:
+                try:
+                    mcid = int(leaf_obj["/MCID"])
+                except (TypeError, ValueError):
+                    continue
+            else:
+                continue  # an /OBJR (an image XObject or annotation) marks no MCID
+            by_page.setdefault(page_index, {}).setdefault(mcid, node_id)
+    return by_page
+
+
+def _figures_containing_text(doc):
+    """Node ids of the Figure/Formula tags whose own marked content paints
+    real text - live glyphs inside a tag that tells a screen reader "this is
+    a picture, read the alternate text instead", so the text itself is
+    unreachable unless the Alt happens to repeat it.
+
+    Reported as a warning rather than a failure, because the honest fix
+    depends on what the text says: a chart's axis labels are legitimately
+    covered by a good Alt, whereas a heading that happens to have been
+    tagged as a Figure needs tagging as text instead. The two look identical
+    from here.
+
+    Ownership is the *innermost* enclosing marked-content span, so text in a
+    nested span carrying its own MCID belongs to whatever tag claims that
+    MCID, not to the Figure around it."""
+    by_page = _figure_mcids_by_page(doc)
+    hits = []
+    seen = set()
+    for page_index, mcid_map in sorted(by_page.items()):
+        try:
+            instructions = pikepdf.parse_content_stream(doc["pdf"].pages[page_index])
+        except Exception:
+            # An unparseable content stream must not take the whole report
+            # down - every other check that reads one skips it the same way.
+            continue
+        open_spans = []  # innermost last; each entry an MCID, or None for a span carrying none
+        for instr in instructions:
+            op = str(instr.operator)
+            if op == "BDC":
+                mcid = None
+                if len(instr.operands) == 2 and isinstance(instr.operands[1], pikepdf.Dictionary):
+                    props = instr.operands[1]
+                    if "/MCID" in props:
+                        try:
+                            mcid = int(props["/MCID"])
+                        except (TypeError, ValueError):
+                            mcid = None
+                open_spans.append(mcid)
+            elif op == "BMC":
+                open_spans.append(None)
+            elif op == "EMC":
+                if open_spans:
+                    open_spans.pop()
+            elif op in _TEXT_SHOWING_OPERATORS and _operand_shows_glyphs(instr):
+                owner = next((m for m in reversed(open_spans) if m is not None), None)
+                node_id = mcid_map.get(owner) if owner is not None else None
+                if node_id is not None and node_id not in seen:
+                    seen.add(node_id)
+                    hits.append(node_id)
+    return hits
+
+
+def verify_document_facts(doc_id):
+    """Everything the Verify panel needs that the tag tree alone can't
+    answer, in one round trip - see this section's header. Read-only.
+
+    Returns {"pdfUaPart", "pageCount", "pagesWithoutStructureTabOrder",
+    "linkAnnotations", "figuresWithText"}. The last two need a struct tree
+    to compare against, so they come back empty (not missing) on an untagged
+    PDF, the same way count_orphaned_marked_content() reports zero rather
+    than raising."""
+    doc = documents[doc_id]
+    tagged = doc["elements"].get("root") is not None
+    return {
+        "pdfUaPart": _pdf_ua_part(doc),
+        "pageCount": len(doc["pdf"].pages),
+        "pagesWithoutStructureTabOrder": _pages_without_structure_tab_order(doc),
+        "linkAnnotations": _link_annotation_report(doc) if tagged else [],
+        "figuresWithText": _figures_containing_text(doc) if tagged else [],
+    }
+
+
+def set_structure_tab_order(doc_id):
+    """Sets /Tabs /S on every page that doesn't already have it - the Verify
+    panel's inline fix for the tab-order check.
+
+    Mechanical and lossless in a way almost nothing else in this file is:
+    /Tabs has exactly one PDF/UA-conformant value, the entry is per-page and
+    references nothing else, and overwriting an /R or /C with /S changes only
+    the order a viewer tabs between annotations. There's no document for
+    which the old value was the right answer and no content to interpret,
+    which is why this can be a one-click fix where "write a description for
+    this link" can only ever be something the report points at."""
+    doc = documents[doc_id]
+    pages = _pages_without_structure_tab_order(doc)
+    if not pages:
+        return {"pagesFixed": 0, **_undo_state(doc)}
+    _push_undo_snapshot(doc)
+    for page_number in pages:
+        doc["pdf"].pages[page_number - 1].obj["/Tabs"] = pikepdf.Name("/S")
+    return {"pagesFixed": len(pages), **_undo_state(doc)}
+
+
+def set_pdf_ua_identifier(doc_id):
+    """Writes the PDF/UA-1 identifier (`pdfuaid:part` = 1) into the
+    document's XMP metadata - the Verify panel's last action, offered only
+    once every other check passes.
+
+    This is a *claim*, not a fix: it asserts to a consumer that the file
+    conforms to PDF/UA-1, and nothing about writing it makes that true. Which
+    is exactly why the panel gates it behind a clean report, and why it's its
+    own command rather than something a repair pass does on the way past - a
+    document that fails a check and carries the identifier anyway is worse
+    off than one carrying neither, because now the claim is false.
+
+    pikepdf writes the packet (creating one if the document had no
+    /Metadata) on exiting the context manager, which is also when it syncs
+    /Info into XMP - the same round trip update_doc_info() makes for
+    Title/Author."""
+    doc = documents[doc_id]
+    _push_undo_snapshot(doc)
+    with doc["pdf"].open_metadata() as meta:
+        meta["pdfuaid:part"] = "1"
+    return {"pdfUaPart": _pdf_ua_part(doc), **_undo_state(doc)}
+
+
 def _reindex_pages(doc):
     """Rebuilds page_index_by_objgen against doc["pdf"]'s current page
     objects - qpdf renumbers objects on save/reload, so the mapping built at
@@ -4820,6 +5142,12 @@ def main():
                 result = repair_orphaned_marked_content(request["docId"])
             elif cmd == "count_orphaned_artifacts":
                 result = count_orphaned_marked_content(request["docId"])
+            elif cmd == "verify_document_facts":
+                result = verify_document_facts(request["docId"])
+            elif cmd == "set_structure_tab_order":
+                result = set_structure_tab_order(request["docId"])
+            elif cmd == "set_pdf_ua_identifier":
+                result = set_pdf_ua_identifier(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "get_leaf_text":

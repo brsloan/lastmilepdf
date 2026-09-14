@@ -134,6 +134,42 @@ export interface OrphanedContentCount {
   pageCount: number;
 }
 
+/** One /Link annotation, as `_link_annotation_report()` describes it. */
+export interface LinkAnnotationFact {
+  /** 1-based page the annotation sits on. */
+  page: number;
+  /** The Link struct element claiming it via /OBJR, or null if none does. */
+  nodeId: string | null;
+  /** Whether it carries an alternate description: annotation /Contents, or /Alt on that Link element. */
+  described: boolean;
+}
+
+/**
+ * `verify_document_facts()`'s result: the parts of the Verify report that
+ * can't be answered from the tag tree the renderer already holds. Read-only.
+ */
+export interface VerifyFacts {
+  /** `pdfuaid:part` from XMP ("1" for PDF/UA-1), or null if absent. */
+  pdfUaPart: string | null;
+  pageCount: number;
+  /** 1-based numbers of the pages whose /Tabs is not /S. */
+  pagesWithoutStructureTabOrder: number[];
+  /** Empty on an untagged PDF, which has no Link tags to compare against. */
+  linkAnnotations: LinkAnnotationFact[];
+  /** Node ids of Figure/Formula tags whose marked content paints real text. */
+  figuresWithText: string[];
+}
+
+/** `set_structure_tab_order()`'s result: how many pages it wrote /Tabs on. */
+export interface TabOrderResult extends UndoState {
+  pagesFixed: number;
+}
+
+/** `set_pdf_ua_identifier()`'s result: the identifier now in XMP. */
+export interface PdfUaIdentifierResult extends UndoState {
+  pdfUaPart: string | null;
+}
+
 /**
  * `convert_to_paragraph()`'s result. `reshaped` is false when every target
  * was simply relabelled to /P - no container flattened, no leaf wrapped -

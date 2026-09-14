@@ -32,6 +32,7 @@ Features:
 - Show AT Changes lets you highlight any differences between Actual Text and the OCR text so review your own edits
 - Smartifact automatically artifacts full-page figures at a click (for when auto-taggers generate figures for every page of a scanned document, a common nuisance)
 - Repair Orphaned Content finds marked content that's neither tagged nor a real PDF artifact - leftover from a deleted tag, or inserted by other software (e.g. hyphenation/kerning glue around wrapped URLs) - and converts it to a real artifact, so Acrobat's accessibility checker stops flagging it as untagged content
+- Verify runs the common PDF/UA and WCAG checks locally - tagging, title, language, per-page tab order, the PDF/UA identifier in XMP, heading order and an H1, empty tags, list-item Lbl/LBody pairing, table headers, link annotations that lack a Link tag or a description, alt text, figures that paint their own text, and orphaned marked content. Click an issue to jump to the tag. Three checks carry a one-click fix, including Set PDF/UA flag, which is only offered once every other check passes - it writes a claim of conformance, so it shouldn't be reachable while the report still says otherwise. The report re-runs itself after each save and puts the fail/pass count in the status bar
 
 What it is not for and currently can't do:
 - It can't run OCR
@@ -186,8 +187,10 @@ Two things are worth knowing before moving code between them:
   (Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
   Find/Replace, Fix All Actual Text (AI)). Every other trigger for the same
   action - a toolbar button, a Tools menu item, the Verify panel's inline
-  "Repair" button, or `scripts.js`'s Tools > Scripts… runner - calls the
+  fix buttons, or `scripts.js`'s Tools > Scripts… runner - calls the
   same function, so it behaves identically no matter which one fired it.
+  The Verify panel's two single-trigger fixes (Set tab order, Set PDF/UA
+  flag) live there too, so the panel never talks to `window.api` itself.
 
 ## Measuring glyphs (Select Content)
 

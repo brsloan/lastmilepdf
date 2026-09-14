@@ -1242,6 +1242,18 @@ ipcMain.handle('tags:count-orphaned-content', async (_event, { docId }) => {
   return callWorker('count_orphaned_artifacts', { docId });
 });
 
+ipcMain.handle('tags:verify-facts', async (_event, { docId }) => {
+  return callWorker('verify_document_facts', { docId });
+});
+
+ipcMain.handle('tags:set-tab-order', async (_event, { docId }) => {
+  return callWorker('set_structure_tab_order', { docId });
+});
+
+ipcMain.handle('tags:set-pdfua-flag', async (_event, { docId }) => {
+  return callWorker('set_pdf_ua_identifier', { docId });
+});
+
 ipcMain.handle('tags:delete-nodes', async (_event, { docId, nodeIds }) => {
   return callWorker('delete_nodes', { docId, nodeIds });
 });

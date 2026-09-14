@@ -9,6 +9,12 @@
 // here applies the mutation, updates `state`/the tree view/undo state, and
 // returns a status message; the caller decides where that message goes
 // (setStatus(), a dialog's own status line, or a script's step-by-step log).
+//
+// Two of them have exactly one trigger and live here anyway, because they
+// are the same shape and the Verify panel shouldn't be talking to
+// window.api directly: runSetStructureTabOrder() and
+// runSetPdfUaIdentifier(), the panel's inline fixes for the tab-order and
+// PDF/UA-identifier checks.
 
 import { hideAiBatchProgress, showAiBatchProgress, updateAiBatchProgressEstimate } from './ai-batch.js';
 import { closeDetails, refreshDetailsForSelection } from './details.js';
@@ -101,6 +107,41 @@ export async function runRepairOrphanedContent() {
   return result.repairedCount > 0
     ? `Repaired ${result.repairedCount} orphaned marked-content region${result.repairedCount === 1 ? '' : 's'}.`
     : 'No orphaned marked content found.';
+}
+
+/**
+ * Sets /Tabs /S on every page that lacks it, so a viewer tabs between a
+ * page's annotations in structure order - the Verify panel's inline fix on
+ * a failing "Tab order" check (see set_structure_tab_order() in
+ * tag_worker.py for why this one is safe to do in a single click).
+ *
+ * Touches no struct element, so unlike every other action here there's no
+ * rebuilt tree to adopt - just the undo state, which is also what marks the
+ * document dirty.
+ * @returns {Promise<string>}
+ */
+export async function runSetStructureTabOrder() {
+  const result = await window.api.setStructureTabOrder(state.docId);
+  applyUndoState(result);
+  return result.pagesFixed > 0
+    ? `Set tab order to document structure on ${result.pagesFixed} page${result.pagesFixed === 1 ? '' : 's'}.`
+    : 'Every page already uses document structure for tab order.';
+}
+
+/**
+ * Writes the PDF/UA-1 identifier into the document's XMP metadata - the
+ * Verify panel's last action, which it only offers once every other check
+ * passes. Deliberately not wired to a toolbar button or a script step: it
+ * asserts conformance rather than producing it, so the only place it should
+ * be reachable from is a report that has just come back clean.
+ * @returns {Promise<string>}
+ */
+export async function runSetPdfUaIdentifier() {
+  const result = await window.api.setPdfUaIdentifier(state.docId);
+  applyUndoState(result);
+  return result.pdfUaPart
+    ? `Marked the document as PDF/UA-${result.pdfUaPart}. Save to write it to the file.`
+    : 'Could not write the PDF/UA identifier.';
 }
 
 /**

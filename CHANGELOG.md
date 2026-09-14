@@ -30,6 +30,33 @@ they summarise each release rather than record every change as it landed.
   four are view filters only, like the existing ones - they don't change the
   document.
 
+- Eight more checks in **Verify**, covering ground Acrobat's Full Check
+  looks at and this one didn't: a **PDF/UA identifier** in the XMP metadata;
+  **tab order** set to document structure on every page; **link
+  annotations** that sit outside any Link tag, or carry no description
+  (either the annotation's own `/Contents` or `/Alt` on its Link tag counts);
+  an **H1** somewhere in the document; **headings that are empty**;
+  **figures that paint their own text**, which a screen reader can only
+  reach if the alt text repeats it; **tags holding no content at all**,
+  reported at the outermost one and using the same definition of "empty" as
+  the tag tree's Empty filter; and **Lbl/LBody pairing** inside every list
+  item. The two that are safely mechanical carry an inline fix button: **Set
+  tab order** writes `/Tabs /S` on the pages missing it, and **Repair** is
+  unchanged.
+- A **Set PDF/UA flag** button on the PDF/UA identifier check, which writes
+  the PDF/UA-1 identifier into the document's XMP - the last thing Acrobat
+  asks for once its own report comes back clean. It appears only when every
+  other check passes, because it asserts conformance rather than producing
+  it; while anything is still failing, the check says how many and why the
+  claim would be false. Warnings don't block it - the two that exist are
+  both cases the app can't tell apart from a correct document. Like any
+  other edit, it needs a save to reach the file.
+- Verify now re-runs itself after every save and puts the result in the
+  status bar beside the saved path ("2 checks failed, 19 passed"), so a
+  document's standing is visible without opening the panel. It runs after
+  the save has finished, so it never holds up closing the window, and it's
+  skipped for the background auto-save.
+
 ### Changed
 - Fix with AI now sends an image of the part of the page the tag's text was
   read from along with the text, so the AI corrects the OCR against the scan

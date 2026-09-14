@@ -13,6 +13,7 @@ import { updateRunScriptButtonState } from './scripts.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { verifyAfterSave } from './verify.js';
 import { loadPdfPreview, updatePageNavUI } from './viewer.js';
 import { stopWalking } from './walk.js';
 
@@ -144,6 +145,39 @@ export async function performOpen(filePath) {
   }
 }
 
+// Re-runs the accessibility report after a save and appends its fail/pass
+// count to the status line the save just wrote - a save is the moment the
+// file on disk is what a checker would see, so it's the natural point to
+// say whether that file would pass, without the user having to open Verify
+// to find out.
+//
+// Deliberately not awaited. performSave() is what the unsaved-changes prompt
+// calls on the way to closing the document or quitting the app, and the
+// report includes a content-stream scan of every page (see
+// buildOrphanedContentGroup() in verify.js) - awaiting it would put that
+// scan between the user clicking "Save" and the window actually closing.
+// The save is already complete and reported by the time this starts; the
+// count just lands a moment later.
+//
+// Which is also why it re-checks before writing: by the time it finishes,
+// the status line may have moved on to something the user is more
+// interested in (another save, an error, a document close). It only ever
+// replaces the exact message it was handed, on the same document.
+//
+// Deliberately *not* wired to the autosave tick below either: that same
+// whole-document scan is fine as the tail of something the user asked for,
+// and wrong as a thing that happens on a timer behind their work.
+function reportAccessibilityAfterSave(savedMessage) {
+  const docId = state.docId;
+  verifyAfterSave().then((summary) => {
+    if (!summary) return;
+    if (state.docId !== docId || el.statusBar.textContent !== savedMessage) return;
+    setStatus(`${savedMessage} — ${summary}`);
+  }).catch((err) => {
+    console.error('Could not report the accessibility check after saving', err);
+  });
+}
+
 // Guards performSave()/performSaveAs()/the autosave tick below from
 // overlapping - e.g. the autosave timer firing while a manual Save is still
 // writing, or while the Save As dialog is up (both are awaited spans during
@@ -168,6 +202,7 @@ export async function performSave() {
     await window.api.saveToPath(state.docId, state.savedFilePath);
     markDirty(false);
     setStatus(`Saved to ${state.savedFilePath}`);
+    reportAccessibilityAfterSave(`Saved to ${state.savedFilePath}`);
     return true;
   } catch (err) {
     reportError('Could not save PDF', err);
@@ -191,6 +226,7 @@ export async function performSaveAs() {
       setFileName(savedPath.split(/[\\/]/).pop());
     }
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
+    if (savedPath) reportAccessibilityAfterSave(`Saved to ${savedPath}`);
     return !!savedPath; // false when the user cancelled the dialog
   } catch (err) {
     reportError('Could not save PDF', err);

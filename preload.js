@@ -159,6 +159,31 @@ const api = {
   countOrphanedContent: (docId) =>
     ipcRenderer.invoke('tags:count-orphaned-content', { docId }),
   /**
+   * The Verify panel's document-level facts - XMP, page dictionaries,
+   * annotations and content streams - that the tag tree can't answer.
+   * Read-only: never dirties the document.
+   * @param {string} docId
+   * @returns {Promise<import('./types/domain').VerifyFacts>}
+   */
+  verifyDocumentFacts: (docId) =>
+    ipcRenderer.invoke('tags:verify-facts', { docId }),
+  /**
+   * Sets /Tabs /S on every page that lacks it - the Verify panel's inline
+   * fix for the tab-order check.
+   * @param {string} docId
+   * @returns {Promise<import('./types/domain').TabOrderResult>}
+   */
+  setStructureTabOrder: (docId) =>
+    ipcRenderer.invoke('tags:set-tab-order', { docId }),
+  /**
+   * Writes the PDF/UA-1 identifier into XMP - the Verify panel's final
+   * action, offered only once every other check passes.
+   * @param {string} docId
+   * @returns {Promise<import('./types/domain').PdfUaIdentifierResult>}
+   */
+  setPdfUaIdentifier: (docId) =>
+    ipcRenderer.invoke('tags:set-pdfua-flag', { docId }),
+  /**
    * @param {string} docId
    * @param {string[]} nodeIds
    * @returns {Promise<MutationResult>}

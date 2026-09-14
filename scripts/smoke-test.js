@@ -46,6 +46,14 @@ const STANDARD14_FIXTURE = 'test-standard14.pdf';
 // Rebuild with `python scripts/make-crosspage-fixture.py`.
 const CROSSPAGE_FIXTURE = 'test-crosspage-spans.pdf';
 
+// test-verify.pdf: the shapes the Verify panel's document-level checks look
+// for - a page with no /Tabs beside one that has it, link annotations that
+// are variously tagged/untagged and described/undescribed, and a Figure
+// painting live text. None of that exists in the main fixture, which was
+// built around editing operations rather than reporting. Rebuild with
+// `python scripts/make-verify-fixture.py`.
+const VERIFY_FIXTURE = 'test-verify.pdf';
+
 // --- talking to the worker -------------------------------------------------
 
 /**
@@ -1648,10 +1656,94 @@ async function crossPageTests(fixture) {
   }));
 }
 
+// --- verify (accessibility report) -----------------------------------------
+//
+// The document-level half of the Verify panel: XMP, page dictionaries,
+// /Annots and content streams, none of which the tag tree contains. The
+// tag-tree half of the report (empty tags, list-item pairing, the H1 rule)
+// is computed in the renderer from a tree this layer already covers, so it
+// isn't reachable from here - test-verify.pdf carries those shapes anyway,
+// so there's a document to point the panel at by hand.
+
+async function verifyTests(fixture) {
+  await test('reports the document-level facts the panel needs', () => withDoc(fixture, async (doc) => {
+    const facts = await worker.call('verify_document_facts', { docId: doc.docId });
+
+    assertEqual(facts.pdfUaPart, null, 'fixture should carry no PDF/UA identifier');
+    assertEqual(facts.pageCount, 2, 'wrong page count');
+    assertEqual(facts.pagesWithoutStructureTabOrder.join(','), '1',
+      'only page 1 leaves /Tabs unset, so only page 1 should be reported');
+
+    assertEqual(facts.linkAnnotations.length, 3, 'wrong number of link annotations found');
+    const tagged = facts.linkAnnotations.filter((link) => link.nodeId !== null);
+    assertEqual(tagged.length, 2, 'the two /OBJR-referenced links should resolve to a Link tag');
+    assertEqual(facts.linkAnnotations.filter((link) => link.described).length, 1,
+      'only the link carrying /Contents should count as described');
+
+    // A Figure that paints text, alongside no other Figure in the document -
+    // so this can't be passing by flagging every Figure it sees.
+    assertEqual(facts.figuresWithText.length, 1, 'wrong number of figures reported as containing text');
+    const figure = findById(doc.tree, facts.figuresWithText[0]);
+    assertEqual(figure && figure.role, 'Figure', 'the flagged node is not a Figure');
+  }));
+
+  await test('reading the facts does not dirty the document', () => withDoc(fixture, async (doc) => {
+    await worker.call('verify_document_facts', { docId: doc.docId });
+    // Nothing on the undo stack means nothing was snapshotted, which means
+    // nothing was written - the property the panel relies on to re-run this
+    // report after every save without touching the file.
+    const failure = await worker.call('undo', { docId: doc.docId }).then(() => null, (err) => err);
+    assert(failure, 'reading the verification facts left something to undo');
+  }));
+
+  await test('setting tab order fixes only the pages that lacked it', () => withDoc(fixture, async (doc) => {
+    const result = await worker.call('set_structure_tab_order', { docId: doc.docId });
+    assertEqual(result.pagesFixed, 1, 'page 2 already had /Tabs /S and should not have been counted');
+
+    await saveAndReopen(doc.docId, 'verify-tab-order', async (reopened) => {
+      const facts = await worker.call('verify_document_facts', { docId: reopened.docId });
+      assertEqual(facts.pagesWithoutStructureTabOrder.length, 0,
+        'the saved file still has a page without structure tab order');
+    });
+  }));
+
+  await test('setting the PDF/UA flag survives save and reopen', () => withDoc(fixture, async (doc) => {
+    const result = await worker.call('set_pdf_ua_identifier', { docId: doc.docId });
+    assertEqual(result.pdfUaPart, '1', 'the identifier was not written');
+
+    await saveAndReopen(doc.docId, 'verify-pdfua', async (reopened) => {
+      const facts = await worker.call('verify_document_facts', { docId: reopened.docId });
+      assertEqual(facts.pdfUaPart, '1', 'the saved file carries no PDF/UA identifier');
+      assertEqual(facts.linkAnnotations.length, 3, 'writing XMP disturbed the annotations');
+    });
+  }));
+}
+
+// The same check against the main fixture, which has five Figures and no
+// reason to think about accessibility reports at all - so it's the one that
+// would catch "flags everything" or "flags nothing" in a way a fixture built
+// for the check can't.
+async function figureTextTests(fixture) {
+  await test('only the figures that really paint text are reported', () => withDoc(fixture, async (doc) => {
+    const figures = allNodes(doc.tree).filter((n) => n.role === 'Figure' || n.role === 'Formula');
+    assert(figures.length > 1, 'fixture has too few figures for this to prove anything');
+
+    const facts = await worker.call('verify_document_facts', { docId: doc.docId });
+    const flagged = facts.figuresWithText;
+    assert(flagged.length > 0, 'no figure was reported as containing text');
+    assert(flagged.length < figures.length, 'every figure was reported - the check is not discriminating');
+    for (const id of flagged) {
+      const node = findById(doc.tree, id);
+      assert(node && (node.role === 'Figure' || node.role === 'Formula'),
+        `flagged node ${id} is not a Figure or Formula`);
+    }
+  }));
+}
+
 // --- main ------------------------------------------------------------------
 
 async function main() {
-  const missing = [...FIXTURES, STANDARD14_FIXTURE, CROSSPAGE_FIXTURE]
+  const missing = [...FIXTURES, STANDARD14_FIXTURE, CROSSPAGE_FIXTURE, VERIFY_FIXTURE]
     .filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missing.length) {
     console.error(`Missing fixture PDFs: ${missing.join(', ')}`);
@@ -1673,8 +1765,13 @@ async function main() {
       await editTests(fixture);
       await listAndTableTests(fixture);
       await bookmarkTests(fixture);
+      await figureTextTests(fixture);
       await errorTests(fixture);
     }
+
+    console.log(`
+${VERIFY_FIXTURE}`);
+    await verifyTests(VERIFY_FIXTURE);
 
     console.log(`
 ${STANDARD14_FIXTURE}`);

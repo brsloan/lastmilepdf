@@ -2493,3 +2493,14 @@ body.busy-cursor * {
   background: none;
   color: var(--text-dim);
 }
+
+/* An issue the tag tree doesn't contain - a link annotation no Link tag
+   claims - so, like the row above, there is nothing for a click to select.
+   Not italic: this one is a real issue being reported, not a summary of
+   ones that weren't. */
+.verify-instance-plain,
+.verify-instance-plain:hover {
+  cursor: default;
+  background: none;
+  color: var(--text-dim);
+}

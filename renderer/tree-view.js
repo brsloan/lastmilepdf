@@ -289,8 +289,15 @@ let emptyNodeIds = new Set();
  * isolable image object: those carry no /K at all by design (see
  * figure_from_rect() in tag_worker.py) and point at their region with a
  * bbox instead, so they're real tags rather than leftovers.
+ *
+ * Exported because the Verify panel asks the same question (see
+ * checkEmptyTags/checkEmptyHeadings in verify.js): the filter listing a tag
+ * the report calls fine, or the other way round, would be worse than either
+ * rule on its own.
+ *
+ * @returns {Set<string>}
  */
-function computeEmptyNodeIds() {
+export function computeEmptyNodeIds() {
   const ids = new Set();
   if (!state.tree) return ids;
   /** @returns {boolean} whether anything in `node`'s subtree, or `node` itself, is content */

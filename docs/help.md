@@ -106,7 +106,7 @@ Fix All Actual Text (AI)
 : Sends every tag's Actual Text to the configured AI provider together, in one batch (for document-wide consistency), and applies its suggested fixes. Afterward, step through the flagged rows in the tag tree to review each change — selecting one highlights the diff in the Actual Text field, with a **Revert** button to discard just that fix. Requires an AI provider API key (File > Settings > API Key…).
 
 Verify
-: Runs a set of common PDF accessibility checks (tagging, title, language, headings, lists, tables, alternate text, bookmarks, orphaned marked content) and opens the results in their own window. Click a listed issue to jump straight to the offending tag. The orphaned marked content check shows an inline **Repair** button when it finds something; clicking it runs the same fix as Tools > Repair Orphaned Content and re-checks everything afterward.
+: Runs a set of common PDF accessibility checks (tagging, title, language, tab order, PDF/UA identifier, headings, empty tags, lists, tables, links, alternate text, bookmarks, orphaned marked content) and opens the results in their own window. Click a listed issue to jump straight to the offending tag. Three checks offer an inline fix button: **Repair** on orphaned marked content (the same fix as Tools > Repair Orphaned Content), **Set tab order** on the tab-order check, and **Set PDF/UA flag** on the PDF/UA identifier — that last one appears only once every other check passes, since it writes a claim of conformance rather than fixing anything. Each re-checks everything afterward. The report also re-runs itself after every save, putting the fail/pass count in the status bar.
 
 ## Tools menu
 
