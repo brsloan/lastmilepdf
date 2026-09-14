@@ -17,6 +17,8 @@ Click a row in the Tag Tree to select it and jump the preview to it; the matchin
 
 Drag a row onto another to reorder it or move it under a new parent; Ctrl/Cmd+↑/↓ moves the selection earlier/later among its siblings without touching the mouse.
 
+A dotted red line marks where one page of the PDF ends and the next begins — between two rows when the break falls between tags, and straight through a row whose own content carries over onto the next page. It passes behind the tags rather than over them. Page breaks are where reading order most often goes wrong, so these are worth reading carefully.
+
 The dropdown above the tree filters it to **Figures**, **Headings**, or **Table** tags, or back to **All**. This is a view filter only — it doesn't change the document.
 
 When the tree is filtered to Headings, ←/→ step the heading level.

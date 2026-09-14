@@ -135,14 +135,23 @@ for (const { name, tokens } of THEMES.slice(1)) {
 }
 
 // ---- 2. every var() reference must resolve --------------------------------
-const declared = new Set([...Object.keys(dark), ...Object.keys(light)]);
+// Every custom property the sheet declares, not just the two theme blocks'.
+// Some are per-element locals rather than palette entries - --row-bg is set
+// on a tag-tree row by whichever state rule wins and read back by another
+// rule on that same row - and those belong to no theme, so they are not part
+// of the parity check above. A var() naming one still resolves, though,
+// which is the only thing this section asks.
+const declared = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
 const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
 const undeclared = [...used].filter((u) => !declared.has(u));
 if (undeclared.length) fail(`used but never declared: ${undeclared.join(', ')}`);
 console.log(undeclared.length
   ? '  ** some var() references do not resolve'
   : `  all ${used.size} var() references resolve`);
-const unused = [...declared].filter((d) => !used.has(d) && d !== '--na-text');
+// Palette tokens only: a local declared and read inside one rule block is
+// not something anyone needs told about.
+const unused = [...new Set([...Object.keys(dark), ...Object.keys(light)])]
+  .filter((d) => !used.has(d) && d !== '--na-text');
 if (unused.length) console.log(`  note: declared but unused - ${unused.join(', ')}`);
 
 // Stop here if the palette itself is malformed. Measuring contrast against a
@@ -189,6 +198,13 @@ for (const { name, tokens: t, text: min } of THEMES) {
   require_(name, 'row hover fill', ratio(t['--panel-alt'], t['--bg']), 1.05, 'panel-alt vs --bg');
   require_(name, 'multi-select fill', ratio(multiSelected, t['--bg']), 1.15, 'accent 16% vs --bg');
   require_(name, 'text on multi-select', ratio(t['--text'], multiSelected), min);
+
+  // The tag tree's page-break rule is a meaningful graphic (it is the only
+  // thing saying where the paper breaks), so 1.4.11's 3:1 applies - on every
+  // ground a row can wear, the multi-select tint included.
+  require_(name, 'page-break rule',
+    Math.min(...GROUNDS.map((g) => ratio(t['--page-break-rule'], t[g])), ratio(t['--page-break-rule'], multiSelected)),
+    3, 'tag-tree page boundary, 1.4.11');
   // Must differ from the panel by luminance and not by hue alone - the tint
   // IS the signal that AI rewrote this text, so 1.4.1 applies to it.
   require_(name, 'ai review tint', ratio(t['--ai-highlight-tint'], t['--panel-alt']), 1.10,

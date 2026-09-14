@@ -122,6 +122,13 @@
   --cat-inline: #9bb0c9;
   --cat-leaf: #9096a1;
 
+  /* The dotted rule the tag tree draws where one PDF page ends and the next
+     begins (markPageBreaks() in tree-view.js). A meaningful graphic, not
+     decoration - it is the only thing in the tree that says where the paper
+     breaks - so 1.4.11's 3:1 applies, measured against every row ground it
+     can land on: --bg, the hover/selected fill, and the multi-select tint. */
+  --page-break-rule: #ff6b6b;
+
   --warn-bg: #3a2c1c;
   --warn-border: #6b4a24;
   --warn-text: #e3b578;
@@ -195,6 +202,8 @@
   --cat-figure: #8c0f36;
   --cat-inline: #26425e;
   --cat-leaf: #3d434f;
+
+  --page-break-rule: #b3001b;
 
   --warn-bg: #fff4e0;
   --warn-border: #8a5000;
@@ -704,6 +713,15 @@ body.proofread-mode .tree-pane {
   border-radius: var(--radius);
   cursor: default;
   border: 1px solid transparent;
+  /* Every row state below sets --row-bg rather than `background` directly,
+     and this is the only rule that paints it. That indirection is what lets
+     the page-break rule (further down) stamp a row's own ground back over
+     the dotted line wherever the chip and text sit, whatever state the row
+     happens to be in - a chip on a selected row has to punch out
+     --panel-alt, not --bg. Stated as a color rather than the shorthand so
+     the page-break background-image is not reset out from under it. */
+  --row-bg: var(--bg);
+  background-color: var(--row-bg);
 }
 
 .tree-row.selectable {
@@ -715,27 +733,30 @@ body.proofread-mode .tree-pane {
 }
 
 .tree-row:hover {
-  background: var(--panel-alt);
+  --row-bg: var(--panel-alt);
 }
 
 .tree-row.selected {
-  background: var(--panel-alt);
+  --row-bg: var(--panel-alt);
   border-color: var(--accent);
 }
 
 /* Other members of a multi-tag selection (shift/ctrl+click) - a lighter
-   tint than .selected so the active/focused tag still stands out. */
+   tint than .selected so the active/focused tag still stands out. Mixed
+   into --bg rather than into `transparent`: the on-screen color is the same
+   (nothing between a row and the window sets a background), but --row-bg
+   has to be an opaque color for the page-break rule below to paint over. */
 .tree-row.multi-selected {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  --row-bg: color-mix(in srgb, var(--accent) 16%, var(--bg));
 }
 
 .tree-row.multi-selected.selected {
-  background: var(--panel-alt);
+  --row-bg: var(--panel-alt);
 }
 
 .tree-row.drag-over-into {
   border-color: var(--accent-strong);
-  background: var(--panel-alt);
+  --row-bg: var(--panel-alt);
 }
 
 /* Drop-between indicator: a thin line at the row's top/bottom edge showing
@@ -759,6 +780,57 @@ body.proofread-mode .tree-pane {
 
 .tree-row.drag-over-before::before { top: -1px; }
 .tree-row.drag-over-after::after { bottom: -1px; }
+
+/* --- page breaks in the tag tree ----------------------------------------
+   A dotted red rule showing where one PDF page ends and the next begins:
+   along a row's top edge when the break falls between two tags, and across
+   the middle of a row whose own content straddles one. markPageBreaks() in
+   tree-view.js decides which rows get which.
+
+   Drawn as the row's own background-image rather than a pseudo-element for
+   two reasons. The row's ::before and ::after are already spoken for by the
+   drop-between indicator above, and a background is painted *underneath*
+   the row's child elements for free - which is the whole requirement here:
+   the rule has to pass behind the tag chip and the text preview without
+   crossing a single glyph. The children then stamp the row's own ground
+   back over it (--row-bg, plus a 2px halo so the dots don't crowd a chip's
+   border), leaving the rule showing only in the empty parts of the row. */
+.tree-row.page-break-before,
+.tree-row.page-break-through {
+  --page-break-dots: repeating-linear-gradient(to right,
+    var(--page-break-rule) 0 2px, transparent 2px 5px);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  /* border-box, so "top" means the row's real top edge rather than one
+     pixel inside its (transparent) border. */
+  background-origin: border-box;
+}
+
+.tree-row.page-break-before {
+  background-image: var(--page-break-dots);
+  background-position: 0 0;
+}
+
+.tree-row.page-break-through {
+  background-image: var(--page-break-dots);
+  background-position: 0 50%;
+}
+
+/* A tag can do both at once - start on a new page and run off the end of
+   that one - so the two rules are separate background layers. */
+.tree-row.page-break-before.page-break-through {
+  background-image: var(--page-break-dots), var(--page-break-dots);
+  background-position: 0 0, 0 50%;
+}
+
+/* .visually-hidden is excluded because it is the break's own screen-reader
+   text (appendPageBreakNote()): a 1px absolutely-positioned box, which a
+   halo would turn into a visible blot sitting on the line. */
+.tree-row.page-break-before > *:not(.visually-hidden),
+.tree-row.page-break-through > *:not(.visually-hidden) {
+  background-color: var(--row-bg);
+  box-shadow: 0 0 0 2px var(--row-bg);
+}
 
 .tree-toggle {
   display: inline-flex;

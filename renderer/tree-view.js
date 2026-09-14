@@ -103,11 +103,120 @@ function applyRovingTabIndex(hadFocus) {
   if (hadFocus) active.focus({ preventScroll: true });
 }
 
+// --- page breaks ---------------------------------------------------------
+//
+// A tag tree says nothing about paper: the structure is one continuous
+// outline however many pages it is printed across. But where the pages
+// actually break is exactly where reading order tends to go wrong - a
+// paragraph carried over a boundary is the shape most often tagged as two
+// unrelated tags, or as two tags in the wrong order - so the tree draws the
+// boundaries in, as a dotted red rule between the two rows a break falls
+// between, and across the middle of a row whose own content straddles one.
+//
+// The pages come from the content leaves, never from the elements. Every
+// struct element carries a /Pg, but it is inheritable (see _walk() in
+// tag_worker.py), so an element's own `page` is only the page its first
+// content happens to start on and says nothing about where that content
+// ends. The leaves underneath it are what actually know.
+
+/**
+ * Memo for pageRangeOf(), one render pass long. Node ids are reassigned
+ * whenever the worker rebuilds the tree (see pruneStaleAiProposals), so
+ * this is replaced at the top of renderTree() rather than kept across
+ * passes.
+ * @type {Map<string, {first: number, last: number} | null>}
+ */
+let pageRangeCache = new Map();
+
+/**
+ * The span of pages `node`'s content covers, as 0-based inclusive
+ * `{ first, last }` - or null for a tag with nothing under it at all.
+ * Null rather than the tag's inherited page on purpose: an empty Div would
+ * otherwise claim whichever page its nearest tagged ancestor started on,
+ * and markPageBreaks() steps over it instead.
+ * @param {import('../types/domain').TagNode} node
+ * @returns {{first: number, last: number} | null}
+ */
+function pageRangeOf(node) {
+  const memo = pageRangeCache.get(node.id);
+  if (memo !== undefined) return memo;
+  /** @type {{first: number, last: number} | null} */
+  let range = null;
+  const add = (/** @type {number | null | undefined} */ page) => {
+    if (typeof page !== 'number') return;
+    range = range
+      ? { first: Math.min(range.first, page), last: Math.max(range.last, page) }
+      : { first: page, last: page };
+  };
+  if (node.children && node.children.length > 0) {
+    for (const child of node.children) {
+      const childRange = pageRangeOf(child);
+      if (childRange) {
+        add(childRange.first);
+        add(childRange.last);
+      }
+    }
+  } else {
+    add(node.page);
+  }
+  pageRangeCache.set(node.id, range);
+  return range;
+}
+
+// The rule is a graphic, so it needs a text equivalent for anyone not
+// looking at it - appended to the row rather than placed before the chip so
+// the tag still reads first and the break reads as an aside about it.
+function appendPageBreakNote(row, text) {
+  const note = document.createElement('span');
+  note.className = 'visually-hidden';
+  note.textContent = text;
+  row.appendChild(note);
+}
+
+/**
+ * Flags the rows a page boundary falls on, in DOM order - which is document
+ * order in all three render paths (full tree, dropdown filter, Proofread),
+ * so one pass after the rows are built covers all of them rather than each
+ * path having to work it out for itself.
+ *
+ * `cursor` is the furthest page anything above has reached. A row whose
+ * content starts past it means a boundary fell in the gap above that row;
+ * a row that also *ends* past its own start straddles one itself. The
+ * second test is only applied to a row with no visible children, because an
+ * expanded container's boundary belongs to whichever child actually spans
+ * it - marking the container as well would draw the same break twice.
+ */
+function markPageBreaks() {
+  const rows = /** @type {HTMLElement[]} */ (
+    Array.from(el.tagTreeContent.querySelectorAll('.tree-row[data-node-id]')));
+  let cursor = -1;
+  for (const row of rows) {
+    const entry = state.nodesById.get(row.dataset.nodeId || '');
+    const range = entry ? pageRangeOf(entry.node) : null;
+    if (!range) continue;
+    if (cursor >= 0 && range.first > cursor) {
+      row.classList.add('page-break-before');
+      appendPageBreakNote(row, `page ${range.first + 1} starts here`);
+    }
+    cursor = Math.max(cursor, range.first);
+    const expanded = !!row.parentElement?.querySelector(':scope > .tree-children');
+    if (expanded) continue;
+    if (range.last > range.first) {
+      row.classList.add('page-break-through');
+      appendPageBreakNote(row, range.last - range.first === 1
+        ? `page ${range.last + 1} starts inside this tag`
+        : `pages ${range.first + 2} to ${range.last + 1} start inside this tag`);
+    }
+    cursor = Math.max(cursor, range.last);
+  }
+}
+
 export function renderTree() {
   const hadFocus = el.tagTree.contains(document.activeElement);
   el.tagTreeContent.innerHTML = '';
   descendantAtChangeIds = computeDescendantAtChangeIds();
   descendantAiProposalIds = computeDescendantAiProposalIds();
+  pageRangeCache = new Map();
   if (!state.tree) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
@@ -131,6 +240,7 @@ export function renderTree() {
   const ul = createTreeRootUl();
   ul.appendChild(renderTreeNode(state.tree));
   el.tagTreeContent.appendChild(ul);
+  markPageBreaks();
   applyRovingTabIndex(hadFocus);
 }
 
@@ -169,6 +279,7 @@ function renderFilteredTree(hadFocus) {
     ul.appendChild(nested ? renderTreeNode(node) : renderFilteredRow(node));
   }
   el.tagTreeContent.appendChild(ul);
+  markPageBreaks();
   applyRovingTabIndex(hadFocus);
 }
 
@@ -268,6 +379,7 @@ function renderProofreadTree(hadFocus) {
   const ul = createTreeRootUl();
   for (const node of matches) ul.appendChild(renderFilteredRow(node));
   el.tagTreeContent.appendChild(ul);
+  markPageBreaks();
   applyRovingTabIndex(hadFocus);
 }
 

@@ -10,6 +10,12 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Added
+- The tag tree now shows where the PDF's pages break: a dotted red line
+  between the two tags a break falls between, and through the middle of a tag
+  whose own content carries over onto the next page. The line is drawn behind
+  the tags, so it never covers a role or a text preview.
+
 ### Fixed
 - Pressing `P` on several content elements at once now leaves the paragraphs
   it made selected. It used to hand back a partial selection of whichever
