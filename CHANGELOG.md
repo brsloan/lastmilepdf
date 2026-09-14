@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-14
+
 ### Added
 - In Proofread mode, the highlighted changes in the Actual Text field are now
   mirrored on the page: while an AI fix or a Show AT Changes flag is showing
@@ -21,6 +23,10 @@ they summarise each release rather than record every change as it landed.
   between the two tags a break falls between, and through the middle of a tag
   whose own content carries over onto the next page. The line is drawn behind
   the tags, so it never covers a role or a text preview.
+
+### Changed
+- In the tag properties panel, Fix with AI now comes before Pull Content,
+  which also puts Pull Content - the rare start-over - last in the tab order.
 
 ### Fixed
 - Pressing `P` on several content elements at once now leaves the paragraphs
@@ -36,6 +42,13 @@ they summarise each release rather than record every change as it landed.
   where their `/Pg` is written - the case that blocked joining paragraphs
   holding `Sub` tags. Joining across a page break works too: the moved
   content now carries its own page instead of being rejected.
+- The text cursor no longer vanishes while it sits inside a highlighted word
+  in the Actual Text field. The highlight layer was painting over the caret;
+  the layers are now the other way round.
+- Pull Content and Fix with AI no longer react to the pointer outside their
+  own buttons. The whole Actual Text field was acting as Pull Content's
+  label, so hovering beside the field's caption highlighted the button, and
+  clicking there ran it.
 
 ## [0.4.3] - 2026-09-11
 
@@ -141,7 +154,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/brsloan/lastmilepdf/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/brsloan/lastmilepdf/compare/v0.4.0...v0.4.1
