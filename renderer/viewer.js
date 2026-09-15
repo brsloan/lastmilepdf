@@ -322,6 +322,16 @@ export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
     return;
   }
 
+  // The Document root stands for the whole file, so its descendants cover
+  // every tagged thing on the page - boxing all of that would just tint the
+  // page rather than point at anything. It's also what a freshly opened
+  // document starts on, so the first sight of a page should be the page
+  // itself. Nothing to point at, so point at nothing.
+  if (nodeId === 'root' || nodeId === state.hiddenDocumentId) {
+    clearHighlight();
+    return;
+  }
+
   // With a multi-tag selection, highlight every member (not just the active
   // one) - one box per tag, the active tag's box styled like a single
   // selection and the rest tinted like .tree-row.multi-selected.

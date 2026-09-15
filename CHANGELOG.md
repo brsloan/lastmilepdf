@@ -166,6 +166,13 @@ they summarise each release rather than record every change as it landed.
   that survived, so Page Up/Down carries on reading. The Artifacts tab is
   hidden while proofreading - an artifact has no Actual Text to read.
 
+### Fixed
+- Selecting the Document root no longer outlines everything on the page. The
+  root stands for the whole file, so highlighting it boxed every tagged thing
+  in the preview at once - which said nothing about where anything was, and
+  was the first thing a newly opened document showed, since that is the tag it
+  lands on.
+
 ## [0.5.0] - 2026-09-14
 
 ### Added
