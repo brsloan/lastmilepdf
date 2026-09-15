@@ -75,10 +75,13 @@ export async function setProofreadMode(enabled) {
 // The mode steps from the selected row to its neighbor (see
 // findProofreadNeighborRow below), so a filter that takes the selected tag
 // off the list would leave Page Up/Down with nothing to step from. Landing
-// on the first row that survived, Actual Text ready to read, is the same
-// place turning the mode on lands. A selection the filter kept stays put and
-// is just re-levelled with the Actual Text field, since the re-render reset
-// the tree's scroll position under it.
+// on the first row that survived puts the caret at the start of its Actual
+// Text, ready to read - the same place stepping forward with Page Down
+// lands, and deliberately NOT the select-all that turning the mode on uses:
+// changing the filter is a navigation step, so the next keystroke must not
+// wipe out the tag's text. A selection the filter kept stays put and is just
+// re-levelled with the Actual Text field, since the re-render reset the
+// tree's scroll position under it.
 export async function relandProofreadAfterFilterChange() {
   if (!state.proofreadMode) return;
   const rows = selectableRows();
@@ -94,7 +97,7 @@ export async function relandProofreadAfterFilterChange() {
   if (!state.nodesById.has(targetId)) return;
   selectNode(targetId);
   el.fieldActualText.focus();
-  el.fieldActualText.select();
+  el.fieldActualText.setSelectionRange(0, 0);
 }
 
 // Next/previous selectable row that's an actual tag - the same 'element'-only
