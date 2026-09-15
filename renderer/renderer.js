@@ -1335,7 +1335,7 @@ const AI_PROVIDER_OPTIONS = [
   { id: 'mistral', label: 'Mistral', kind: 'preset', baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-large-latest' },
   { id: 'openai', label: 'OpenAI', kind: 'preset', baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5.1' },
   { id: 'openrouter', label: 'OpenRouter', kind: 'preset', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', model: 'openrouter/auto' },
-  { id: 'purdue-genai', label: 'Purdue GenAI Studio', kind: 'preset', baseUrl: 'https://genai.rcac.purdue.edu/api/chat/completions', model: 'llama4:latest' },
+  { id: 'purdue-genai', label: 'Purdue GenAI Studio', kind: 'preset', baseUrl: 'https://genai.rcac.purdue.edu/api/chat/completions', model: 'gemma4:26b-a4b' },
 ];
 
 for (const option of AI_PROVIDER_OPTIONS) {
