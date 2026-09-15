@@ -1970,6 +1970,138 @@ ipcMain.handle('ai:describe-for-alt-text', async (_event, { images, role }) => {
   }
 });
 
+// Lays out the table under a Select Content grid: the renderer sends one
+// image of the box and the words the text layer places in it, each with an
+// id and its position in the image, and gets back the table as rows of
+// cells naming those words (see tryTableGridWithAi() in
+// renderer/table-grid.js). The model is asked for a reading of the table -
+// which words belong together, what spans, what is a header - and not for
+// divider positions: it reads a picture far better than it measures one,
+// and the renderer derives the dividers from the words' own boxes
+// (gridFromProposal() in renderer/table-seed.js), which it can check and
+// the user can see. Like alt text, the image is the whole point, so a
+// provider that won't take one is an error rather than a text-only retry.
+const TableLayoutSchema = z.object({
+  rows: z.array(z.object({
+    cells: z.array(z.object({
+      text: z.string(),
+      words: z.array(z.string()),
+      colSpan: z.number(),
+      rowSpan: z.number(),
+      header: z.boolean(),
+    })),
+  })),
+});
+
+// Deliberately generous: a dense scanned table of a few hundred words is the
+// normal case, and the renderer refuses a selection past this before asking.
+const TABLE_LAYOUT_MAX_WORDS = 2500;
+
+const TABLE_LAYOUT_SYSTEM_PROMPT = `You read the layout of a table from a scanned page, for a tool that tags PDFs for screen readers.
+
+You will be given an image of the table, cropped from the page, and a JSON list of the words the page's text layer places in that region. Each word has an id and its position in the image as x, y, w, h in pixels from the top-left corner. The words are in reading order and their text may carry OCR errors; the image is the truth about where the cells are.
+
+Return the table as rows of cells in reading order, top row first, left to right within a row. Each cell has:
+- "text": the cell's text as it reads in the image ("" for an empty cell);
+- "words": the ids of the words that belong to the cell, in reading order ([] for an empty cell, or for a cell whose words are missing from the list);
+- "colSpan" and "rowSpan": how many columns and rows the cell covers (1 for an ordinary cell);
+- "header": true for a header cell - a column heading or a row heading - and false for a data cell.
+
+Rules:
+- Every row must add up to the same width, counting the columns that cells spanning down from earlier rows occupy.
+- A cell that spans several rows appears only in the first row it covers; a cell that spans several columns appears once, with its colSpan.
+- Include empty cells, so that every row has the full width.
+- A cell whose text wraps onto several lines is one cell, not one per line.
+- Use each word id at most once. Leave out words that are not part of the table, such as a caption or a footnote.
+- Do not invent text that is not in the image, and do not correct the words' text - the ids are what matter.`;
+
+// Appended only on the custom-provider path, which has no structured-output
+// enforcement (see customChatCompletion()) and needs the shape spelled out.
+const TABLE_LAYOUT_JSON_INSTRUCTION = `Respond with only a single JSON object of the exact form {"rows":[{"cells":[{"text":"...","words":["w1","w2"],"colSpan":1,"rowSpan":1,"header":true}]}]} - no markdown code fences, no explanation, no other text before or after the JSON.`;
+
+/**
+ * @param {import('./types/domain').PageCrop} image
+ * @param {import('./types/domain').TableLayoutWord[]} words
+ * @returns {Promise<import('./types/domain').TableLayoutProposal>}
+ */
+async function layoutTableWithAi(image, words) {
+  const payload = `Words in the image:\n${JSON.stringify(words)}`;
+  const providerId = getAiProvider();
+  if (providerId !== 'anthropic') {
+    const { apiKey, baseUrl, model } = requireCustomProviderConfig(providerId);
+    const content = await customChatCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      system: `${TABLE_LAYOUT_SYSTEM_PROMPT}\n\n${TABLE_LAYOUT_JSON_INSTRUCTION}`,
+      prompt: payload,
+      jsonMode: true,
+      maxTokens: 16000,
+      images: [image],
+    });
+    let parsed;
+    try {
+      parsed = parseJsonReply(content);
+    } catch (err) {
+      throw new Error(`The custom AI endpoint's reply could not be read as a table: ${err.message}`);
+    }
+    const validation = TableLayoutSchema.safeParse(parsed);
+    if (!validation.success) {
+      throw new Error("The custom AI endpoint's reply did not match the expected {rows: [{cells: [...]}]} shape.");
+    }
+    return validation.data;
+  }
+
+  const { apiKey, baseUrl, model } = getAnthropicClientConfig();
+  const client = new Anthropic({ apiKey, baseURL: baseUrl });
+  const response = await client.messages.parse({
+    model,
+    max_tokens: 16000,
+    output_config: { effort: 'medium', format: zodOutputFormat(TableLayoutSchema) },
+    system: TABLE_LAYOUT_SYSTEM_PROMPT,
+    // The image ahead of the text, as the other vision handlers order it.
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: /** @type {const} */ ('image'),
+          source: { type: /** @type {const} */ ('base64'), media_type: image.mediaType, data: image.data },
+        },
+        { type: /** @type {const} */ ('text'), text: payload },
+      ],
+    }],
+  });
+  if (!response.parsed_output) {
+    throw new Error('The AI did not return a table layout.');
+  }
+  return response.parsed_output;
+}
+
+ipcMain.handle('ai:layout-table', async (_event, { image, words }) => {
+  const [crop] = sanitizePageCrops([image]);
+  if (!crop) {
+    throw new Error('There is no image of the table to send.');
+  }
+  if (!Array.isArray(words) || words.length === 0) {
+    throw new Error('There are no words in the grid to send.');
+  }
+  if (words.length > TABLE_LAYOUT_MAX_WORDS) {
+    throw new Error('This selection has too many words to send - draw the table in parts.');
+  }
+  const cleanWords = words.map((w) => ({
+    id: String(w.id), text: String(w.text),
+    x: Number(w.x) || 0, y: Number(w.y) || 0, w: Number(w.w) || 0, h: Number(w.h) || 0,
+  }));
+  try {
+    return await layoutTableWithAi(crop, cleanWords);
+  } catch (err) {
+    if (imageRejected(err)) {
+      throw new Error('The AI provider did not accept the image. Try with AI needs a provider and model that can read images - check File > Settings.');
+    }
+    throw friendlyProviderError(err);
+  }
+});
+
 // Fixes every tag's Actual Text in one request instead of one at a time, so
 // the model can cross-reference the whole document - the same proper noun,
 // abbreviation, or technical term gets fixed the same way everywhere it

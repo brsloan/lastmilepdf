@@ -276,6 +276,152 @@ async function main() {
     assertEqual(words.slice(0, 2).map((w) => w.text).join('|'), 'ab|cd', 'texts');
   });
 
+  // --- gridFromProposal: the AI's reading turned into dividers ------------------
+
+  // Three plain rows: words w1-w4 on row 0, w5-w8 on row 1, w9-w12 on row 2.
+  const PROPOSAL_HITS = [plainRow(0), plainRow(20), plainRow(40)];
+  const PROPOSAL_BOX = { ...BOX, height: 60 };
+  const PROPOSAL_WORDS = seed.wordsInGrid(PROPOSAL_HITS, PROPOSAL_BOX);
+  const PROPOSAL_SEED = seed.seedGrid(PROPOSAL_HITS, PROPOSAL_BOX);
+
+  const cell = (text, words, extra = {}) => ({ text, words, colSpan: 1, rowSpan: 1, header: false, ...extra });
+  // Row r of the plain fixture as the AI would return it: one cell per word.
+  const plainProposalRow = (r, extra = {}) => ({
+    cells: ['Alpha', 'Beta', 'Gamma', 'Delta'].map((text, c) => cell(text, [`w${r * 4 + c + 1}`], extra)),
+  });
+  const cellAt = (result, row, col) => result.cells.find((c) => c.row === row && c.col === col);
+
+  await test('a clean proposal puts the dividers at the gap centres and keeps the roles', () => {
+    const proposal = { rows: [plainProposalRow(0, { header: true }), plainProposalRow(1), plainProposalRow(2)] };
+    const result = seed.gridFromProposal(proposal, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertNear(result.columns, COLUMN_CENTRES, 0.01, 'columns');
+    assertNear(result.rows, [15, 35], 0.01, 'rows');
+    assertEqual(result.cells.length, 12, 'cell count');
+    assertEqual(cellAt(result, 0, 0).role, 'TH', 'header row role');
+    assertEqual(cellAt(result, 1, 0).role, 'TD', 'data row role');
+    assertEqual(result.conflicts, 0, 'conflicts');
+    assertEqual(result.misfiled, 0, 'misfiled');
+    assertEqual(result.rebuilt, false, 'rebuilt');
+  });
+
+  await test('a header spanning two columns is one cell, and the dividers come from the rows beneath', () => {
+    const proposal = {
+      rows: [
+        { cells: [cell('Alpha', ['w1'], { header: true }), cell('Beta Gamma', ['w2', 'w3'], { header: true, colSpan: 2 }), cell('Delta', ['w4'], { header: true })] },
+        plainProposalRow(1),
+        plainProposalRow(2),
+      ],
+    };
+    const result = seed.gridFromProposal(proposal, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertNear(result.columns, COLUMN_CENTRES, 0.01, 'columns');
+    assertEqual(result.cells.length, 11, 'cell count');
+    const spanning = cellAt(result, 0, 1);
+    assertEqual(spanning.colSpan, 2, 'colSpan');
+    assertEqual(spanning.role, 'TH', 'role');
+    assertEqual(cellAt(result, 0, 2), undefined, 'no cell under the span');
+  });
+
+  await test('a cell spanning two rows is one cell, and the row dividers come from the rest', () => {
+    const proposal = {
+      rows: [
+        { cells: [cell('Alpha Alpha', ['w1', 'w5'], { rowSpan: 2 }), cell('Beta', ['w2']), cell('Gamma', ['w3']), cell('Delta', ['w4'])] },
+        { cells: [cell('Beta', ['w6']), cell('Gamma', ['w7']), cell('Delta', ['w8'])] },
+        plainProposalRow(2),
+      ],
+    };
+    const result = seed.gridFromProposal(proposal, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertNear(result.rows, [15, 35], 0.01, 'rows');
+    assertEqual(result.cells.length, 11, 'cell count');
+    assertEqual(cellAt(result, 0, 0).rowSpan, 2, 'rowSpan');
+    assertEqual(cellAt(result, 1, 0), undefined, 'no cell under the span');
+    assertEqual(cellAt(result, 1, 1).col, 1, 'the second row starts at column 1');
+  });
+
+  await test('a cell with no word ids but matching text is matched by its text', () => {
+    const byText = { cells: ['alpha', 'BETA', 'Gamma ', ' delta'].map((text) => cell(text, [])) };
+    const proposal = { rows: [plainProposalRow(0, { header: true }), byText, plainProposalRow(2)] };
+    const result = seed.gridFromProposal(proposal, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertEqual(result.matchedByText, 4, 'matched by text');
+    assertNear(result.columns, COLUMN_CENTRES, 0.01, 'columns');
+    assertNear(result.rows, [15, 35], 0.01, 'rows');
+    assertEqual(result.misfiled, 0, 'misfiled');
+  });
+
+  await test('ragged, unknown, reused and overlong proposals are each refused by name', () => {
+    const ragged = { rows: [plainProposalRow(0), plainProposalRow(1), { cells: [cell('Alpha', ['w9']), cell('Beta', ['w10']), cell('Gamma', ['w11'])] }] };
+    const r1 = seed.gridFromProposal(ragged, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(r1.error && /Row 3 .* 3 columns wide but row 1 is 4/.test(r1.error), `ragged: ${r1.error}`);
+
+    const unknown = { rows: [plainProposalRow(0), { cells: [cell('Alpha', ['w99']), cell('Beta', ['w6']), cell('Gamma', ['w7']), cell('Delta', ['w8'])] }, plainProposalRow(2)] };
+    const r2 = seed.gridFromProposal(unknown, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(r2.error && r2.error.includes('w99'), `unknown: ${r2.error}`);
+
+    const reused = { rows: [plainProposalRow(0), { cells: [cell('Alpha', ['w5']), cell('Beta', ['w2']), cell('Gamma', ['w7']), cell('Delta', ['w8'])] }, plainProposalRow(2)] };
+    const r3 = seed.gridFromProposal(reused, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(r3.error && r3.error.includes('"Beta" (w2)'), `reused: ${r3.error}`);
+
+    const overlong = { rows: [plainProposalRow(0), plainProposalRow(1), { cells: [cell('Alpha', ['w9'], { rowSpan: 2 }), cell('Beta', ['w10']), cell('Gamma', ['w11']), cell('Delta', ['w12'])] }] };
+    const r4 = seed.gridFromProposal(overlong, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(r4.error && r4.error.includes('spans past the last row'), `overlong: ${r4.error}`);
+
+    const empty = seed.gridFromProposal({ rows: [] }, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(empty.error, 'empty proposal should be refused');
+    const junk = seed.gridFromProposal(null, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(junk.error, 'null proposal should be refused');
+  });
+
+  await test('cells whose words overlap still get a divider, and the conflict is counted', () => {
+    // The AI files row 0's "Beta" (w2) under row 1's cell: the cell reaches
+    // up into row 0, so the first row divider cuts through it.
+    const proposal = {
+      rows: [
+        { cells: [cell('Alpha', ['w1']), cell('', []), cell('Gamma', ['w3']), cell('Delta', ['w4'])] },
+        { cells: [cell('Alpha', ['w5']), cell('Beta Beta', ['w2', 'w6']), cell('Gamma', ['w7']), cell('Delta', ['w8'])] },
+        plainProposalRow(2),
+      ],
+    };
+    const result = seed.gridFromProposal(proposal, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertEqual(result.conflicts, 1, 'conflicts');
+    // Row 0's cells end at 10, the straddling cell starts at 0: overlap centre 5.
+    assertNear(result.rows, [5, 35], 0.01, 'rows');
+    assertEqual(result.misfiled, 1, 'w2 lands in row 0, not the cell the AI named');
+    assertEqual(result.cells.length, 12, 'cell count');
+  });
+
+  await test('a boundary with no words on one side falls back to the seed, else to an even split', () => {
+    // The AI leaves column 4 empty (Delta not part of the table).
+    const rows = [0, 1, 2].map((r) => ({
+      cells: [cell('Alpha', [`w${r * 4 + 1}`]), cell('Beta', [`w${r * 4 + 2}`]), cell('Gamma', [`w${r * 4 + 3}`]), cell('', [])],
+    }));
+    const seeded = seed.gridFromProposal({ rows }, PROPOSAL_WORDS, PROPOSAL_BOX, PROPOSAL_SEED);
+    assert(!seeded.error, `unexpected error: ${seeded.error}`);
+    assertNear(seeded.columns, COLUMN_CENTRES, 0.01, 'columns with a seed');
+
+    const unseeded = seed.gridFromProposal({ rows }, PROPOSAL_WORDS, PROPOSAL_BOX, null);
+    assert(!unseeded.error, `unexpected error: ${unseeded.error}`);
+    // Boundary 3 of 4 columns across the 400 px box from x = -10: 290.
+    assertNear(unseeded.columns, [65, 162, 290], 0.01, 'columns without a seed');
+  });
+
+  await test('dividers the crowding rule drops leave a plain grid, flagged as rebuilt', () => {
+    // Column 2 is empty and the seed puts its two boundaries 3 px apart.
+    const rows = [0, 1, 2].map((r) => ({
+      cells: [cell('Alpha', [`w${r * 4 + 1}`]), cell('', []), cell('Beta', [`w${r * 4 + 2}`]), cell('Gamma Delta', [`w${r * 4 + 3}`, `w${r * 4 + 4}`])],
+    }));
+    const result = seed.gridFromProposal({ rows }, PROPOSAL_WORDS, PROPOSAL_BOX, { columns: [88, 91], rows: [] });
+    assert(!result.error, `unexpected error: ${result.error}`);
+    assertEqual(result.rebuilt, true, 'rebuilt');
+    assertNear(result.columns, [88, 162], 0.01, 'surviving columns');
+    assertEqual(result.cells.length, 9, 'plain 3x3 cells');
+    assertEqual(cellAt(result, 0, 0).role, 'TH', 'top row as headers');
+    assert(result.cells.every((c) => c.rowSpan === 1 && c.colSpan === 1), 'no spans survive a rebuild');
+  });
+
   console.log(`\n  ${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 }

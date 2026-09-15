@@ -25,8 +25,9 @@ import { unionRects } from './util.js';
 // Margin around the content, in PDF points - enough for the ascenders,
 // descenders and a hyphen at a line end to come through whole, not enough to
 // drag a neighbouring paragraph in and invite the model to "fix" the text
-// by adding it.
-const CROP_PADDING_PT = 6;
+// by adding it. The table grid's "Try with AI" (table-grid.js) pads its box
+// by the same amount, for the same reason.
+export const CROP_PADDING_PT = 6;
 
 // Longest edge of a crop, in pixels. Anthropic's vision guidance puts the
 // sweet spot at 1568px on the long edge - larger is downscaled server-side
@@ -93,6 +94,37 @@ async function contentRegionOnPage(pageNumber, { mcids, bboxes }) {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
+// The pdf.js scale a region is rendered at: as many pixels per point as
+// the caps allow for a crop of that size.
+function cropRenderScale(region) {
+  const longestEdgePt = Math.max(region.width, region.height) / PAGE_SCALE;
+  return Math.min(CROP_MAX_SCALE, CROP_MAX_EDGE_PX / longestEdgePt);
+}
+
+/**
+ * Renders a box drawn on the page - the table grid's, for "Try with AI" -
+ * padded by CROP_PADDING_PT and clamped to the page, and says how the box's
+ * viewport coordinates map into the crop's pixels: a point at (x, y) in the
+ * viewport lands at ((x - region.x) * scale, (y - region.y) * scale) in the
+ * image. Null when the box has no area on the page.
+ * @param {number} pageNumber 1-based.
+ * @param {import('../types/app-state').ViewportRect} box
+ * @returns {Promise<{ crop: PageCrop, region: import('../types/app-state').ViewportRect, scale: number } | null>}
+ */
+export async function cropViewportBox(pageNumber, box) {
+  if (!state.pdfDoc) return null;
+  const { viewport } = await getPageTextContent(pageNumber);
+  const pad = CROP_PADDING_PT * PAGE_SCALE;
+  const x0 = Math.max(0, box.x - pad);
+  const y0 = Math.max(0, box.y - pad);
+  const x1 = Math.min(viewport.width, box.x + box.width + pad);
+  const y1 = Math.min(viewport.height, box.y + box.height + pad);
+  if (x1 <= x0 || y1 <= y0) return null;
+  const region = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  const crop = await renderRegionToPng(pageNumber, region);
+  return { crop, region, scale: cropRenderScale(region) / PAGE_SCALE };
+}
+
 /**
  * Renders one page region to a PNG. `region` is in PAGE_SCALE viewport
  * pixels; pdf.js viewports scale linearly, so the same region at another
@@ -102,10 +134,9 @@ async function contentRegionOnPage(pageNumber, { mcids, bboxes }) {
  * a whole-page bitmap at crop resolution.
  * @returns {Promise<PageCrop>}
  */
-async function renderRegionToPng(pageNumber, region) {
+export async function renderRegionToPng(pageNumber, region) {
   const page = await state.pdfDoc.getPage(pageNumber);
-  const longestEdgePt = Math.max(region.width, region.height) / PAGE_SCALE;
-  const scale = Math.min(CROP_MAX_SCALE, CROP_MAX_EDGE_PX / longestEdgePt);
+  const scale = cropRenderScale(region);
   const k = scale / PAGE_SCALE;
   const width = Math.max(1, Math.round(region.width * k));
   const height = Math.max(1, Math.round(region.height * k));

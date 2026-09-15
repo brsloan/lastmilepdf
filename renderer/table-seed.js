@@ -361,3 +361,257 @@ export function seedGrid(hits, box) {
     lineCount: lines.length,
   };
 }
+
+// --- a proposal from the AI ---------------------------------------------------------
+
+// "Try with AI" (see tryTableGridWithAi() in table-grid.js) sends the box's
+// image and its words to the model and gets back the table as rows of
+// cells, each naming the words it holds by id. What comes back is a
+// reading of the picture, not a set of divider positions, and it is turned
+// into a grid here: the dividers go halfway between the words of
+// neighbouring cells, so the grid the user then sees is the model's
+// reading made concrete - and where the reading contradicts the geometry
+// (a "cell" whose words straddle the next column's), the contradiction is
+// counted and shown rather than smoothed over. Nothing here commits; the
+// result lands in the cells phase to be looked at like any other grid.
+
+function normaliseText(text) {
+  return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function unionOf(boxes) {
+  if (boxes.length === 0) return null;
+  const x0 = Math.min(...boxes.map((b) => b.x));
+  const y0 = Math.min(...boxes.map((b) => b.y));
+  const x1 = Math.max(...boxes.map((b) => b.x + b.width));
+  const y1 = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+function isSpan(value) {
+  return Number.isInteger(value) && value >= 1;
+}
+
+// Lays the proposal's cells out the way an HTML table would: each row's
+// cells take the first free columns left to right, and a cell spanning
+// rows reserves its columns in the rows below. The same rule
+// tag_rect_table() applies when it builds the tag, so a proposal that
+// passes here builds. Returns `{ cells, rowCount, colCount }` with each
+// cell placed, or `{ error }` naming what is wrong with it.
+function placeProposalCells(proposal) {
+  const rows = proposal?.rows;
+  if (!Array.isArray(rows) || rows.length === 0) return { error: 'The AI returned no rows.' };
+  /** @type {Set<number>[]} */
+  const taken = rows.map(() => new Set());
+  const cells = [];
+  let width = -1;
+  for (let r = 0; r < rows.length; r += 1) {
+    const entries = rows[r]?.cells;
+    if (!Array.isArray(entries)) return { error: `Row ${r + 1} of the AI's table has no cells.` };
+    let col = 0;
+    for (const entry of entries) {
+      const colSpan = entry?.colSpan ?? 1;
+      const rowSpan = entry?.rowSpan ?? 1;
+      if (!isSpan(colSpan) || !isSpan(rowSpan)) {
+        return { error: `A cell in row ${r + 1} of the AI's table has an invalid span.` };
+      }
+      if (r + rowSpan > rows.length) {
+        return { error: `A cell in row ${r + 1} of the AI's table spans past the last row.` };
+      }
+      while (taken[r].has(col)) col += 1;
+      for (let i = 0; i < rowSpan; i += 1) {
+        for (let c = col; c < col + colSpan; c += 1) {
+          if (taken[r + i].has(c)) {
+            return { error: `Two cells in the AI's table overlap at row ${r + i + 1}, column ${c + 1}.` };
+          }
+          taken[r + i].add(c);
+        }
+      }
+      cells.push({
+        row: r, col, rowSpan, colSpan,
+        role: entry?.header === true ? 'TH' : 'TD',
+        text: normaliseText(entry?.text),
+        wordIds: Array.isArray(entry?.words) ? entry.words : [],
+        words: [],
+        box: null,
+      });
+      col += colSpan;
+    }
+    const rowWidth = taken[r].size === 0 ? 0 : Math.max(...taken[r]) + 1;
+    if (taken[r].size !== rowWidth) {
+      return { error: `Row ${r + 1} of the AI's table leaves a gap between its cells.` };
+    }
+    if (width === -1) width = rowWidth;
+    if (rowWidth !== width) {
+      return { error: `Row ${r + 1} of the AI's table is ${rowWidth} columns wide but row 1 is ${width} - every row has to add up to the same width.` };
+    }
+  }
+  if (width === 0) return { error: 'The AI returned a table with no cells.' };
+  return { cells, rowCount: rows.length, colCount: width };
+}
+
+// Gives each cell the words the proposal put in it. By id first, all cells
+// before any text matching, so an id claimed outright is never taken by a
+// looser match; then a cell with no valid ids but some text is matched
+// against the still-unassigned words in reading order, whitespace and case
+// aside. A cell that ends up with no words has no box and no vote.
+function assignWords(cells, words) {
+  const byId = new Map(words.map((w) => [w.id, w]));
+  const assigned = new Map(); // word id -> cell
+  for (const cell of cells) {
+    for (const id of cell.wordIds) {
+      const word = byId.get(id);
+      if (!word) return { error: `The AI named a word that isn't in the selection (${String(id)}).` };
+      if (assigned.has(id)) return { error: `The AI put the word "${word.text}" (${id}) in two cells.` };
+      assigned.set(id, cell);
+      cell.words.push(word);
+    }
+  }
+  let matchedByText = 0;
+  for (const cell of cells) {
+    if (cell.words.length > 0 || !cell.text) continue;
+    const tokens = cell.text.split(' ');
+    for (let i = 0; i + tokens.length <= words.length; i += 1) {
+      let fits = true;
+      for (let j = 0; j < tokens.length; j += 1) {
+        const word = words[i + j];
+        if (assigned.has(word.id) || normaliseText(word.text) !== tokens[j]) {
+          fits = false;
+          break;
+        }
+      }
+      if (!fits) continue;
+      for (let j = 0; j < tokens.length; j += 1) {
+        assigned.set(words[i + j].id, cell);
+        cell.words.push(words[i + j]);
+      }
+      matchedByText += 1;
+      break;
+    }
+  }
+  for (const cell of cells) cell.box = unionOf(cell.words);
+  return { assigned, matchedByText };
+}
+
+// The dividers along one axis. For the boundary between grid lines b and
+// b + 1, the cells ending at b vote with their far edges and the cells
+// starting at b + 1 with their near edges (a spanning cell votes only at
+// its own ends), and the divider goes halfway between the two sides. A
+// side with no voters - an empty column, a column of empty cells - falls
+// back to the nearest divider the geometry guessed that no boundary has
+// claimed yet, else to an even split. Two sides that overlap (a cell on
+// the left reaching past a cell on the right) still get a divider, at the
+// centre of the overlap, and the overlap is counted as a conflict for the
+// status line to report.
+function dividersAlong(cells, count, seedLines, lo, extent, axis) {
+  const start = axis === 'x' ? (c) => c.col : (c) => c.row;
+  const span = axis === 'x' ? (c) => c.colSpan : (c) => c.rowSpan;
+  const near = axis === 'x' ? (b) => b.x : (b) => b.y;
+  const far = axis === 'x' ? (b) => b.x + b.width : (b) => b.y + b.height;
+  const unusedSeeds = [...(seedLines || [])];
+  const takeNearestSeed = (reference) => {
+    if (unusedSeeds.length === 0) return null;
+    let best = 0;
+    unusedSeeds.forEach((v, i) => {
+      if (Math.abs(v - reference) < Math.abs(unusedSeeds[best] - reference)) best = i;
+    });
+    return unusedSeeds.splice(best, 1)[0];
+  };
+
+  const dividers = [];
+  let conflicts = 0;
+  for (let b = 0; b < count - 1; b += 1) {
+    const before = cells.filter((c) => c.box && start(c) + span(c) - 1 === b).map((c) => far(c.box));
+    const after = cells.filter((c) => c.box && start(c) === b + 1).map((c) => near(c.box));
+    const even = lo + extent * (b + 1) / count;
+    if (before.length > 0 && after.length > 0) {
+      const farEdge = Math.max(...before);
+      const nearEdge = Math.min(...after);
+      if (farEdge > nearEdge) conflicts += 1;
+      dividers.push((farEdge + nearEdge) / 2);
+      continue;
+    }
+    const reference = before.length > 0 ? Math.max(...before) : after.length > 0 ? Math.min(...after) : even;
+    const seeded = takeNearestSeed(reference);
+    dividers.push(seeded === null ? even : seeded);
+  }
+  return { dividers, conflicts };
+}
+
+function plainCells(rowCount, colCount) {
+  const cells = [];
+  for (let row = 0; row < rowCount; row += 1) {
+    for (let col = 0; col < colCount; col += 1) {
+      cells.push({ row, col, rowSpan: 1, colSpan: 1, role: row === 0 ? 'TH' : 'TD' });
+    }
+  }
+  return cells;
+}
+
+// Which of `cells` the point falls in, given the dividers - the same
+// answer cellContentsForGrid() in table-grid.js gives for a glyph.
+function cellIndexOfPoint(cells, columns, rows, x, y) {
+  const col = columns.filter((v) => v < x).length;
+  const row = rows.filter((v) => v < y).length;
+  return cells.findIndex((c) => row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan);
+}
+
+/**
+ * Turns the AI's table proposal into a grid for table-grid.js to show:
+ * `{ columns, rows, cells, rowCount, colCount, conflicts, matchedByText,
+ * misfiled, rebuilt }`, or `{ error }` when the proposal can't be used and
+ * the grid should stay as it was. `words` is wordsInGrid()'s output for the
+ * same box, whose ids the proposal names; `seed` is the geometry's guess
+ * (seedGrid()), the fallback for a boundary no cell has words at.
+ *
+ * `conflicts` counts dividers that cut through words the AI put in one
+ * cell, `misfiled` the words that end up in a different cell from the one
+ * the AI named once the dividers are drawn - both signs the reading and
+ * the geometry disagree, for the user to look at. `rebuilt` is set when
+ * the crowding rule (fitLines) threw a divider out: the proposal's spans
+ * and roles no longer line up with the dividers that are left, so the
+ * cells come back plain, one per grid square with the top row as headers.
+ */
+export function gridFromProposal(proposal, words, box, seed) {
+  const placed = placeProposalCells(proposal);
+  if (placed.error) return { error: placed.error };
+  const { cells, rowCount, colCount } = placed;
+  const assignment = assignWords(cells, words || []);
+  if (assignment.error) return { error: assignment.error };
+  if (!cells.some((c) => c.box)) {
+    return { error: "None of the AI's cells could be matched to the words in the selection." };
+  }
+
+  const cols = dividersAlong(cells, colCount, seed?.columns, box.x, box.width, 'x');
+  const rws = dividersAlong(cells, rowCount, seed?.rows, box.y, box.height, 'y');
+  const columns = fitLines(cols.dividers, box.x, box.width);
+  const rows = fitLines(rws.dividers, box.y, box.height);
+  const kept = (raw, fitted) => raw.length === fitted.length && raw.every((v, i) => v === fitted[i]);
+  const rebuilt = !kept(cols.dividers, columns) || !kept(rws.dividers, rows);
+
+  const outCells = rebuilt
+    ? plainCells(rows.length + 1, columns.length + 1)
+    : cells.map(({ row, col, rowSpan, colSpan, role }) => ({ row, col, rowSpan, colSpan, role }));
+
+  let misfiled = 0;
+  if (!rebuilt) {
+    cells.forEach((cell, index) => {
+      for (const word of cell.words) {
+        const at = cellIndexOfPoint(outCells, columns, rows, word.x + word.width / 2, word.y + word.height / 2);
+        if (at !== index) misfiled += 1;
+      }
+    });
+  }
+
+  return {
+    columns,
+    rows,
+    cells: outCells,
+    rowCount: rows.length + 1,
+    colCount: columns.length + 1,
+    conflicts: cols.conflicts + rws.conflicts,
+    matchedByText: assignment.matchedByText,
+    misfiled,
+    rebuilt,
+  };
+}

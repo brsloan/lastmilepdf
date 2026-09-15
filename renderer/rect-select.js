@@ -83,6 +83,7 @@ export function clearRectSelect() {
   state.rectSelectPage = null;
   state.rectSelectBox = null;
   state.tableGrid = null; // a grid is drawn over the selection, so it goes with it
+  el.btnTableGridAi.hidden = true; // the button belongs to the grid (see table-grid.js)
   el.drawOverlay.innerHTML = '';
 }
 

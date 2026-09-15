@@ -30,7 +30,16 @@ they summarise each release rather than record every change as it landed.
   and spans afterwards but can't move text between cells, so a grid that's
   a few points off could only be undone, not corrected. G guesses the
   current step again, Delete clears it, Esc drops the grid and keeps the
-  selection.
+  selection. A, or the **Try with AI** button shown while a grid is up,
+  sends an image of the box and the words in it to the configured AI
+  provider and replaces the whole grid with its reading of the table -
+  dividers, merged cells and header cells - landing on the cells step. The
+  AI names which words belong in which cell; the dividers are then drawn
+  halfway between neighbouring cells' words, so where its reading
+  contradicts where the text actually sits the status line says how many
+  dividers cut through a cell's text or how many words land in a different
+  cell from the one it named. Needs a provider and model that can read
+  images.
 - A **Fill with AI** button beside the Alt text label when a Figure or a
   Formula is selected. It sends an image of just that tag's own part of the
   page to the configured AI provider and writes what comes back into the

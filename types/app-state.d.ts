@@ -170,6 +170,12 @@ export interface TableGridState {
   contents: Map<number, TableGridCellContent> | null;
   /** The dividers guessed from the text when the grid started - see seedGrid() in table-seed.js. */
   seed: TableGridSeed;
+  /**
+   * Serial of the "Try with AI" request in flight for this grid, 0 when
+   * none is - a reply is applied only if the grid is still the same object
+   * and the serial still matches (see tryTableGridWithAi() in table-grid.js).
+   */
+  aiRequest: number;
 }
 
 /** What seedGrid() in table-seed.js guesses from the text under a grid. */

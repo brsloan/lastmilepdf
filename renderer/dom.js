@@ -40,6 +40,7 @@ export const el = {
   btnSmartifact: asButton('btn-smartifact'),
   btnAddFigure: asButton('btn-add-figure'),
   btnRectSelect: asButton('btn-rect-select'),
+  btnTableGridAi: asButton('btn-table-grid-ai'),
   btnAddP: asButton('btn-add-p'),
   btnWalk: asButton('btn-walk'),
   btnVerify: asButton('btn-verify'),

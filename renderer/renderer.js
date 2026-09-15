@@ -11,7 +11,7 @@ import {
   MIN_RECT_SELECT_PX, clearRectSelect, normalizedDragBox,
   refreshRectSelectPreview, setRectSelectActive,
 } from './rect-select.js';
-import { handleTableGridKey, handleTableGridMouseDown, handleTableGridMouseMove, handleTableGridMouseUp, startTableGrid } from './table-grid.js';
+import { handleTableGridKey, handleTableGridMouseDown, handleTableGridMouseMove, handleTableGridMouseUp, startTableGrid, tryTableGridWithAi } from './table-grid.js';
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { cropNodeImages } from './page-crop.js';
@@ -1999,7 +1999,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 // While a table grid is up it owns the keyboard: Enter/Backspace step
-// through its phases, Esc drops it, M and H act on cells, and any other
+// through its phases, Esc drops it, M and H act on cells, A asks the AI, and any other
 // letter is swallowed so the tagging shortcuts can't reach the pending
 // rectangle underneath. Capture phase, registered ahead of the Esc handlers
 // further down, so it is asked first.
@@ -2321,6 +2321,12 @@ el.btnRectSelect.addEventListener('click', () => {
     setFigureDrawActive(false);
     setStatus('Drag a rectangle over the content to select it (Esc to cancel).');
   }
+});
+
+// Shown only while a table grid is up - the same as pressing A over it.
+el.btnTableGridAi.addEventListener('click', () => {
+  if (!state.tableGrid) return;
+  tryTableGridWithAi();
 });
 
 el.btnAddP.addEventListener('click', () => {

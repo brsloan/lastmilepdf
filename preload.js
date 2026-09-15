@@ -611,6 +611,16 @@ const api = {
    */
   describeForAltText: (images, role) => ipcRenderer.invoke('ai:describe-for-alt-text', { images, role }),
   /**
+   * Asks the AI to lay out the table under a Select Content grid from an
+   * image of the box and the words in it (see tryTableGridWithAi() in
+   * renderer/table-grid.js). Like describeForAltText() the image is
+   * essential - a provider that won't take one is an error, not a fallback.
+   * @param {PageCrop} image
+   * @param {import('./types/domain').TableLayoutWord[]} words
+   * @returns {Promise<import('./types/domain').TableLayoutProposal>}
+   */
+  layoutTableWithAi: (image, words) => ipcRenderer.invoke('ai:layout-table', { image, words }),
+  /**
    * @param {AiBatchEntry[]} items
    * @returns {Promise<AiBatchEntry[]>} One entry per input id, same ids.
    */

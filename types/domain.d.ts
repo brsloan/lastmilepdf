@@ -346,6 +346,43 @@ export interface PageCrop {
   page: number;
 }
 
+/**
+ * One word of the text under a Select Content table grid, as sent to the AI
+ * by "Try with AI" (see tryTableGridWithAi() in renderer/table-grid.js).
+ * Positions are in the crop's pixel space, rounded, so the model can relate
+ * the words to the image it is shown.
+ */
+export interface TableLayoutWord {
+  /** `w1`, `w2`, … in reading order - what the proposal names the word by. */
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One cell of the AI's table layout proposal. */
+export interface TableLayoutCell {
+  /** The cell's text as it reads in the image; empty for an empty cell. */
+  text: string;
+  /** Ids of the words in the cell, each used at most once across the table. */
+  words: string[];
+  colSpan: number;
+  rowSpan: number;
+  /** True for a header cell (TH). */
+  header: boolean;
+}
+
+/**
+ * The AI's reading of a table: rows of cells in reading order, a spanning
+ * cell listed only in its first row. gridFromProposal() in
+ * renderer/table-seed.js turns it into dividers.
+ */
+export interface TableLayoutProposal {
+  rows: { cells: TableLayoutCell[] }[];
+}
+
 /** Result of window.api.fixActualText(). */
 export interface FixActualTextResult {
   /** The corrected text. */

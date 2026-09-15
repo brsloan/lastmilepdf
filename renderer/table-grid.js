@@ -23,6 +23,13 @@
 // will receive outlined inside it. G guesses the current phase again and
 // Delete clears it, for when the guess is further from right than empty.
 //
+// A (or the Try with AI button) asks the configured AI provider to read
+// the table instead - from an image of the box and the words in it - and
+// replaces the whole grid with its reading, dividers, merges and header
+// cells alike, landing in the cells phase (tryTableGridWithAi() below).
+// The same bargain holds: the reading is a starting point shown in full,
+// and where it disagrees with the text's own geometry the status says so.
+//
 // Every position is in viewport space (pdf.js's page pixels, which is also
 // the canvas's own pixel size - see renderCurrentPage() in viewer.js), the
 // same space as the rectangle selection's box and hits, so a divider at x
@@ -31,10 +38,11 @@
 import { el } from './dom.js';
 import { commitTableGrid } from './editing.js';
 import { canvasPointFromEvent } from './figure-draw.js';
+import { cropViewportBox } from './page-crop.js';
 import { glyphsInRun, intersectionArea, renderRectSelectOverlay } from './rect-select.js';
-import { setStatus } from './shell.js';
+import { reportError, setStatus } from './shell.js';
 import { state } from './state.js';
-import { MIN_LINE_GAP_PX, seedGrid } from './table-seed.js';
+import { MIN_LINE_GAP_PX, gridFromProposal, seedGrid, wordsInGrid } from './table-seed.js';
 
 // The seed module owns the crowding rule so it can apply it without the
 // DOM; the mouse handlers below apply the same one.
@@ -48,9 +56,15 @@ export const LINE_HIT_PX = 6;
 const DRAG_THRESHOLD_PX = 3;
 
 const PROMPTS = {
-  columns: 'Columns: click inside the box to add a divider, click a divider to remove it, or drag one to move it. G guesses again, Delete clears. Enter for rows, Esc to drop the grid.',
-  rows: 'Rows: click to add a divider, click one to remove it, or drag it. G guesses again, Delete clears. Enter to review the cells, Backspace to go back to columns.',
+  columns: 'Columns: click inside the box to add a divider, click a divider to remove it, or drag one to move it. G guesses again, Delete clears, A asks the AI. Enter for rows, Esc to drop the grid.',
+  rows: 'Rows: click to add a divider, click one to remove it, or drag it. G guesses again, Delete clears, A asks the AI. Enter to review the cells, Backspace to go back to columns.',
 };
+
+// More words than this and the request is refused before it is sent: the
+// reply names every word by id, and a selection this big is either not
+// one table or one the AI would take minutes over. Matches the main
+// process's own cap (TABLE_LAYOUT_MAX_WORDS in main.js).
+const MAX_AI_WORDS = 2500;
 
 function plural(count, noun) {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
@@ -437,6 +451,9 @@ function lineElement(grid, value, vertical, extraClass, width, height) {
 export function renderTableGridOverlay() {
   const grid = state.tableGrid;
   el.drawOverlay.innerHTML = '';
+  // The Try with AI button lives in the toolbar but belongs to the grid:
+  // shown for as long as one is up, whatever its phase.
+  el.btnTableGridAi.hidden = !grid;
   if (!grid) return;
   const width = el.canvas.width;
   const height = el.canvas.height;
@@ -494,7 +511,9 @@ export function startTableGrid(box) {
     anchor: null,
     contents: null,
     seed,
+    aiRequest: 0,
   };
+  el.btnTableGridAi.disabled = false;
   renderTableGridOverlay();
   setStatus(`${seedSummary(seed)} ${PROMPTS.columns}`);
 }
@@ -536,7 +555,7 @@ function cellsPrompt(grid) {
     if (content.overhangs.length > 0) overhanging += 1;
   }
   let prompt = `${rowCount}×${colCount} cells: click or drag to select, M merges the selection`
-    + ' (or splits a merged cell), H switches header/data. Enter tags the table, Backspace goes back to rows.';
+    + ' (or splits a merged cell), H switches header/data, A asks the AI. Enter tags the table, Backspace goes back to rows.';
   if (overhanging > 0) {
     prompt += ` ${overhanging} cell${overhanging === 1 ? '' : 's'} will take text that can't be cut to fit (dashed).`;
   }
@@ -596,10 +615,117 @@ function back(grid) {
   renderTableGridOverlay();
 }
 
+// --- Try with AI -------------------------------------------------------------------
+
+// What the proposal amounted to, ahead of the cells prompt. The counts of
+// conflicts and misfiled words are the honesty check: each is a place
+// where the AI's reading and the text's geometry disagree, and the
+// outlines in the cells phase show which is right.
+function proposalSummary(result) {
+  let summary = `The AI laid out a ${result.rowCount}×${result.colCount} table.`;
+  if (result.rebuilt) {
+    summary += ' Some of its dividers sat too close together to keep, so the cells are plain - merge and mark headers by hand.';
+  }
+  if (result.conflicts > 0) {
+    summary += ` ${plural(result.conflicts, 'divider')} cut${result.conflicts === 1 ? 's' : ''} through text the AI put in one cell - check the outlines.`;
+  }
+  if (result.misfiled > 0) {
+    summary += ` ${plural(result.misfiled, 'word')} land${result.misfiled === 1 ? 's' : ''} in a different cell than the AI named.`;
+  }
+  return summary;
+}
+
+// Replaces the whole grid with the proposal - dividers, merges and header
+// flags - and lands in the cells phase, since spans and roles only exist
+// there. Backspace from there keeps the dividers and drops the rest, as
+// it does for a grid drawn by hand.
+function applyProposal(grid, result) {
+  grid.columns = [...result.columns];
+  grid.rows = [...result.rows];
+  grid.phase = 'cells';
+  grid.hover = null;
+  grid.drag = null;
+  grid.cells = result.cells.map((cell) => ({ ...cell }));
+  sortCells(grid.cells);
+  grid.selected = new Set();
+  grid.anchor = null;
+  refreshContents(grid);
+}
+
+let aiRequestCounter = 0;
+
+// A, or the Try with AI button. One request at a time per grid; a reply
+// is applied only if the grid is still the same object with the same
+// request serial, so a grid dropped or restarted while the AI was
+// thinking ignores the late answer. Errors go to the status line and the
+// grid stays as it was.
+export async function tryTableGridWithAi() {
+  const grid = state.tableGrid;
+  if (!grid) return;
+  if (grid.aiRequest) {
+    setStatus('Still waiting for the AI to lay out the table.');
+    return;
+  }
+  const page = state.rectSelectPage;
+  if (!page) return;
+  const words = wordsInGrid(state.rectSelectHits || [], grid.box);
+  if (words.length === 0) {
+    setStatus('No measurable text in the box to send with the image - the AI names cells by their words.');
+    return;
+  }
+  if (words.length > MAX_AI_WORDS) {
+    setStatus('This selection has too many words to send - draw the table in parts.');
+    return;
+  }
+
+  const request = ++aiRequestCounter;
+  grid.aiRequest = request;
+  el.btnTableGridAi.disabled = true;
+  setStatus('Asking the AI to lay out the table…');
+  const stillCurrent = () => state.tableGrid === grid && grid.aiRequest === request;
+  try {
+    const cropped = await cropViewportBox(page, grid.box);
+    if (!stillCurrent()) return;
+    if (!cropped) {
+      setStatus('Could not make an image of the box to send.');
+      return;
+    }
+    // Word positions in the crop's own pixels, so the model can relate the
+    // list to the picture; the ids are what come back.
+    const { region, scale } = cropped;
+    const payload = words.map((w) => ({
+      id: w.id,
+      text: w.text,
+      x: Math.round((w.x - region.x) * scale),
+      y: Math.round((w.y - region.y) * scale),
+      w: Math.round(w.width * scale),
+      h: Math.round(w.height * scale),
+    }));
+    const proposal = await window.api.layoutTableWithAi(cropped.crop, payload);
+    if (!stillCurrent()) return;
+    const result = gridFromProposal(proposal, words, grid.box, grid.seed);
+    if (result.error) {
+      setStatus(`The AI's table could not be used: ${result.error} The grid is unchanged.`);
+      return;
+    }
+    applyProposal(grid, result);
+    renderTableGridOverlay();
+    setStatus(`${proposalSummary(result)} ${cellsPrompt(grid)}`);
+  } catch (err) {
+    if (stillCurrent()) reportError('Could not lay out the table with AI', err);
+  } finally {
+    if (stillCurrent()) {
+      grid.aiRequest = 0;
+      el.btnTableGridAi.disabled = false;
+    }
+  }
+}
+
 // Drops the grid but keeps the rectangle selection it was drawn over, so a
 // change of mind still leaves the box ready for another tagging shortcut.
 export function cancelTableGrid() {
   state.tableGrid = null;
+  el.btnTableGridAi.hidden = true;
   if (state.rectSelectBox && state.rectSelectHits) {
     renderRectSelectOverlay(state.rectSelectBox, state.rectSelectHits, el.canvas.width, el.canvas.height);
   } else {
@@ -632,6 +758,10 @@ export function handleTableGridKey(e) {
   }
   if (e.key === 'Escape') {
     cancelTableGrid();
+    return true;
+  }
+  if (e.key.toLowerCase() === 'a') {
+    tryTableGridWithAi();
     return true;
   }
   if (grid.phase !== 'cells') {
