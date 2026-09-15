@@ -530,24 +530,57 @@ function renderProofreadTree(hadFocus) {
   applyRovingTabIndex(hadFocus);
 }
 
+/**
+ * How much empty room each end of the proofread list needs, in px.
+ *
+ * Only as much as that end can actually use: the first row travels DOWN
+ * from the top of the pane to the Actual Text field's line and no further,
+ * so the top spacer is exactly that gap; the last row travels UP from the
+ * field's line to the bottom of the pane, and it already occupies its own
+ * height of that distance, so the bottom spacer is the rest. Sizing either
+ * one to a full pane height instead (as this used to) leaves the list
+ * scrolling through a screenful of nothing at both ends.
+ *
+ * Measured off #tag-tree's own box, so the pane's 8px padding rides along
+ * as a hair of slack rather than being subtracted out - not worth the
+ * arithmetic, and erring long only ever costs those 8px.
+ */
+function proofreadSpacerHeights() {
+  const paneHeight = Math.round(el.tagTree.clientHeight);
+  const fieldRect = el.fieldActualText.getBoundingClientRect();
+  // Nothing selected yet, so the details panel has no Actual Text field on
+  // screen to measure against: no line to align to and no gap to size from.
+  // A full pane at each end is the old always-enough answer, and holds only
+  // until the first selection re-runs this with something to measure.
+  if (fieldRect.height === 0) return { top: paneHeight, bottom: paneHeight };
+  const gapToField = Math.max(0, Math.round(fieldRect.top - el.tagTree.getBoundingClientRect().top));
+  const rows = el.tagTreeContent.querySelectorAll('.tree-row');
+  const lastRow = /** @type {HTMLElement | undefined} */ (rows[rows.length - 1]);
+  return {
+    top: gapToField,
+    bottom: Math.max(0, paneHeight - gapToField - (lastRow?.offsetHeight || 0)),
+  };
+}
+
 // Proofread Mode (View > Proofread) needs to scroll the tag tree so the
 // selected row lines up with the Actual Text field's own top edge even
 // when that row sits at the very top/bottom of the (flat, filtered) list -
 // past what #tag-tree would otherwise let it scroll to, since normally
 // there's nothing beyond the list's own first/last row to scroll into.
 // #tag-tree-scroll-spacer-top/-bottom (zero height outside Proofread Mode -
-// see the CSS) exist purely to give that extra room. Mirrors
+// see the CSS) exist purely to give that extra room, each sized to what its
+// own end of the list needs (see proofreadSpacerHeights() above). Mirrors
 // setProofreadScrollSpacersActive() in viewer.js, which does the same thing
 // for the PDF preview's highlight box - including the same "apply the
 // height before compensating scrollTop" ordering, since scrollTop
 // assignments are clamped to whatever range exists at that exact moment.
 export function setTagTreeScrollSpacersActive(active) {
-  const desired = active ? Math.round(el.tagTree.clientHeight) : 0;
+  const desired = active ? proofreadSpacerHeights() : { top: 0, bottom: 0 };
   const previousTopHeight = el.tagTreeScrollSpacerTop.offsetHeight;
-  el.tagTreeScrollSpacerTop.style.height = `${desired}px`;
-  el.tagTreeScrollSpacerBottom.style.height = `${desired}px`;
-  if (previousTopHeight !== desired) {
-    el.tagTree.scrollTop += desired - previousTopHeight;
+  el.tagTreeScrollSpacerTop.style.height = `${desired.top}px`;
+  el.tagTreeScrollSpacerBottom.style.height = `${desired.bottom}px`;
+  if (previousTopHeight !== desired.top) {
+    el.tagTree.scrollTop += desired.top - previousTopHeight;
   }
 }
 
