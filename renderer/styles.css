@@ -441,6 +441,30 @@ body.proofread-mode .tree-pane {
   border-right: none;
 }
 
+/* The tree pane is a slim strip while proofreading, far too narrow for the
+   filter to sit beside the tab the way it does normally - so the header
+   stacks instead, tab above filter, and the filter takes the pane's full
+   width. It earns that second row here: in this mode it narrows the
+   proofread list itself (see renderProofreadTree() in tree-view.js), which
+   is how "read only the tags flagged **" is asked for. The Artifacts tab is
+   hidden outright rather than stacked below (see setProofreadMode() in
+   proofread.js), so the header stays two rows tall. */
+body.proofread-mode .tree-pane-header .pane-tabs {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+}
+
+body.proofread-mode .tree-pane-header .pane-tab {
+  text-align: left;
+}
+
+body.proofread-mode .pane-tabs .tree-filter {
+  margin: 0;
+  width: 100%;
+}
+
 .pane-header {
   display: flex;
   align-items: center;

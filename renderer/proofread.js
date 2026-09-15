@@ -11,7 +11,7 @@
 import { el, selectableRows } from './dom.js';
 import { flushPendingLiveApply, refreshDetailsForSelection } from './details.js';
 import { state } from './state.js';
-import { renderTree, selectNode, setTagTreeScrollSpacersActive } from './tree-view.js';
+import { renderTree, selectNode, setTagTreeScrollSpacersActive, setTreePanel } from './tree-view.js';
 import { setProofreadScrollSpacersActive } from './viewer.js';
 
 export async function setProofreadMode(enabled) {
@@ -22,11 +22,21 @@ export async function setProofreadMode(enabled) {
   await flushPendingLiveApply();
   state.proofreadMode = enabled;
   document.body.classList.toggle('proofread-mode', enabled);
-  // The dropdown filter (All/Figures/Headings/Table) has no meaning once
-  // the tree is forced down to its own proofread-only list - hide it
-  // rather than reset it, so whatever it was set to is exactly what the
-  // tree falls back to once proofreading turns back off.
-  el.tagFilter.hidden = enabled;
+  // The dropdown filter stays, and stacks: in Proofread Mode it narrows the
+  // mode's own flat list rather than replacing it (see renderProofreadTree()
+  // in tree-view.js), so setting it to Flagged ** is a read-through of
+  // exactly the tags whose words changed, in the same order and the same
+  // flat shape the mode reads everything else in. Whatever it is set to
+  // carries straight back to the ordinary tree when proofreading goes off.
+  //
+  // The Artifacts tab does go. An artifact has no Actual Text to read, so
+  // there is nothing in that panel for this mode to do - and the tree pane
+  // is a slim strip here (see body.proofread-mode in styles.css), with room
+  // for one tab above the filter rather than two beside it. Anything
+  // already showing there is switched back to the tree first, so the mode
+  // never opens onto a panel whose tab has just been hidden.
+  el.tabArtifacts.hidden = enabled;
+  if (enabled) setTreePanel('tree');
   renderTree(); // switches the tree between its normal and flat proofread-only rendering - see renderProofreadTree() in tree-view.js
 
   if (!enabled) {
@@ -56,6 +66,35 @@ export async function setProofreadMode(enabled) {
   } else if (state.selectedNodeId) {
     refreshDetailsForSelection();
   }
+}
+
+// Re-lands the selection after the dropdown filter has narrowed (or widened)
+// the proofread list - called from the filter's own change handler in
+// renderer.js, once the tree has been re-rendered.
+//
+// The mode steps from the selected row to its neighbor (see
+// findProofreadNeighborRow below), so a filter that takes the selected tag
+// off the list would leave Page Up/Down with nothing to step from. Landing
+// on the first row that survived, Actual Text ready to read, is the same
+// place turning the mode on lands. A selection the filter kept stays put and
+// is just re-levelled with the Actual Text field, since the re-render reset
+// the tree's scroll position under it.
+export async function relandProofreadAfterFilterChange() {
+  if (!state.proofreadMode) return;
+  const rows = selectableRows();
+  if (rows.some((row) => row.dataset.nodeId === state.selectedNodeId)) {
+    refreshDetailsForSelection();
+    return;
+  }
+  if (rows.length === 0) return;
+  // Same ordering as stepProofreadTag(): read the id off the row before the
+  // flush, which re-renders and detaches every row element in the DOM.
+  const targetId = rows[0].dataset.nodeId;
+  await flushPendingLiveApply();
+  if (!state.nodesById.has(targetId)) return;
+  selectNode(targetId);
+  el.fieldActualText.focus();
+  el.fieldActualText.select();
 }
 
 // Next/previous selectable row that's an actual tag - the same 'element'-only

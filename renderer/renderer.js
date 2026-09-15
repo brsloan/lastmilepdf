@@ -16,7 +16,7 @@ import { handleTableGridKey, handleTableGridMouseDown, handleTableGridMouseMove,
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { cropNodeImages } from './page-crop.js';
-import { caretLineExtremes, setProofreadMode, stepProofreadTag } from './proofread.js';
+import { caretLineExtremes, relandProofreadAfterFilterChange, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
@@ -2503,6 +2503,14 @@ el.tagFilter.addEventListener('change', () => {
   // immediately navigate rows again - keyboard tree nav bails out
   // whenever document.activeElement is an INPUT/TEXTAREA/SELECT.
   el.tagFilter.blur();
+  // In Proofread Mode the filter narrows the mode's own list rather than
+  // replacing the tree, and reading carries on from a selected row - so the
+  // selection, not the scroll position, is what has to be put right. See
+  // relandProofreadAfterFilterChange() in proofread.js.
+  if (state.proofreadMode) {
+    relandProofreadAfterFilterChange();
+    return;
+  }
   // Switching back to the full tree can leave the still-selected tag
   // scrolled out of view (it may have been far from the filtered rows
   // that were showing) - bring it back into sight without touching the

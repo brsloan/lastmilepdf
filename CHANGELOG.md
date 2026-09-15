@@ -120,6 +120,15 @@ they summarise each release rather than record every change as it landed.
   fix is graded the same way and marked `AI` rather than "AI fix", and the
   arrow for a flag below a collapsed subtree now follows the asterisks instead
   of leading: `AI**↓` is an AI fix that rewrote the words of a tag inside.
+- Proofread Mode keeps the tag tree's filter dropdown, moved under the Tag
+  Tree tab where the pane is narrow, and the filter now stacks on the mode's
+  own list rather than being replaced by it: the rows stay the flat sequence
+  of tags with text to read, in document order, narrowed to the ones the
+  filter also matches. Set it to **Flagged \*\*** to read through only the
+  tags whose words an AI fix or a Show AT Changes sweep actually changed.
+  Narrowing the currently selected tag off the list lands on the first row
+  that survived, so Page Up/Down carries on reading. The Artifacts tab is
+  hidden while proofreading - an artifact has no Actual Text to read.
 
 ## [0.5.0] - 2026-09-14
 

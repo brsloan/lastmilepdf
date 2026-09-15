@@ -273,6 +273,13 @@ const FILTER_EMPTY_MESSAGES = {
   empty: 'No empty tags.',
 };
 
+// The dropdown's own label for whatever it is set to ('Flagged **', 'Alt
+// Missing'), for the messages that name the filter back to the user. Read
+// off the <option> so the wording can't drift from what the control says.
+function filterLabel() {
+  return el.tagFilter.querySelector(`option[value="${state.filter}"]`)?.textContent || state.filter;
+}
+
 /**
  * Node ids of tags with nothing in them - recomputed once per filtered
  * render pass rather than per node, since answering it for one tag means
@@ -402,6 +409,10 @@ function renderFilteredTree(hadFocus) {
  * visible again after the filter is switched off.
  */
 export function filterRendersFlatRows() {
+  // Proofread Mode renders flat rows whatever the dropdown is set to - the
+  // filter narrows its list rather than choosing how it's drawn (see
+  // renderProofreadTree()).
+  if (state.proofreadMode) return true;
   return state.filter !== 'all' && !NESTED_FILTERS.has(state.filter);
 }
 
@@ -486,14 +497,28 @@ function collectProofreadNodes(node, matches, spanCovered = false) {
 // reflecting only document order, since Proofread Mode's own Page Up/Down
 // and edge-of-line Up/Down stepping (see proofread.js) is the only way
 // through it and has no use for expand/collapse or nesting.
+//
+// The dropdown filter stacks on top of that rather than replacing it: the
+// rows stay the proofread list, in proofread order and proofread shape,
+// narrowed to the ones the filter also matches. Filtering to Flagged ** is
+// then a read-through of exactly the tags whose words changed. 'all' matches
+// everything, so the unfiltered case falls straight out of the same code.
 function renderProofreadTree(hadFocus) {
-  const matches = [];
-  collectProofreadNodes(state.tree, matches);
+  const proofreadable = [];
+  collectProofreadNodes(state.tree, proofreadable);
+  emptyNodeIds = state.filter === 'empty' ? computeEmptyNodeIds() : new Set();
+  const matches = proofreadable.filter((node) => nodeMatchesFilter(node));
 
   if (matches.length === 0) {
     const p = document.createElement('p');
     p.className = 'tree-placeholder';
-    p.textContent = 'No tags with Actual Text or content to proofread.';
+    // Two different dead ends, and they call for different answers: nothing
+    // to proofread at all, or nothing left once the filter had its say -
+    // where the tags the filter matches may well exist, just not among the
+    // ones this mode reads.
+    p.textContent = proofreadable.length === 0
+      ? 'No tags with Actual Text or content to proofread.'
+      : `No tags to proofread match the ${filterLabel()} filter.`;
     el.tagTreeContent.appendChild(p);
     return;
   }
