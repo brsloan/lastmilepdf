@@ -2089,6 +2089,110 @@ kbd {
   border-radius: 4px;
 }
 
+/* --- help/quickstart section nav ---
+   Both of these dialogs are long enough to get lost in, so each carries a
+   contents sidebar built at runtime from its own headings (buildHelpNav() in
+   renderer.js). Only the two navved dialogs opt in - What's New shares
+   .help-dialog and has no headings to list - which is what .help-dialog-navved
+   marks.
+
+   The frame switches from a column flexbox to a two-column grid for these:
+   title bar across the top, nav and body side by side underneath. Done on the
+   dialog itself rather than by wrapping nav + body in a div, because both
+   doc scripts (help-doc.js, quickstart-doc.js) find the end of the body by the
+   last </div> before </dialog>, and a wrapper would end up being the one they
+   found. */
+
+/* Wider than a bare .help-dialog, by rather more than the sidebar costs: the
+   prose column ends up narrower than the 640px the body used to get, which is
+   the right direction for a line of 13-15px text to be read in. */
+.help-dialog-navved {
+  width: min(820px, 94vw);
+}
+
+.help-dialog-navved[open] {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.help-dialog-navved .shortcuts-header {
+  grid-column: 1 / -1;
+}
+
+.help-nav {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 12px 6px 16px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--panel-alt);
+}
+
+.help-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-nav-sublist {
+  margin-left: 10px;
+}
+
+.help-nav-link {
+  display: block;
+  padding: 4px 6px 4px 8px;
+  /* The 2px sits under every link, transparent until current, so nothing
+     shifts sideways when the current section changes as you scroll. */
+  border-left: 2px solid transparent;
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.help-nav-sublist .help-nav-link {
+  font-size: 11.5px;
+}
+
+.help-nav-link:hover {
+  color: var(--text);
+  background: var(--surface-subtle);
+}
+
+/* Weight and the left bar carry this, not the color: the light theme's 7:1
+   palette compresses the hues (see the note at the top of this file), so a
+   tint alone would be a weak signal there and no signal at all to anyone who
+   cannot separate the two greens. */
+.help-nav-link.is-current {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+.help-nav-link:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+}
+
+/* Under ~720px the sidebar would leave the prose too narrow to read, so the
+   same list moves to the top of the dialog and the body takes the full width.
+   Capped and scrollable, so a long contents list cannot crowd out the text it
+   is a contents list for. */
+@media (max-width: 720px) {
+  .help-dialog-navved[open] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .help-nav {
+    max-height: 26vh;
+    padding: 8px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 /* --- quickstart dialog ---
    Borrows the help dialog's frame (.help-dialog) and prose body (.help-body)
    wholesale. QUICKSTART.md only needs two shapes the Help dialog has no

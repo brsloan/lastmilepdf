@@ -471,11 +471,16 @@
        bundled assets/quickstart.pdf from the same text. Borrows the help
        dialog's frame and prose layout - it is the same kind of thing to
        sit and read, and the tutorial the Help dialog is the reference for. -->
-  <dialog id="quickstart-dialog" class="help-dialog" aria-labelledby="quickstart-title">
+  <dialog id="quickstart-dialog" class="help-dialog help-dialog-navved" aria-labelledby="quickstart-title">
     <div class="shortcuts-header">
       <h2 id="quickstart-title">Quick Start</h2>
       <button type="button" id="btn-close-quickstart" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
+    <!-- Filled in by buildHelpNav() in renderer.js from the headings below, so
+         it cannot drift from a dialog QUICKSTART.md rewrites. Must stay OUTSIDE
+         #quickstart-body and before it: quickstart-doc.js finds the end of the
+         body by the last </div> before </dialog>. -->
+    <nav id="quickstart-nav" class="help-nav" aria-label="Quick Start sections"></nav>
     <div id="quickstart-body" class="help-body" tabindex="-1">
       <section class="help-section">
         <p>Go to Help &gt; Quickstart to read this as a scrolling HTML page.</p>
@@ -559,11 +564,15 @@
     </div>
   </dialog>
 
-  <dialog id="help-dialog" class="help-dialog">
+  <dialog id="help-dialog" class="help-dialog help-dialog-navved">
     <div class="shortcuts-header">
       <h2>Help</h2>
       <button type="button" id="btn-close-help" class="btn btn-ghost" aria-label="Close">&times;</button>
     </div>
+    <!-- Filled in by buildHelpNav() in renderer.js from the headings below.
+         Must stay OUTSIDE #help-body and before it: help-doc.js finds the end
+         of the body by the last </div> before </dialog>. -->
+    <nav id="help-nav" class="help-nav" aria-label="Help sections"></nav>
     <div id="help-body" class="help-body" tabindex="-1">
       <section class="help-section">
         <h3>Overview</h3>

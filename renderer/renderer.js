@@ -1269,10 +1269,151 @@ el.tablePreviewDialog.addEventListener('close', () => {
 // scroll at the focus point. Each body carries tabindex="-1" (see
 // index.html) purely so it can be given focus here, which is also what lets
 // a keyboard or screen-reader user reach the content at all.
+/**
+ * Updaters for the contents sidebars, keyed by the dialog they belong to, so
+ * that opening one can re-mark the section it is scrolled to. See
+ * buildHelpNav().
+ *
+ * @type {Map<HTMLDialogElement, () => void>}
+ */
+const helpNavUpdaters = new Map();
+
 function openScrollableDialog(dialog, body) {
   dialog.showModal();
   body.focus();
+  helpNavUpdaters.get(dialog)?.();
 }
+
+// --- Help/Quickstart contents sidebar ----------------------------------
+//
+// Help and Quickstart are both long enough that finding a section meant
+// scrolling for it, so each grows a contents list from its own headings: h3
+// (a .help-section) at the top level, and the h4 sub-heads QUICKSTART.md's
+// table walkthroughs use nested under theirs.
+//
+// Built from the DOM at startup rather than written out in index.html,
+// because the Quickstart dialog's whole body is regenerated from
+// QUICKSTART.md by scripts/quickstart-doc.js - a hand-written list would be
+// one more thing to remember to update, and nothing checks it. Reading the
+// headings back means the two cannot disagree.
+//
+// The headings are given ids here for the same reason, and they are also what
+// the links move focus to: scrolling alone leaves a keyboard or screen-reader
+// user where they were, and the heading is both the right thing to announce
+// and inside the scrollable body, so arrow keys carry on scrolling from it.
+
+/**
+ * @param {HTMLDialogElement} dialog
+ * @param {HTMLElement} body the dialog's scrolling region
+ * @param {HTMLElement} nav the empty <nav> to fill
+ * @param {string} idPrefix namespace for the heading ids, which are document-wide
+ */
+function buildHelpNav(dialog, body, nav, idPrefix) {
+  const headings = /** @type {HTMLElement[]} */ (
+    Array.from(body.querySelectorAll('.help-section h3, .help-section h4'))
+  );
+  if (!headings.length) return;
+
+  /** @type {{link: HTMLAnchorElement, heading: HTMLElement}[]} */
+  const entries = [];
+  const list = document.createElement('ul');
+  list.className = 'help-nav-list';
+  /** @type {HTMLUListElement | null} */
+  let sublist = null;
+
+  headings.forEach((heading, i) => {
+    heading.id = `${idPrefix}-${i}`;
+    heading.tabIndex = -1;
+
+    const link = document.createElement('a');
+    link.className = 'help-nav-link';
+    link.href = `#${heading.id}`;
+    link.textContent = heading.textContent;
+
+    const item = document.createElement('li');
+    item.appendChild(link);
+
+    // An h4 hangs off the h3 above it. The `parent` guard is for the shape
+    // that should never occur - a sub-head before any section heading - where
+    // it just becomes a top-level entry rather than an orphan <ul>.
+    const parent = heading.tagName === 'H4' ? list.lastElementChild : null;
+    if (parent) {
+      if (!sublist || sublist.parentElement !== parent) {
+        sublist = document.createElement('ul');
+        sublist.className = 'help-nav-sublist';
+        parent.appendChild(sublist);
+      }
+      sublist.appendChild(item);
+    } else {
+      sublist = null;
+      list.appendChild(item);
+    }
+
+    link.addEventListener('click', (e) => {
+      // Never let the href become a real navigation: this is a file:// page,
+      // and a hash jump would scroll the document rather than the dialog.
+      e.preventDefault();
+      // A section heading scrolls its whole section into view so the rule
+      // above it lands on screen too; a sub-head has no section of its own.
+      const target = heading.tagName === 'H4' ? heading : (heading.closest('.help-section') ?? heading);
+      target.scrollIntoView({ block: 'start' });
+      heading.focus({ preventScroll: true });
+    });
+
+    entries.push({ link, heading });
+  });
+
+  nav.appendChild(list);
+
+  // Which section you are actually reading, marked as you scroll: the last
+  // heading to have passed the top of the body, or - once the body is scrolled
+  // as far as it goes - the last one outright, since a final short section can
+  // never reach the top on its own.
+  const markCurrent = () => {
+    const bodyTop = body.getBoundingClientRect().top;
+    const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 2;
+    let current = 0;
+    if (atEnd) {
+      current = entries.length - 1;
+    } else {
+      for (let i = 0; i < entries.length; i += 1) {
+        if (entries[i].heading.getBoundingClientRect().top - bodyTop > 12) break;
+        current = i;
+      }
+    }
+    entries.forEach(({ link }, i) => {
+      link.classList.toggle('is-current', i === current);
+      if (i === current) link.setAttribute('aria-current', 'true');
+      else link.removeAttribute('aria-current');
+    });
+    // Keep the marked link reachable when the contents list is itself long
+    // enough to scroll - but only when it has actually gone out of view, so
+    // this cannot fight someone scrolling the list by hand.
+    const { link } = entries[current];
+    const navBox = nav.getBoundingClientRect();
+    const linkBox = link.getBoundingClientRect();
+    if (linkBox.top < navBox.top || linkBox.bottom > navBox.bottom) {
+      link.scrollIntoView({ block: 'nearest' });
+    }
+  };
+
+  let pending = false;
+  body.addEventListener('scroll', () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      markCurrent();
+    });
+  });
+
+  // Not run here: a closed <dialog> has no layout to measure, so the first
+  // real marking happens when openScrollableDialog() opens it.
+  helpNavUpdaters.set(dialog, markCurrent);
+}
+
+buildHelpNav(el.quickstartDialog, el.quickstartBody, el.quickstartNav, 'quickstart-h');
+buildHelpNav(el.helpDialog, el.helpBody, el.helpNav, 'help-h');
 
 window.api.onMenuShortcuts(() => openScrollableDialog(el.shortcutsDialog, el.shortcutsBody));
 

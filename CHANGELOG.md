@@ -11,6 +11,16 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **A contents sidebar in the Help and Quickstart dialogs.** Both are long
+  enough to have to scroll for the part you wanted, so each now lists its own
+  section headings down the left-hand side: click one to jump to it, and the
+  entry for wherever you have scrolled to stays marked as you read. Quickstart
+  also lists the sub-headings of its table walkthroughs, nested under the
+  section they belong to. The list is built from the headings themselves when
+  the app starts rather than written out alongside them, so it cannot fall out
+  of step with a Help or Quickstart doc that has been rewritten. In a narrow
+  window it moves to the top of the dialog instead, rather than squeezing the
+  prose.
 - **Drag a PDF onto the Page Preview pane to open it.** While nothing is
   loaded, the empty pane is a drop target: drag a PDF in from the file
   manager and it opens the same way File > Open would, joining Open Recent
