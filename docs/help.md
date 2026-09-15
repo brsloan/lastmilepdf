@@ -60,6 +60,8 @@ Table preview
 
 See the Help > Shortcuts menu. Most shortcuts can be customized in settings.
 
+<kbd>P</kbd> does more than set a role when the tag is a container: a List, or a Table, flattens into plain paragraphs — one per list item, or one per TH/TD cell in reading order — because a Table whose role simply said "paragraph" would still have rows and cells hanging underneath it. This is the way back out of a table that was never a table on the page, or a list that was never a list. A row group, a row or a single cell can be flattened on its own the same way. Anything a cell held that isn't just text — a nested list, figure or table — is kept as it was, a Caption stays a Caption, and an empty cell contributes nothing.
+
 Right-clicking a tag in the Tag Tree opens the same actions as a menu, each one printed with the key it is bound to — a way to work before the keys are learned, and a way to look one up without leaving the tree. It acts on the whole selection when several tags are selected, exactly as the keys do.
 
 ## Select Content

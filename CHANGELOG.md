@@ -143,6 +143,15 @@ they summarise each release rather than record every change as it landed.
   skipped for the background auto-save.
 
 ### Changed
+- **P** on a table now flattens it into plain paragraphs - one per TH or TD
+  cell, in reading order - instead of relabelling the Table tag and leaving
+  the rows and cells hanging underneath it. This is the way back out of a
+  table that was never a table on the page: a run of text an OCR pass, or a
+  table-detecting AI, boxed into a grid. A row group, a row, or a single cell
+  can be flattened the same way, and a cell holding several paragraphs becomes
+  one, so nothing comes out of the flatten still nested. Cells holding more
+  than text - a nested list, figure or table - keep that content as it was,
+  a Caption stays a Caption, and an empty cell simply contributes nothing.
 - Fix with AI now sends an image of the part of the page the tag's text was
   read from along with the text, so the AI corrects the OCR against the scan
   instead of guessing from the words alone. Names, numbers, dates and unusual

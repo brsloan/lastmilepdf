@@ -505,8 +505,11 @@ export async function applyRoleShortcut(role) {
 }
 
 // Backs the 'P' shortcut: converts each selected tag to a Paragraph, except
-// a List/Span/Div, which gets flattened into paragraphs instead (see
-// convert_to_paragraph() in tag_worker.py for why).
+// a container, which gets flattened into paragraphs instead - a List/Span/
+// Div into whatever its contents make, and a Table (or a row group, row or
+// cell) into one paragraph per TH/TD cell, which is how a table that was
+// never a table on the page is turned back into plain text. See
+// convert_to_paragraph() in tag_worker.py for why.
 //
 // A conversion that only relabelled (`reshaped` false - no container
 // flattened, no leaf wrapped, which is exactly what pressing 'P' on tags

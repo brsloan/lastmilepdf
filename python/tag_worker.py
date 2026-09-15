@@ -1384,9 +1384,13 @@ def _make_paragraph(doc, leaf_ids):
     """A new, not-yet-attached /P struct element grouping every leaf in
     `leaf_ids` (already in document order) under one /K - one new element
     per *run* of leaves that belonged together, never one per leaf. /Pg is
-    taken from the first leaf; leaves grouped by _paragraphize() always come
-    from the same direct-children run (or, for an LI's Lbl+LBody merge,
-    from one list item), so in practice they always share a page."""
+    taken from the first leaf, and any leaf that came from a different page
+    carries its own via _kid_for_leaf() - the same shape
+    _make_leaf_container() builds for an LI's Lbl/LBody. Leaves grouped here
+    come from one direct-children run (or one list item, or one table cell),
+    so in all but the odd page-split case they share a page anyway; when
+    they don't, a bare MCID left to inherit the paragraph's /Pg would name
+    whatever marked content happens to share its number on that page."""
     new_p = doc["pdf"].make_indirect(pikepdf.Dictionary({
         "/Type": pikepdf.Name("/StructElem"),
         "/S": pikepdf.Name("/P"),
@@ -1394,7 +1398,7 @@ def _make_paragraph(doc, leaf_ids):
     page_index = doc["node_pages"].get(leaf_ids[0])
     if page_index is not None:
         new_p["/Pg"] = doc["pdf"].pages[page_index].obj
-    leaf_objs = [doc["elements"][lid] for lid in leaf_ids]
+    leaf_objs = [_kid_for_leaf(doc, lid, page_index) for lid in leaf_ids]
     new_p["/K"] = leaf_objs[0] if len(leaf_objs) == 1 else pikepdf.Array(leaf_objs)
     return new_p
 
@@ -1443,22 +1447,23 @@ def _paragraphize_children(doc, node_id):
     return output
 
 
-def _leaves_through_spans(doc, node_id):
-    """Every content leaf under `node_id`, descending through nested Span
-    children (an inline role with no semantics of its own - a Lbl/LBody's
-    text is routinely wrapped in one for language/style runs) as if they
-    weren't there. Returns None instead if a child of any other structural
-    role turns up, signaling the caller should treat this subtree as too
-    structured to merge into a single leaf run."""
+def _leaves_through_roles(doc, node_id, roles):
+    """Every content leaf under `node_id`, descending through nested
+    children whose role is in `roles` - roles carrying no structure worth
+    keeping once the subtree becomes a single paragraph, such as the Span a
+    Lbl/LBody's text is routinely wrapped in for a language or style run -
+    as if they weren't there. Returns None instead if a child of any other
+    structural role turns up, signaling the caller should treat this subtree
+    as too structured to merge into a single leaf run."""
     leaves = []
     for child_id in _direct_child_ids(doc, node_id):
         if doc["node_kind"].get(child_id) != "element":
             leaves.append(child_id)
             continue
         child_role = str(doc["elements"][child_id].get("/S", "")).lstrip("/")
-        if child_role != "Span":
+        if child_role not in roles:
             return None
-        nested = _leaves_through_spans(doc, child_id)
+        nested = _leaves_through_roles(doc, child_id, roles)
         if nested is None:
             return None
         leaves.extend(nested)
@@ -1468,7 +1473,7 @@ def _leaves_through_spans(doc, node_id):
 def _paragraphize_list_item(doc, node_id):
     """Dissolve for an LI: every content leaf inside a Lbl and/or LBody
     child - including ones tucked inside a nested Span, per
-    _leaves_through_spans() - is combined into one shared /P (they're one
+    _leaves_through_roles() - is combined into one shared /P (they're one
     list item's label and body - flattening them into two disconnected
     paragraphs would lose that). A Lbl/LBody with any *other* nested
     structure falls back to being dissolved on its own via _paragraphize(),
@@ -1496,7 +1501,7 @@ def _paragraphize_list_item(doc, node_id):
             continue
 
         child_role = str(doc["elements"][child_id].get("/S", "")).lstrip("/")
-        leaves = _leaves_through_spans(doc, child_id) if child_role in ("Lbl", "LBody") else None
+        leaves = _leaves_through_roles(doc, child_id, ("Span",)) if child_role in ("Lbl", "LBody") else None
         if leaves is not None:
             flush_pending()
             combined_leaves.extend(leaves)
@@ -1510,12 +1515,87 @@ def _paragraphize_list_item(doc, node_id):
     return output
 
 
-def _flatten_container_to_paragraphs(doc, node_id):
-    """Replaces the List/Span/Div struct element at `node_id` with the
-    fully flattened contents of its whole subtree (see _paragraphize),
-    spliced into its own parent in its place. The container itself is
-    always discarded. Returns the elements that took its place, so the
-    caller can name them once the tree has been rebuilt."""
+# The table roles the 'P' shortcut flattens rather than relabels. None of
+# them can meaningfully just become a /P: a Table whose /S said /P would
+# still have rows and cells hanging underneath it. A Table, or one of its
+# row groups/rows on its own, dissolves into the paragraphs its cells make
+# (_paragraphize_table); a cell becomes one paragraph (_paragraphize_cell).
+_TABLE_CONTAINER_ROLES = ("Table", "THead", "TBody", "TFoot", "TR")
+
+_TABLE_CELL_ROLES = ("TH", "TD")
+
+# Roles a cell may wrap its own content in and still merge into the single
+# paragraph that cell becomes - see _paragraphize_cell().
+_CELL_MERGEABLE_ROLES = ("P", "Span", "Div")
+
+
+def _paragraphize_cell(doc, node_id):
+    """Dissolve for a TH/TD: the cell becomes exactly one /P holding every
+    content leaf in it, however deeply the cell wrapped them - cell text is
+    routinely a /P, or a Span inside one, and one cell is one paragraph
+    either way.
+
+    A cell holding anything more structured than that - a nested list,
+    figure or table - falls back to the generic _paragraphize_children()
+    dissolve instead, which leaves that structure standing rather than
+    flattening away content the user only asked to un-table.
+
+    An empty cell contributes nothing at all: there is no content to put in
+    a paragraph, and an empty /P is a tag Verify would go on to flag."""
+    leaves = _leaves_through_roles(doc, node_id, _CELL_MERGEABLE_ROLES)
+    if leaves is None:
+        return _paragraphize_children(doc, node_id)
+    return [_make_paragraph(doc, leaves)] if leaves else []
+
+
+def _paragraphize_table(doc, node_id):
+    """What a Table - or a row group/row selected on its own - dissolves
+    into when the 'P' shortcut flattens it: a flat run of paragraphs, one
+    per TH/TD cell, in document order. This is the way back out of a table
+    that isn't one: a run of text an OCR pass, or a table-detecting AI,
+    boxed into rows and cells that were never there on the page.
+
+    Anything inside that isn't a row group, a row or a cell dissolves
+    exactly as it would anywhere else (_paragraphize), so a Caption comes
+    through the flatten still a Caption.
+
+    Deliberately reached only from convert_to_paragraph()'s own dispatch,
+    never from _paragraphize(): a table nested inside a List or Div that is
+    being flattened stays a table, because the user aimed the shortcut at
+    the list, not at the table inside it."""
+    output = []
+    pending_leaves = []
+
+    def flush():
+        if pending_leaves:
+            output.append(_make_paragraph(doc, pending_leaves))
+            pending_leaves.clear()
+
+    for child_id in _direct_child_ids(doc, node_id):
+        if doc["node_kind"].get(child_id) != "element":
+            pending_leaves.append(child_id)
+            continue
+        flush()
+        child_role = str(doc["elements"][child_id].get("/S", "")).lstrip("/")
+        if child_role in _TABLE_CONTAINER_ROLES:
+            output.extend(_paragraphize_table(doc, child_id))
+        elif child_role in _TABLE_CELL_ROLES:
+            output.extend(_paragraphize_cell(doc, child_id))
+        else:
+            output.extend(_paragraphize(doc, child_id))
+    flush()
+    return output
+
+
+def _flatten_container_to_paragraphs(doc, node_id, dissolve=_paragraphize):
+    """Replaces the struct element at `node_id` with the flattened contents
+    of its whole subtree, spliced into its own parent in its place. The
+    container itself is always discarded. Returns the elements that took its
+    place, so the caller can name them once the tree has been rebuilt.
+
+    `dissolve` is what the subtree flattens into: _paragraphize for a
+    List/Span/Div, _paragraphize_table for a Table/row group/row, or
+    _paragraphize_cell for a single cell."""
     parent_id = doc["parent_map"].get(node_id)
     if parent_id is None:
         raise ValueError("Cannot flatten the document root")
@@ -1526,7 +1606,7 @@ def _flatten_container_to_paragraphs(doc, node_id):
     if index == -1:
         raise ValueError("Could not locate tag in its parent")
 
-    replacements = _paragraphize(doc, node_id)
+    replacements = dissolve(doc, node_id)
     for repl in replacements:
         repl["/P"] = parent_obj
 
@@ -1537,13 +1617,28 @@ def _flatten_container_to_paragraphs(doc, node_id):
 
 
 def convert_to_paragraph(doc_id, node_ids):
-    """Converts each selected tag to a Paragraph. A List/Span/Div is instead
+    """Converts each selected tag to a Paragraph. A container is instead
     flattened (see _flatten_container_to_paragraphs) rather than simply
-    relabeled, since turning a list/wrapper's own role into /P while leaving
-    its List-Item/inline kids nested beneath it wouldn't make it an actual
-    paragraph. Anything else - including a content/object-ref leaf - is
-    set-or-wrapped to /P the same way set_role_or_wrap() handles H1-H6/LI.
-    Backs the tag tree's 'P' shortcut.
+    relabeled, since turning a list/table/wrapper's own role into /P while
+    leaving its List-Item/row/inline kids nested beneath it wouldn't make it
+    an actual paragraph:
+
+      - a List/Span/Div dissolves into the paragraphs its contents make
+        (_paragraphize);
+      - a Table, row group or row becomes one paragraph per TH/TD cell
+        (_paragraphize_table) - the way back out of a table that was never
+        a table on the page;
+      - a cell on its own becomes the one paragraph it holds
+        (_paragraphize_cell) - unless it holds nothing at all, in which case
+        it is relabelled in place like any other tag, since a cell aimed at
+        directly should still be there afterwards. (Inside a table flatten
+        an empty cell is simply dropped: it has no content to make a
+        paragraph out of, and the flattened text shouldn't be peppered with
+        empty ones.)
+
+    Anything else - including a content/object-ref leaf - is set-or-wrapped
+    to /P the same way set_role_or_wrap() handles H1-H6/LI. Backs the tag
+    tree's 'P' shortcut.
 
     Reports `reshaped`: whether any target was flattened or wrapped, i.e.
     whether the rebuilt tree's node ids still line up with the ones the
@@ -1576,6 +1671,14 @@ def convert_to_paragraph(doc_id, node_ids):
             if role in ("L", "Span", "Div"):
                 paragraphs.extend(_flatten_container_to_paragraphs(doc, node_id))
                 reshaped = True
+            elif role in _TABLE_CONTAINER_ROLES:
+                paragraphs.extend(_flatten_container_to_paragraphs(
+                    doc, node_id, _paragraphize_table))
+                reshaped = True
+            elif role in _TABLE_CELL_ROLES and _collect_leaf_ids(doc, node_id):
+                paragraphs.extend(_flatten_container_to_paragraphs(
+                    doc, node_id, _paragraphize_cell))
+                reshaped = True
             else:
                 doc["elements"][node_id]["/S"] = pikepdf.Name("/P")
                 paragraphs.append(doc["elements"][node_id])
@@ -1594,8 +1697,9 @@ def convert_to_paragraph(doc_id, node_ids):
 def _collect_leaf_ids(doc, node_id):
     """Every content/object-ref leaf anywhere under `node_id`, in document
     order - descends through struct-element children of any role (unlike
-    _leaves_through_spans, which only tunnels through Span, or _paragraphize,
-    which stops at the first non-transparent role). Used by the 'F' shortcut
+    _leaves_through_roles, which only tunnels through the roles it is
+    handed, or _paragraphize, which stops at the first non-transparent
+    role). Used by the 'F' shortcut
     to flatten a converted tag's whole subtree down to just its content
     leaves, discarding whatever structure used to sit between them."""
     leaves = []

@@ -1494,6 +1494,58 @@ async function listAndTableTests(fixture) {
     });
   }));
 
+  await test('pressing P on a table flattens it to one paragraph per cell', () => withDoc(fixture, async (doc) => {
+    // The way back out of a table that was never a table on the page - a run
+    // of text an OCR pass, or a table-detecting AI, boxed into rows and
+    // cells. Every cell that held something becomes its own paragraph, and
+    // none of the content moves: the leaves keep the (page, mcid) they had,
+    // which is what proves the flatten re-parented them without repointing
+    // any bare MCID at another page.
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const cells = collectTableRows(table).flatMap((row) => collectRowCells(row));
+    const filled = cells.filter((cell) => contentLeaves(cell).length > 0);
+    if (filled.length === 0) skip('Table in this fixture has no cells with content');
+    const tablesBefore = byRole(doc.tree, 'Table').length;
+    const fingerprint = contentFingerprint(doc.tree);
+
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: [table.id] });
+    assertEqual(result.reshaped, true, 'flattening a table reported an unchanged tree');
+    assertEqual(byRole(result.tree, 'Table').length, tablesBefore - 1, 'the Table tag is still there');
+    assertEqual(result.newNodeIds.length, filled.length,
+      'not one paragraph per cell that had content - an empty cell contributes none');
+    for (const id of result.newNodeIds) {
+      assertEqual(findById(result.tree, id)?.role, 'P', `reported id ${id} is not a paragraph`);
+    }
+    assertEqual(contentFingerprint(result.tree), fingerprint, 'flattening the table moved content');
+
+    await saveAndReopen(doc.docId, 'flatten-table', (reopened) => {
+      assertEqual(byRole(reopened.tree, 'Table').length, tablesBefore - 1, 'the Table came back after the save');
+      assertEqual(contentFingerprint(reopened.tree), fingerprint, "the flattened table's content moved on save");
+    });
+  }));
+
+  await test('flattening a cell merges everything it held into one paragraph', () => withDoc(fixture, async (doc) => {
+    // A cell wraps its text in a /P as a matter of course, and sometimes in
+    // more than one - relabelling the cell itself would leave a P inside a
+    // P. One cell is one paragraph however deeply it was wrapped.
+    const table = firstByRole(doc.tree, 'Table');
+    if (!table) skip('no Table in this fixture');
+    const cells = collectTableRows(table).flatMap((row) => collectRowCells(row));
+    const cell = cells.find((c) => contentLeaves(c).length > 1);
+    if (!cell) skip('no cell with more than one content leaf in this fixture');
+    const leaves = contentLeaves(cell).map((n) => `${n.page}:${n.mcid}`);
+
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: [cell.id] });
+    assertEqual(result.newNodeIds.length, 1, 'a single cell did not become a single paragraph');
+    const para = findById(result.tree, result.newNodeIds[0]);
+    assertEqual(para?.role, 'P', 'the cell did not become a paragraph');
+    assertEqual(contentLeaves(para).map((n) => `${n.page}:${n.mcid}`).join(' '), leaves.join(' '),
+      "the paragraph does not hold exactly the cell's content, in order");
+    assertEqual((para.children || []).every((c) => c.type === 'content'), true,
+      'the paragraph still has tags nested inside it');
+  }));
+
   await test('adding a table row creates a TR with cells and survives save', () => withDoc(fixture, async (doc) => {
     const table = firstByRole(doc.tree, 'Table');
     if (!table) skip('no Table in this fixture');
