@@ -196,3 +196,20 @@ export function base64ToUint8Array(base64) {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
+
+// Friendly label for a configurable tagging/proofread shortcut's
+// KeyboardEvent.key (e.g. "PageUp" -> "Page Up", "p" -> "P"). These are
+// recorded as .key rather than .code (see findTagShortcutAction() in
+// renderer.js, which compares case-insensitively), so single-character keys
+// are just uppercased rather than looked up in a code table - unlike the
+// Extra Delete/Artifact key, whose formatKeyCode() stays in renderer.js
+// beside the recorder that is its only caller.
+//
+// Shared by the Preferences shortcut rows and the Tag Tree context menu, so
+// a key shown in the menu is spelled exactly the way Preferences spells it.
+export function formatShortcutKey(key) {
+  if (!key) return 'Not set';
+  if (key === ' ') return 'Space';
+  if (key.length === 1) return key.toUpperCase();
+  return key.replace(/([a-z])([A-Z])/g, '$1 $2');
+}

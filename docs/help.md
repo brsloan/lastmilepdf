@@ -58,6 +58,8 @@ Table preview
 
 See the Help > Shortcuts menu. Most shortcuts can be customized in settings.
 
+Right-clicking a tag in the Tag Tree opens the same actions as a menu, each one printed with the key it is bound to — a way to work before the keys are learned, and a way to look one up without leaving the tree. It acts on the whole selection when several tags are selected, exactly as the keys do.
+
 ## Select Content
 
 Tagging usually starts from a tag that already exists. **Select Content** starts from the page instead: click the toolbar button, drag a rectangle over the text you want, and press a tagging shortcut to turn whatever you covered into one new tag.

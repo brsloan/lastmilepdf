@@ -377,7 +377,7 @@
 
       <section class="shortcuts-group">
         <h3>Tagging</h3>
-        <p class="settings-hint">Keys below are the defaults - configurable in File &gt; Settings &gt; Preferences.</p>
+        <p class="settings-hint">Keys below are the defaults - configurable in File &gt; Settings &gt; Preferences. Right-click a tag in the Tag Tree to run any of them from a menu, each listed with the key it is bound to.</p>
         <dl>
           <div class="shortcut-row"><dt><kbd>1</kbd>&ndash;<kbd>6</kbd></dt><dd>Set role to H1&ndash;H6</dd></div>
           <div class="shortcut-row"><dt><kbd>P</kbd></dt><dd>Convert to Paragraph</dd></div>
@@ -499,6 +499,7 @@
       <section class="help-section">
         <h3>Tagging shortcuts</h3>
         <p>See the Help &gt; Shortcuts menu. Most shortcuts can be customized in settings.</p>
+        <p>Right-clicking a tag in the Tag Tree opens the same actions as a menu, each one printed with the key it is bound to &mdash; a way to work before the keys are learned, and a way to look one up without leaving the tree. It acts on the whole selection when several tags are selected, exactly as the keys do.</p>
       </section>
 
       <section class="help-section">
@@ -812,6 +813,13 @@
     <p class="verify-notice">This is a convenience checker for common issues, not a full WCAG/PDF-UA conformance test. Passing here does not guarantee the document is fully accessible.</p>
     <div id="verify-body" class="verify-body" tabindex="-1"></div>
   </dialog>
+
+  <!-- The Tag Tree's right-click menu (tree-menu.js). A sibling of the
+       dialogs rather than a child of the tree pane: it is positioned against
+       the viewport, and nesting it inside the pane it covers would put it
+       inside the scrolling region it is anchored to. Built on open, so it is
+       empty here. -->
+  <div id="tag-tree-context-menu" class="context-menu" role="menu" aria-label="Tag actions" hidden></div>
 
   <script type="module" src="renderer.js"></script>
 </body>

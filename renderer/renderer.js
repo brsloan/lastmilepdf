@@ -6,7 +6,7 @@ import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSele
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
-import { applyRoleShortcut, attemptHeadingLevelChange, tagRectSelectionAsHangingList, convertSelectionToFigure, convertSelectionToListItem, convertSelectionToParagraph, deleteSelection, groupSelectionIntoList, groupSelectionIntoTable, groupSelectionIntoTr, insertParagraphAfterSelection, joinSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels, tagRectSelection } from './editing.js';
+import { applyTagShortcutAction, attemptHeadingLevelChange, tagRectSelectionAsHangingList, deleteSelection, insertParagraphAfterSelection, moveSelectedSibling, performRedo, performUndo, shiftSelectedHeadingLevels, tagRectSelection } from './editing.js';
 import { MIN_FIGURE_DRAW_PX, canvasPointFromEvent, renderFigureDrawRect, setFigureDrawActive } from './figure-draw.js';
 import {
   MIN_RECT_SELECT_PX, clearRectSelect, normalizedDragBox,
@@ -21,10 +21,12 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
 import { walkTree } from './tree-index.js';
+import { closeMenu, openTagTreeContextMenu } from './tree-menu.js';
 import { applyFreshTree, extendSelectionTo, filterRendersFlatRows, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { deleteCurrentScript, loadScripts, newScript, openScriptsDialog, runActiveScript, saveCurrentScript, selectScriptForEditing, updateRunScriptButtonState } from './scripts.js';
 import { renderVerifyResults } from './verify.js';
 import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshHighlightForCurrentPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { formatShortcutKey } from './util.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // renderer.js
@@ -95,7 +97,15 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 el.tabTagTree.addEventListener('click', () => showTagTreePanel());
 
-el.tabArtifacts.addEventListener('click', () => { showArtifactsPanel(); });
+// Switching to Artifacts takes the tags the Tag Tree's right-click menu
+// would act on off the screen, so the menu goes with them.
+el.tabArtifacts.addEventListener('click', () => { closeMenu(); showArtifactsPanel(); });
+
+// Right-click anywhere in the Tag Tree pane: the same edits the tagging
+// shortcuts make, listed with their keys, for the user who hasn't learned
+// them (see tree-menu.js). Delegated to the pane rather than attached per
+// row, since renderTree() rebuilds every row on every selection change.
+el.tagTree.addEventListener('contextmenu', (e) => openTagTreeContextMenu(e));
 
 window.addEventListener('keydown', (e) => {
   if (state.treePanel !== 'artifacts') return;
@@ -344,19 +354,6 @@ function formatKeyCode(code) {
 // two Delete keydown handlers below (bookmarks panel, tag tree).
 function isDeleteShortcut(e) {
   return e.key === 'Delete' || (!!state.extraDeleteKeyCode && e.code === state.extraDeleteKeyCode);
-}
-
-// Friendly label for a configurable tagging/proofread shortcut's
-// KeyboardEvent.key (e.g. "PageUp" -> "Page Up", "p" -> "P") - unlike
-// formatKeyCode() above, these are recorded as .key rather than .code (see
-// findTagShortcutAction()/the proofread handler below, which compare
-// case-insensitively), so single-character keys are just uppercased rather
-// than looked up in a code table.
-function formatShortcutKey(key) {
-  if (!key) return 'Not set';
-  if (key === ' ') return 'Space';
-  if (key.length === 1) return key.toUpperCase();
-  return key.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
 // Human-readable reason a KeyboardEvent can't be recorded as a tagging/
@@ -1963,8 +1960,10 @@ window.addEventListener('keydown', (e) => {
 // backend op (set_role_or_wrap/convert_to_paragraph/make_list/make_table/
 // make_tr/convert_to_figure/convert_to_list_item in tag_worker.py) rather
 // than a plain Role edit, since a content/object-ref leaf has no role of its
-// own to set - these wrap it in a brand-new struct element instead. See each
-// case below for what it actually does structurally.
+// own to set - these wrap it in a brand-new struct element instead. See
+// applyTagShortcutAction() in editing.js, which is where each action is
+// dispatched - shared with the Tag Tree's right-click menu (tree-menu.js),
+// so a menu entry and its key can't drift apart.
 function findTagShortcutAction(key) {
   return TAG_SHORTCUT_ACTIONS.find((a) => state.tagShortcuts[a.id]?.toLowerCase() === key)?.id ?? null;
 }
@@ -2053,42 +2052,10 @@ window.addEventListener('keydown', (e) => {
 
   if (state.selectedNodeIds.size === 0) return;
 
+  // Shared with the Tag Tree's right-click menu (tree-menu.js) - see
+  // applyTagShortcutAction() for what each action does structurally.
   e.preventDefault();
-  switch (action) {
-    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
-      applyRoleShortcut(`H${action.slice(1)}`);
-      break;
-    case 'paragraph':
-      convertSelectionToParagraph();
-      break;
-    case 'list':
-      groupSelectionIntoList();
-      break;
-    case 'listItem':
-      convertSelectionToListItem();
-      break;
-    case 'table':
-      groupSelectionIntoTable();
-      break;
-    case 'tr':
-      groupSelectionIntoTr();
-      break;
-    case 'td':
-      applyRoleShortcut('TD');
-      break;
-    case 'th':
-      applyRoleShortcut('TH');
-      break;
-    case 'figure':
-      convertSelectionToFigure();
-      break;
-    case 'caption':
-      applyRoleShortcut('Caption');
-      break;
-    case 'join':
-      joinSelection();
-      break;
-  }
+  applyTagShortcutAction(action);
 });
 
 // While a table grid is up it owns the keyboard: Enter/Backspace step

@@ -28,9 +28,11 @@ export const APP_NAME = 'LastMilePDF';
 // in the persisted settings.json map (see window.api.get/setTagShortcuts()
 // and get/setProofreadShortcuts() in preload.js); `defaultKey` is a
 // KeyboardEvent.key value (compared case-insensitively - see
-// findTagShortcutAction() in renderer.js). Dispatch to the actual editing.js
-// functions lives in renderer.js, not here, since this module stays a leaf
-// with no imports.
+// findTagShortcutAction() in renderer.js). Dispatch lives in
+// applyTagShortcutAction() in editing.js, not here, since this module stays
+// a leaf with no imports - and both the keydown handler and the Tag Tree's
+// right-click menu (tree-menu.js) go through it, so an action listed here
+// means the same edit however it was reached.
 export const TAG_SHORTCUT_ACTIONS = [
   { id: 'h1', label: 'Heading 1', defaultKey: '1' },
   { id: 'h2', label: 'Heading 2', defaultKey: '2' },

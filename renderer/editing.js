@@ -815,3 +815,45 @@ export async function shiftSelectedHeadingLevels(direction) {
     reportError('Could not change heading levels', err);
   }
 }
+
+// Runs one TAG_SHORTCUT_ACTIONS id against the tags currently selected in
+// the tree - the shared body of the tagging shortcuts' keydown handler in
+// renderer.js and of the Tag Tree context menu (tree-menu.js), so a menu
+// entry and its key are the same edit rather than two that have to be kept
+// in step.
+//
+// Only the tree branch lives here. The keydown handler answers the same
+// keys for a pending rectangle selection and for the Artifacts tab first,
+// and both of those are reached from surfaces the tree's own menu can't be
+// opened on (see openTagTreeContextMenu(), which drops a pending rectangle
+// selection precisely so the two can't disagree about what a key means).
+//
+// The caller is expected to have checked there is a selection at all; with
+// none, every branch below is a no-op of its own anyway.
+/** @param {string} action */
+export function applyTagShortcutAction(action) {
+  switch (action) {
+    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+      return applyRoleShortcut(`H${action.slice(1)}`);
+    case 'paragraph':
+      return convertSelectionToParagraph();
+    case 'list':
+      return groupSelectionIntoList();
+    case 'listItem':
+      return convertSelectionToListItem();
+    case 'table':
+      return groupSelectionIntoTable();
+    case 'tr':
+      return groupSelectionIntoTr();
+    case 'td':
+      return applyRoleShortcut('TD');
+    case 'th':
+      return applyRoleShortcut('TH');
+    case 'figure':
+      return convertSelectionToFigure();
+    case 'caption':
+      return applyRoleShortcut('Caption');
+    case 'join':
+      return joinSelection();
+  }
+}

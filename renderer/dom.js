@@ -64,6 +64,7 @@ export const el = {
   artifactsNote: asElement('artifacts-note'),
   artifactList: asElement('artifact-list'),
   tagTreeContent: asElement('tag-tree-content'),
+  tagTreeContextMenu: asElement('tag-tree-context-menu'),
   tagTreeScrollSpacerTop: asElement('tag-tree-scroll-spacer-top'),
   tagTreeScrollSpacerBottom: asElement('tag-tree-scroll-spacer-bottom'),
   highlightLayer: asElement('highlight-layer'),
