@@ -29,6 +29,8 @@ Figures, Lists and Tables keep each match's own contents browsable underneath it
 
 When the tree is filtered to Headings, ←/→ step the heading level.
 
+Reopening a PDF picks up where you left it — the tag that was selected, the tags you had expanded, how far down the tree you had scrolled, and the page the preview was on — so a long document doesn't have to be re-expanded a level at a time every session. If the file has been edited since (elsewhere, or here with the changes never saved), its tags no longer line up with what was remembered and it opens at the structure root the way it used to.
+
 ## Tag Properties panel
 
 Editing the selected tag(s):
@@ -159,6 +161,8 @@ View > Proofread Mode switches to a focused layout for reading through the docum
 The filter dropdown moves under the Tag Tree tab here, and narrows that flat list rather than replacing it: set it to **Flagged **** to read through only the tags whose words an AI fix or a **Show AT Changes** sweep actually changed, still one tag at a time and still in document order. The Artifacts tab is hidden while proofreading — an artifact has no Actual Text to read.
 
 That filter and **Show AT Changes** belong to Proofread Mode for as long as it is on. Turning the mode on sets both to whatever you left them at the last time you proofread — the first time, that means **Show AT Changes** on and the filter on **All** — and turning the mode off puts them back exactly as they were before, so the tree you were tagging in is waiting where you left it.
+
+A document closed while proofreading reopens proofreading, on the tag you had reached, with the caret at the start of its Actual Text. Opening a document while the mode is already on never turns it off — the mode is yours for as long as you want it, whatever the file you open was last read in.
 
 While a tag is showing a highlighted diff (an AI fix, or a **Show AT Changes** flag), Proofread Mode also marks the same changes on the page: the words the OCR read differently are marked where they sit on the page, and a thin amber bar marks where words were added that the OCR missed. Positions within a line are estimated from character counts, so they point at the right spot rather than outline it exactly.
 

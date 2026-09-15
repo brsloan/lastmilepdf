@@ -11,6 +11,20 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **Documents reopen where you left them.** A PDF opened again comes back to
+  the tag that was selected, the tags that were expanded, how far down the tag
+  tree was scrolled and the page the preview was on, instead of the structure
+  root with everything collapsed - which on a long document meant re-expanding
+  the same dozen levels at the start of every session. Remembered per file, for
+  the twenty most recently opened. A document closed while proofreading reopens
+  proofreading, resuming from the tag that had been reached, with the caret at
+  the start of its Actual Text rather than selecting the whole field - a resumed
+  read is not the place to leave a tag's text one keystroke from being wiped.
+  Opening a document never turns that mode off, whatever the file was last read
+  in. A file that has been edited since - elsewhere, or here with the changes
+  never saved - opens the old way: what was recorded is checked against the
+  document's structure before any of it is trusted, since a tag's id only means
+  anything against the exact tree it came from.
 - **Artifacts tab.** The Tag Tree pane now has a second tab listing everything
   the document marks `/Artifact` - the content deliberately left out of the
   tag tree, which assistive technology skips: running heads, footers, page

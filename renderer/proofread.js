@@ -105,12 +105,26 @@ export function rememberProofreadViewPrefs() {
   window.api.setProofreadViewPrefs(currentProofreadViewPrefs());
 }
 
-export async function setProofreadMode(enabled) {
+/**
+ * @param {boolean} enabled
+ * @param {{ landOn?: string | null }} [options] `landOn` names the tag to
+ * resume reading from instead of the first one on the list - how reopening a
+ * document that was left proofreading picks up where it stopped (see
+ * view-memory.js). Ignored when that tag isn't on the mode's list.
+ */
+export async function setProofreadMode(enabled, { landOn = null } = {}) {
   // Turning the mode on re-selects (below), and turning it off re-renders -
   // either way a debounced edit still sitting in the Actual Text field has to
   // be committed first, while el.fieldNodeId still names the tag it belongs
   // to. See flushPendingLiveApply() in details.js.
   await flushPendingLiveApply();
+  // The View menu's checkbox is a main-process MenuItem, so it only tracks
+  // the mode when the renderer says so - and the renderer enters this mode on
+  // its own when a document is reopened that was left in it. Sent on every
+  // path rather than only that one: where the click on the item is what got
+  // us here, main has already recorded the same value and this changes
+  // nothing. Mirrors applyProofreadShowAtChanges() above.
+  window.api.setMenuProofreadChecked(enabled);
   state.proofreadMode = enabled;
   document.body.classList.toggle('proofread-mode', enabled);
   // The dropdown filter stays, and stacks: in Proofread Mode it narrows the
@@ -187,11 +201,24 @@ export async function setProofreadMode(enabled) {
   // Proofread Mode on. selectNode() re-renders the tree/details panel again
   // on top of the renderTree() call above, which is fine - the same minor
   // redundancy stepProofreadTag() already accepts on every step.
-  const firstRow = selectableRows()[0];
-  if (firstRow) {
-    selectNode(firstRow.dataset.nodeId);
+  //
+  // Unless the caller named a tag to resume from and it is still on the list,
+  // in which case that is where reading picks up. The caret goes to the start
+  // of its Actual Text rather than selecting the whole field: resuming lands
+  // on a tag that was already being read, and select-all would leave its text
+  // one keystroke from being wiped. Same reasoning, and the same caret, as
+  // relandProofreadAfterFilterChange() below.
+  const rows = selectableRows();
+  const resumeRow = landOn ? rows.find((row) => row.dataset.nodeId === landOn) : null;
+  const targetRow = resumeRow || rows[0];
+  if (targetRow) {
+    selectNode(targetRow.dataset.nodeId);
     el.fieldActualText.focus();
-    el.fieldActualText.select();
+    if (resumeRow) {
+      el.fieldActualText.setSelectionRange(0, 0);
+    } else {
+      el.fieldActualText.select();
+    }
   } else if (state.selectedNodeId) {
     refreshDetailsForSelection();
   }

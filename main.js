@@ -592,6 +592,52 @@ function setProofreadViewPrefs(value) {
   writeSettingsFile(settings);
 }
 
+// --- Per-file view state ------------------------------------------------
+//
+// Where the user was in a document the last time they had it open: which
+// tag was selected, which tags they had expanded, how far down the tag tree
+// was scrolled, and which page the preview was on. Reopening a PDF then
+// picks up the reading position rather than dropping the user back at the
+// structure root with everything collapsed - which on a long document meant
+// re-expanding the same dozen levels every session.
+//
+// One record per file path, newest first and capped the same way
+// recentFiles is: a file the user hasn't touched in twenty documents' time
+// has almost certainly moved on, and the records are the only thing here
+// that grows with the size of the document rather than being a fixed handful
+// of values.
+//
+// main.js stores whatever object it's handed, the same arrangement as the
+// shortcut maps and proofreadViewPrefs above: what a valid record looks like
+// depends on the renderer's node ids and tree rendering, so the renderer is
+// what validates one on the way back out (see view-memory.js). What main.js
+// does own is the keying and the cap.
+const FILE_VIEW_STATES_MAX = 20;
+
+function readFileViewStates() {
+  const list = readSettingsFile().fileViewStates;
+  return Array.isArray(list) ? list.filter((entry) => entry && typeof entry.path === 'string') : [];
+}
+
+function getFileViewState(filePath) {
+  const entry = readFileViewStates().find((item) => item.path === filePath);
+  return entry && entry.view && typeof entry.view === 'object' ? entry.view : null;
+}
+
+// A null/undefined `view` drops the record instead of storing an empty one -
+// that's how the renderer says "this document has nothing worth remembering"
+// (no tree, or nothing selected yet), and leaving the previous record in
+// place would restore a position the user has since navigated away from.
+function setFileViewState(filePath, view) {
+  const settings = readSettingsFile();
+  const existing = readFileViewStates().filter((item) => item.path !== filePath);
+  settings.fileViewStates = (view && typeof view === 'object'
+    ? [{ path: filePath, view }, ...existing]
+    : existing
+  ).slice(0, FILE_VIEW_STATES_MAX);
+  writeSettingsFile(settings);
+}
+
 // Whether the renderer periodically saves the open document to disk on its
 // own, in addition to an explicit Save (File > Settings > Preferences).
 // Persisted the same way as showTagTypeLabel above, but defaults off - unlike
@@ -934,6 +980,7 @@ function buildAppMenu() {
         { role: 'togglefullscreen' },
         { type: 'separator' },
         {
+          id: 'menu-proofread',
           label: 'Proofread Mode',
           type: 'checkbox',
           checked: menuProofreadChecked,
@@ -1194,6 +1241,17 @@ ipcMain.on('menu:show-at-changes-state-changed', (_event, { checked }) => {
   menuShowAtChangesChecked = !!checked;
   const item = Menu.getApplicationMenu()?.getMenuItemById('menu-show-at-changes');
   if (item) item.checked = menuShowAtChangesChecked;
+});
+
+// The same, for the View menu's Proofread Mode checkbox. The renderer turns
+// that mode on by itself when a document is reopened that was left in it
+// (see view-memory.js), and the item would otherwise sit unchecked over a
+// window that is plainly proofreading - with the next click on it sending
+// `true` and re-entering the mode the app is already in.
+ipcMain.on('menu:proofread-state-changed', (_event, { checked }) => {
+  menuProofreadChecked = !!checked;
+  const item = Menu.getApplicationMenu()?.getMenuItemById('menu-proofread');
+  if (item) item.checked = menuProofreadChecked;
 });
 
 ipcMain.handle('dialog:confirm-discard', async (event, { detail }) => {
@@ -1526,6 +1584,12 @@ ipcMain.handle('settings:set-proofread-shortcuts', async (_event, { value }) => 
 ipcMain.handle('settings:get-proofread-view-prefs', async () => getProofreadViewPrefs());
 ipcMain.handle('settings:set-proofread-view-prefs', async (_event, { value }) => {
   setProofreadViewPrefs(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-file-view-state', async (_event, { filePath }) => getFileViewState(filePath));
+ipcMain.handle('settings:set-file-view-state', async (_event, { filePath, view }) => {
+  setFileViewState(filePath, view);
   return true;
 });
 

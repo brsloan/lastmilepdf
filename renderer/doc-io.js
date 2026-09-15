@@ -14,8 +14,19 @@ import { updateRunScriptButtonState } from './scripts.js';
 import { applyUndoState, markDirty, reportError, setFileName, setStatus } from './shell.js';
 import { state } from './state.js';
 import { applyFreshTree, renderTree, selectNode } from './tree-view.js';
+import { setProofreadMode } from './proofread.js';
 import { verifyAfterSave } from './verify.js';
-import { loadPdfPreview, updatePageNavUI } from './viewer.js';
+import { loadPdfPreview, renderCurrentPage, updatePageNavUI } from './viewer.js';
+import {
+  applyRememberedScroll,
+  applyRememberedTreeState,
+  flushViewState,
+  loadViewState,
+  rememberedPage,
+  rememberedProofreadMode,
+  rememberViewState,
+  setRestoringViewState,
+} from './view-memory.js';
 import { stopWalking } from './walk.js';
 
 // Shared gate in front of anything that would throw away the current
@@ -64,6 +75,18 @@ export async function performOpen(filePath) {
       setStatus('Ready.');
       return;
     }
+
+    // Where the outgoing document was left, before anything below starts
+    // dismantling it - and where the incoming one was left last time, read
+    // now so the restore below has it in hand. Nothing else may write a
+    // position until that restore has happened: the open sequence redraws
+    // the tree several times on the way (empty, then again once the preview
+    // has loaded), and each of those renders would otherwise save the blank
+    // state it is passing through over the record being restored from. See
+    // view-memory.js.
+    flushViewState();
+    setRestoringViewState(true);
+    const remembered = await loadViewState(opened.filePath);
 
     // The worker keeps every document it has opened - along with its undo
     // snapshots, which for a large PDF dwarf the file itself - until it's
@@ -135,11 +158,52 @@ export async function performOpen(filePath) {
         : ' No tags have Actual Text that differs from their pulled content.';
     }
 
+    // Back to where this document was left last time, if it is still the
+    // same document - applyRememberedTreeState() answers null when the file
+    // has been edited since (its node ids would name different tags now),
+    // and the defaults below take over.
+    //
+    // The page goes back first and the tag second: selecting a tag jumps the
+    // preview to that tag's own page, so it gets the last word where the two
+    // disagree, and the remembered page is what answers for a document left
+    // on the structure root, or on a tag with no page of its own.
+    const rememberedNodeId = applyRememberedTreeState(remembered);
+    const rememberedPageNumber = rememberedPage(remembered);
+    if (rememberedPageNumber !== null && rememberedPageNumber !== state.currentPage) {
+      state.currentPage = rememberedPageNumber;
+      await renderCurrentPage();
+      updatePageNavUI();
+    }
+
     // Land on the structure root by default, once the preview (and so
     // state.pdfDoc) is in place for the resulting highlight to target - its
     // details panel is where Title/Author/Language get set (see
     // showRootDetails() in details.js).
-    if (state.tree) selectNode('root');
+    if (state.tree) selectNode(rememberedNodeId || 'root');
+
+    // A document left in Proofread Mode reopens in it, resuming from the tag
+    // that was being read. The mode replaces the tree with its own flat list
+    // and scrolls that list to line the selected row up with the Actual Text
+    // field (see refreshDetailsForSelection() in details.js), so the selected
+    // tag IS the position there and the remembered scroll offset has nothing
+    // to add - hence one branch or the other, not both.
+    //
+    // Only entered from here, never left: see rememberedProofreadMode(). And
+    // only when the mode isn't already on, since setProofreadMode() captures
+    // the settings it is displacing on the way in, and calling it a second
+    // time would capture its own.
+    if (!state.proofreadMode && rememberedProofreadMode(remembered)) {
+      await setProofreadMode(true, { landOn: rememberedNodeId });
+      atChangesSummary += ' Proofread Mode is on, where you left it.';
+    } else if (!state.proofreadMode) {
+      // Only once the tree has been drawn with the selection in it - which
+      // expands that tag's ancestors, and so decides which rows exist at all
+      // - is there a tree to put back where it was scrolled to. Skipped when
+      // the app was already proofreading before this document was opened:
+      // that mode aligns the tree itself, and a scroll offset set here would
+      // just be undone.
+      applyRememberedScroll(remembered);
+    }
 
     // Landing on the root above puts the pane back on the tag tree, so this
     // only has anything to do for an untagged PDF - which has no root to
@@ -149,6 +213,14 @@ export async function performOpen(filePath) {
     setStatus((opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).') + atChangesSummary);
   } catch (err) {
     reportError('Could not open PDF', err);
+  } finally {
+    // Whether the open finished or threw, the renderer is done standing off
+    // the record and can go back to keeping it current - starting with what
+    // is on screen right now, so that a document whose remembered position
+    // was rejected as stale records a usable one without waiting for the
+    // user to move something first.
+    setRestoringViewState(false);
+    rememberViewState();
   }
 }
 
@@ -231,6 +303,12 @@ export async function performSaveAs() {
       state.savedFilePath = savedPath;
       markDirty(false);
       setFileName(savedPath.split(/[\\/]/).pop());
+      // The document now belongs to a different path, and the position on
+      // screen is that path's position - recorded here rather than left to
+      // whatever next happens to redraw the tree. The old path keeps the
+      // record it already had, which still describes the file still sitting
+      // there. See view-memory.js.
+      flushViewState();
     }
     setStatus(savedPath ? `Saved to ${savedPath}` : 'Ready.');
     if (savedPath) reportAccessibilityAfterSave(`Saved to ${savedPath}`);
@@ -280,6 +358,10 @@ export async function performClose() {
     setStatus('Ready.');
     return;
   }
+
+  // Last look at where the user was, while the tree is still on screen to
+  // be read - everything below this takes it apart. See view-memory.js.
+  flushViewState();
 
   stopWalking();
   const previousDocId = state.docId;

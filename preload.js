@@ -418,6 +418,14 @@ const api = {
    * @returns {void}
    */
   setMenuShowAtChangesChecked: (checked) => ipcRenderer.send('menu:show-at-changes-state-changed', { checked }),
+
+  /**
+   * The same, for the View menu's Proofread Mode checkbox - sent whenever the
+   * renderer enters or leaves that mode on its own rather than from a click on
+   * the item, which reopening a document left in the mode does.
+   * @param {boolean} checked
+   */
+  setMenuProofreadChecked: (checked) => ipcRenderer.send('menu:proofread-state-changed', { checked }),
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuProofread: (callback) => ipcRenderer.on('menu:proofread', callback),
   /** @param {() => void} callback */
@@ -577,6 +585,19 @@ const api = {
   getProofreadViewPrefs: () => ipcRenderer.invoke('settings:get-proofread-view-prefs'),
   /** @param {{ showAtChanges: boolean, filter: string }} value @returns {Promise<void>} */
   setProofreadViewPrefs: (value) => ipcRenderer.invoke('settings:set-proofread-view-prefs', { value }),
+
+  // Where the user was in a given PDF the last time they had it open - the
+  // selected tag, which tags were expanded, the tag tree's scroll position
+  // and the preview's page - keyed by file path, so reopening a document
+  // picks up where the last session left it. Written by using the app rather
+  // than by a Preferences control; persisted the same way as the settings
+  // above, and validated on the way back in by the renderer (view-memory.js),
+  // since what makes a record still valid is whether the document's tag ids
+  // still mean the same tags. Passing null as `view` forgets the file.
+  /** @param {string} filePath @returns {Promise<Record<string, unknown> | null>} */
+  getFileViewState: (filePath) => ipcRenderer.invoke('settings:get-file-view-state', { filePath }),
+  /** @param {string} filePath @param {Record<string, unknown> | null} view @returns {Promise<void>} */
+  setFileViewState: (filePath, view) => ipcRenderer.invoke('settings:set-file-view-state', { filePath, view }),
 
   // File > Settings > Preferences - periodically save the open document to
   // disk automatically, in addition to an explicit Save. Persisted the same

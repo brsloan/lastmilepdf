@@ -27,6 +27,7 @@ import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { buildMcidIndex, findHiddenDocumentWrapperId, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
 import { categoryForRole, isWhitespaceOnlyChange } from './util.js';
+import { rememberViewState } from './view-memory.js';
 
 // How much a flagged { original, suggested } change actually altered the
 // text, as the number of asterisks its badge wears: 1 when only the white
@@ -213,6 +214,13 @@ function markPageBreaks() {
 }
 
 export function renderTree() {
+  // Every move that changes where the user is in the tree - selecting,
+  // expanding, filtering, editing - ends up redrawing it, which makes this
+  // the one place that sees all of them. The save itself is debounced and
+  // reads the DOM when it fires, so calling it here (before the rows this
+  // render is about to build exist) still records the finished tree. See
+  // view-memory.js.
+  rememberViewState();
   const hadFocus = el.tagTree.contains(document.activeElement);
   el.tagTreeContent.innerHTML = '';
   descendantAtChangeSeverity = state.showAtChanges
