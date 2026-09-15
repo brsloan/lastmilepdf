@@ -45,7 +45,11 @@ export const el = {
   btnWalk: asButton('btn-walk'),
   btnVerify: asButton('btn-verify'),
   tagFilter: asSelect('tag-filter'),
-  statusBar: asElement('status-bar'),
+  // The message span inside the #status-bar footer, not the footer
+  // itself: the footer also holds the decorative /> mark, and callers
+  // that read this back (doc-io's post-save check) compare textContent
+  // against the message they set.
+  statusBar: asElement('status-bar-text'),
   noStructBanner: asElement('no-struct-banner'),
   canvasWrap: asElement('canvas-wrap'),
   canvasScrollSpacerTop: asElement('canvas-scroll-spacer-top'),

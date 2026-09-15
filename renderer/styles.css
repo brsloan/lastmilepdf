@@ -1691,11 +1691,28 @@ body.proofread-mode .pane-tabs .tree-filter {
 
 .statusbar {
   grid-row: 4;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
   padding: 5px 16px;
   font-size: 11.5px;
-  color: var(--text-faint);
+  /* Full --text, not --text-faint: these messages are the only report of
+     what a long job did, and at 11.5px in the furthest corner of the window
+     a dimmed grey was being read past. The mark below carries the "this is
+     the app talking" cue instead, so the text itself needn't be quiet. */
+  color: var(--text);
   background: var(--panel);
   border-top: 1px solid var(--border);
+}
+
+/* The toolbar's brand mark, repeated to anchor the eye at the start of the
+   line - same glyph and same --accent-strong as .brand-mark, so a changed
+   message reads as coming from the same voice as the title. Decorative
+   (aria-hidden in the markup); the message itself is the content. */
+.statusbar-mark {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--accent-strong);
 }
 
 /* --- table preview dialog --- */
