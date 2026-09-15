@@ -228,6 +228,70 @@ export interface PageCodeBoxes {
 }
 
 /**
+ * One `/Artifact` marked-content span, as the Artifacts tab lists it - see
+ * `page_artifact_spans()` in glyph_metrics.py for how each field is worked
+ * out and what it declines to guess at.
+ */
+export interface ArtifactEntry {
+  /** Position in this response, not a name that survives an edit - same
+   *  caveat as a tag's node id. */
+  id: string;
+  /** 0-based. */
+  pageIndex: number;
+  /** The opening BMC/BDC's index in that page's instruction list, which is
+   *  how `restore_artifact()` addresses the span. */
+  index: number;
+  /** True when the span sits inside another marked-content span. */
+  nested: boolean;
+  /** What it paints. 'region' is a span that paints nothing but declares a
+   *  /BBox of its own. */
+  kind: 'text' | 'image' | 'path' | 'mixed' | 'region';
+  /** /Subtype from its properties - 'Header', 'Footer', 'Watermark', ... */
+  subtype: string | null;
+  /** /Type from the same - 'Pagination', 'Layout', 'Page'. */
+  artifactType: string | null;
+  /** Decoded and whitespace-collapsed, capped; empty when it paints no text
+   *  or paints it in a font with no /ToUnicode. */
+  text: string;
+  /** Page space [x0, y0, x1, y1] covering what it paints, or null. */
+  bbox: number[] | null;
+  /** The /BBox its own properties claim, or null - what the file says, as
+   *  against what `bbox` measures. */
+  declaredBBox: number[] | null;
+  /** Something it paints couldn't be placed, so `bbox` may be short. */
+  unmeasured: boolean;
+}
+
+/**
+ * `list_artifacts()`'s result. `truncated` says the document has more
+ * artifacts than one list reports (see ARTIFACT_LIST_LIMIT in tag_worker.py),
+ * so the panel can say the list is short rather than imply it is complete.
+ */
+export interface ArtifactListResult {
+  artifacts: ArtifactEntry[];
+  truncated: boolean;
+}
+
+/** How `restore_artifacts()` names one span to tag. */
+export interface ArtifactTarget {
+  /** 0-based. */
+  pageIndex: number;
+  /** The span's opening operator, from `list_artifacts()`. */
+  index: number;
+}
+
+/**
+ * `restore_artifacts()`'s result: the single tag it built over every target,
+ * how many it took in, and fresh bytes for the preview - this rewrites page
+ * content streams, so pdf.js's own parse of them has to be replaced (same as
+ * `split_leaf()`).
+ */
+export interface RestoreArtifactsResult extends InsertResult {
+  taggedCount: number;
+  pdfBase64: string;
+}
+
+/**
  * `wrap_leaves()`'s result - the page preview's rectangle-select tagging.
  * `relabelled` is true when the selection turned out to be exactly one
  * tag's whole content, so that tag's own /S was retyped in place instead of

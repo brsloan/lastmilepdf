@@ -216,6 +216,26 @@ const api = {
   getLeafText: (docId, nodeId) =>
     ipcRenderer.invoke('tags:get-leaf-text', { docId, nodeId }),
   /**
+   * Every `/Artifact` marked-content span in the document, for the Tag Tree
+   * pane's Artifacts tab. Read-only, and a whole-document content-stream
+   * walk, so the panel asks for it lazily rather than after every edit.
+   * @param {string} docId
+   * @returns {Promise<import('./types/domain').ArtifactListResult>}
+   */
+  listArtifacts: (docId) =>
+    ipcRenderer.invoke('tags:list-artifacts', { docId }),
+  /**
+   * Turns artifacts back into tagged content - the reverse of what deleting
+   * a tag does to its content. Every target lands under one new tag, in
+   * document order.
+   * @param {string} docId
+   * @param {import('./types/domain').ArtifactTarget[]} targets From listArtifacts().
+   * @param {string} role Role for the new tag.
+   * @returns {Promise<import('./types/domain').RestoreArtifactsResult>}
+   */
+  restoreArtifacts: (docId, targets, role) =>
+    ipcRenderer.invoke('tags:restore-artifacts', { docId, targets, role }),
+  /**
    * Per-character geometry for one page, in PDF page space - what the
    * rectangle selection needs to name a split point. Read-only.
    * @param {string} docId

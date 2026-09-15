@@ -1,6 +1,7 @@
 import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
+import { moveArtifactSelection, restoreSelectedArtifacts, showArtifactsPanel, showTagTreePanel } from './artifacts.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
@@ -23,7 +24,7 @@ import { walkTree } from './tree-index.js';
 import { applyFreshTree, extendSelectionTo, filterRendersFlatRows, isNodeCollapsed, renderTree, selectNode, setTagTreeScrollSpacersActive, toggleNodeCollapsed } from './tree-view.js';
 import { deleteCurrentScript, loadScripts, newScript, openScriptsDialog, runActiveScript, saveCurrentScript, selectScriptForEditing, updateRunScriptButtonState } from './scripts.js';
 import { renderVerifyResults } from './verify.js';
-import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput, highlightNodeOnPage, refreshHighlightForCurrentPage, refreshPdfPreviewBytes, renderCurrentPage, setProofreadScrollSpacersActive, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
 // renderer.js
@@ -80,6 +81,39 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 // content at all (which get no badge, having nothing to show one against).
 // Up/down arrow navigation keeps working unchanged, since it just walks
 // whatever `.tree-row.selectable` rows are currently in the DOM.
+
+// --- tag tree pane tabs -----------------------------------------------
+//
+// The switch itself is setTreePanel() in tree-view.js (see the comment
+// there); these are the two buttons that drive it, plus the Artifacts list's
+// own keyboard handling - Up/Down steps the list and Shift+Up/Down extends
+// the selection, the way they step and extend in the tag tree, and Enter
+// tags whatever is selected.
+
+el.tabTagTree.addEventListener('click', () => showTagTreePanel());
+
+el.tabArtifacts.addEventListener('click', () => { showArtifactsPanel(); });
+
+el.btnRestoreArtifact.addEventListener('click', () => { restoreSelectedArtifacts(); });
+
+window.addEventListener('keydown', (e) => {
+  if (state.treePanel !== 'artifacts') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (document.activeElement?.closest('dialog[open]')) return;
+
+  if (e.key === 'Enter') {
+    if (e.shiftKey || state.selectedArtifactIds.size === 0) return;
+    e.preventDefault();
+    restoreSelectedArtifacts();
+    return;
+  }
+  e.preventDefault();
+  moveArtifactSelection(e.key === 'ArrowUp' ? -1 : 1, { extend: e.shiftKey });
+});
 
 // --- details pane tabs ------------------------------------------------
 
@@ -1701,6 +1735,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
   if (e.ctrlKey || e.metaKey) return; // Ctrl/Cmd+Up/Down reorders instead - see below
+  if (state.treePanel !== 'tree') return; // the Artifacts list has its own stepping
   if (!state.selectedNodeId) return;
 
   const tag = document.activeElement?.tagName;
@@ -1870,6 +1905,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (!isDeleteShortcut(e)) return;
   if (state.activePanel === 'bookmarks') return; // handled by the Bookmarks-panel Delete listener instead
+  if (state.treePanel !== 'tree') return; // the tree isn't on show to see what would go
   if (state.selectedNodeIds.size === 0) return;
 
   const tag = document.activeElement?.tagName;
@@ -2062,7 +2098,7 @@ el.btnPrevPage.addEventListener('click', async () => {
   state.currentPage -= 1;
   await renderCurrentPage();
   updatePageNavUI();
-  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+  refreshHighlightForCurrentPage();
 });
 
 el.btnNextPage.addEventListener('click', async () => {
@@ -2070,7 +2106,7 @@ el.btnNextPage.addEventListener('click', async () => {
   state.currentPage += 1;
   await renderCurrentPage();
   updatePageNavUI();
-  if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+  refreshHighlightForCurrentPage();
 });
 
 el.pageIndicatorInput.addEventListener('keydown', (e) => {

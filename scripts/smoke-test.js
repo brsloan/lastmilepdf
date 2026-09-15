@@ -1624,6 +1624,231 @@ async function bookmarkTests(fixture) {
   }));
 }
 
+// --- the artifacts list ----------------------------------------------------
+//
+// The round trip that matters here is the one the Artifacts tab exists for:
+// deleting a tag artifacts its content, and tagging that artifact has to
+// bring the same content back - the same text, under a real tag, in a file
+// that still reopens.
+
+async function artifactTests(fixture) {
+  /** The first P in the fixture that actually holds content to artifact. */
+  function paragraphWithContent(tree) {
+    return byRole(tree, 'P').find((n) => contentLeaves(n).length > 0);
+  }
+
+  /** Every listed artifact keyed the way restore_artifact addresses it. */
+  async function artifactKeys(docId) {
+    const list = await worker.call('list_artifacts', { docId });
+    return { list, keys: new Set(list.artifacts.map((a) => `${a.pageIndex}:${a.index}`)) };
+  }
+
+  await test('deleting a tag puts its content in the artifacts list', () => withDoc(fixture, async (doc) => {
+    const para = paragraphWithContent(doc.tree);
+    if (!para) skip('no P with content in this fixture');
+    const before = await artifactKeys(doc.docId);
+
+    await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [para.id] });
+    const after = await artifactKeys(doc.docId);
+    assert(after.list.artifacts.length > before.list.artifacts.length,
+      `deleting a tag added no artifact (${before.list.artifacts.length} -> ${after.list.artifacts.length})`);
+  }));
+
+  await test('an artifact reports where it sits and what it says', () => withDoc(fixture, async (doc) => {
+    const para = paragraphWithContent(doc.tree);
+    if (!para) skip('no P with content in this fixture');
+    const wasSaying = (await worker.call('get_leaf_text', {
+      docId: doc.docId, nodeId: contentLeaves(para)[0].id,
+    })).text.trim();
+
+    const before = await artifactKeys(doc.docId);
+    await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [para.id] });
+    const after = await artifactKeys(doc.docId);
+    const made = after.list.artifacts.find((a) => !before.keys.has(`${a.pageIndex}:${a.index}`));
+    assert(made, 'the delete added no new artifact');
+
+    assertEqual(made.pageIndex, para.page, 'the artifact is not on the page the tag was on');
+    assert(Array.isArray(made.bbox) && made.bbox.length === 4,
+      `no bbox to outline the artifact with: ${JSON.stringify(made.bbox)}`);
+    assert(made.bbox[2] > made.bbox[0] && made.bbox[3] > made.bbox[1], 'the bbox has no area');
+    if (wasSaying && made.text) {
+      assert(wasSaying.startsWith(made.text.slice(0, 8)),
+        `the artifact and the tag report different text\n      tag:      ${JSON.stringify(wasSaying.slice(0, 40))}\n      artifact: ${JSON.stringify(made.text.slice(0, 40))}`);
+    }
+  }));
+
+  await test('tagging an artifact brings its content back, and survives save', () => withDoc(fixture, async (doc) => {
+    const para = paragraphWithContent(doc.tree);
+    if (!para) skip('no P with content in this fixture');
+    const wasSaying = (await worker.call('get_leaf_text', {
+      docId: doc.docId, nodeId: contentLeaves(para)[0].id,
+    })).text;
+
+    const before = await artifactKeys(doc.docId);
+    await worker.call('delete_nodes', { docId: doc.docId, nodeIds: [para.id] });
+    const after = await artifactKeys(doc.docId);
+    const made = after.list.artifacts.find((a) => !before.keys.has(`${a.pageIndex}:${a.index}`));
+    assert(made, 'the delete added no new artifact');
+
+    const restored = await worker.call('restore_artifacts', {
+      docId: doc.docId, targets: [{ pageIndex: made.pageIndex, index: made.index }], role: 'P',
+    });
+    assert(restored.newNodeId, 'no newNodeId returned');
+    assertEqual(restored.taggedCount, 1, 'wrong taggedCount for a single artifact');
+    assert(restored.pdfBase64, 'no fresh bytes returned for a content-stream rewrite');
+    const tag = findById(restored.tree, restored.newNodeId);
+    assert(tag, 'newNodeId is not in the returned tree');
+    assertEqual(tag.role, 'P', 'the restored tag has the wrong role');
+    assertEqual(tag.page, made.pageIndex, 'the restored tag is on the wrong page');
+
+    const leaves = contentLeaves(tag);
+    assertEqual(leaves.length, 1, 'the restored tag does not hold exactly one content leaf');
+    const nowSaying = (await worker.call('get_leaf_text', {
+      docId: doc.docId, nodeId: leaves[0].id,
+    })).text;
+    assertEqual(nowSaying, wasSaying, 'the restored tag holds different text than the deleted one did');
+
+    const listAfter = await worker.call('list_artifacts', { docId: doc.docId });
+    assert(!listAfter.artifacts.some((a) => a.pageIndex === made.pageIndex && a.index === made.index),
+      'the artifact is still listed after being tagged');
+
+    await saveAndReopen(doc.docId, 'restore-artifact', (reopened) => {
+      const again = findById(reopened.tree, restored.newNodeId);
+      assert(again, 'the restored tag is gone after save');
+      assertEqual(again.role, 'P', 'the restored tag changed role across the save');
+      assertEqual(contentLeaves(again).length, 1, 'the restored tag lost its content across the save');
+    });
+  }));
+
+  await test('tagging an artifact leaves no orphaned marked content', () => withDoc(fixture, async (doc) => {
+    const { list } = await artifactKeys(doc.docId);
+    if (list.artifacts.length === 0) skip('fixture has no artifacts');
+    const before = await worker.call('count_orphaned_artifacts', { docId: doc.docId });
+
+    const target = list.artifacts[0];
+    await worker.call('restore_artifacts', {
+      docId: doc.docId, targets: [{ pageIndex: target.pageIndex, index: target.index }], role: 'P',
+    });
+    const after = await worker.call('count_orphaned_artifacts', { docId: doc.docId });
+    assertEqual(after.totalCount, before.totalCount,
+      'tagging an artifact left marked content that is neither tagged nor an artifact');
+  }));
+
+  await test('undo puts a tagged artifact back', () => withDoc(fixture, async (doc) => {
+    const { list: before } = await artifactKeys(doc.docId);
+    if (before.artifacts.length === 0) skip('fixture has no artifacts');
+
+    const target = before.artifacts[0];
+    await worker.call('restore_artifacts', {
+      docId: doc.docId, targets: [{ pageIndex: target.pageIndex, index: target.index }], role: 'P',
+    });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assert(undone.pdfBase64, 'undoing a content-stream rewrite returned no fresh bytes');
+
+    const after = await worker.call('list_artifacts', { docId: doc.docId });
+    assertEqual(after.artifacts.length, before.artifacts.length,
+      'undo did not put the artifact back in the list');
+  }));
+
+  await test('several artifacts tag together under one tag', () => withDoc(fixture, async (doc) => {
+    const { list } = await artifactKeys(doc.docId);
+    const byPage = new Map();
+    for (const a of list.artifacts) byPage.set(a.pageIndex, [...(byPage.get(a.pageIndex) || []), a]);
+    const onOnePage = [...byPage.values()].find((group) => group.length >= 2);
+    if (!onOnePage) skip('fixture has no two artifacts on one page');
+
+    const targets = onOnePage.slice(0, 2).map((a) => ({ pageIndex: a.pageIndex, index: a.index }));
+    const before = list.artifacts.length;
+    const restored = await worker.call('restore_artifacts', { docId: doc.docId, targets, role: 'P' });
+    assertEqual(restored.taggedCount, 2, 'wrong taggedCount');
+
+    const tag = findById(restored.tree, restored.newNodeId);
+    assert(tag, 'newNodeId is not in the returned tree');
+    assertEqual(tag.role, 'P', 'the restored tag has the wrong role');
+    assertEqual(contentLeaves(tag).length, 2, 'the two artifacts did not land under one tag');
+    // One tag, not two: nothing else new should have appeared alongside it.
+    assertEqual(byRole(restored.tree, 'P').filter((n) => n.id === restored.newNodeId).length, 1,
+      'the batch produced more than one tag');
+
+    const after = await worker.call('list_artifacts', { docId: doc.docId });
+    assertEqual(after.artifacts.length, before - 2, 'the list did not lose both artifacts');
+
+    await saveAndReopen(doc.docId, 'restore-many', (reopened) => {
+      const again = findById(reopened.tree, restored.newNodeId);
+      assert(again, 'the restored tag is gone after save');
+      assertEqual(contentLeaves(again).length, 2, 'the restored tag lost content across the save');
+    });
+  }));
+
+  await test('artifacts from two pages tag together, each keeping its page', () => withDoc(fixture, async (doc) => {
+    const { list } = await artifactKeys(doc.docId);
+    const pages = [...new Set(list.artifacts.map((a) => a.pageIndex))];
+    if (pages.length < 2) skip('fixture has artifacts on only one page');
+
+    const targets = pages.slice(0, 2)
+      .map((page) => list.artifacts.find((a) => a.pageIndex === page))
+      .map((a) => ({ pageIndex: a.pageIndex, index: a.index }));
+    const restored = await worker.call('restore_artifacts', { docId: doc.docId, targets, role: 'P' });
+    assertEqual(restored.taggedCount, 2, 'wrong taggedCount');
+
+    const tag = findById(restored.tree, restored.newNodeId);
+    const leaves = contentLeaves(tag);
+    assertEqual(leaves.length, 2, 'the two artifacts did not land under one tag');
+    // The off-page one is only right if it carries a page of its own - a bare
+    // MCID would read the tag's /Pg and silently point at whatever shares its
+    // number there.
+    assertEqual([...new Set(leaves.map((l) => l.page))].sort().join(','), targets.map((t) => t.pageIndex).sort().join(','),
+      'the restored leaves do not resolve to the pages they came from');
+
+    await saveAndReopen(doc.docId, 'restore-crosspage', (reopened) => {
+      const again = findById(reopened.tree, restored.newNodeId);
+      assert(again, 'the restored tag is gone after save');
+      assertEqual([...new Set(contentLeaves(again).map((l) => l.page))].sort().join(','),
+        targets.map((t) => t.pageIndex).sort().join(','),
+        'the restored leaves moved pages across the save');
+    });
+  }));
+
+  await test('one stale target refuses the whole batch', () => withDoc(fixture, async (doc) => {
+    const { list } = await artifactKeys(doc.docId);
+    if (list.artifacts.length === 0) skip('fixture has no artifacts');
+    const good = list.artifacts[0];
+
+    let threw = false;
+    try {
+      await worker.call('restore_artifacts', {
+        docId: doc.docId,
+        targets: [{ pageIndex: good.pageIndex, index: good.index }, { pageIndex: good.pageIndex, index: 999999 }],
+        role: 'P',
+      });
+    } catch (err) {
+      threw = true;
+    }
+    assert(threw, 'a batch with a stale target was accepted');
+    // Nothing partly applied: the good target must still be an artifact.
+    const after = await worker.call('list_artifacts', { docId: doc.docId });
+    assertEqual(after.artifacts.length, list.artifacts.length,
+      'a refused batch changed the artifacts list');
+    assert(after.artifacts.some((a) => a.pageIndex === good.pageIndex && a.index === good.index),
+      'a refused batch tagged one of its targets anyway');
+  }));
+
+  await test('refuses an index that no longer names an artifact', () => withDoc(fixture, async (doc) => {
+    let threw = false;
+    try {
+      await worker.call('restore_artifacts', {
+        docId: doc.docId, targets: [{ pageIndex: 0, index: 999999 }], role: 'P',
+      });
+    } catch (err) {
+      threw = true;
+    }
+    assert(threw, 'restoring a nonexistent artifact was accepted');
+    // And the document is still usable afterwards.
+    const list = await worker.call('list_artifacts', { docId: doc.docId });
+    assert(Array.isArray(list.artifacts), 'the document is unusable after a refused restore');
+  }));
+}
+
 // --- error handling --------------------------------------------------------
 
 async function errorTests(fixture) {
@@ -1948,6 +2173,7 @@ async function main() {
       await listAndTableTests(fixture);
       await bookmarkTests(fixture);
       await figureTextTests(fixture);
+      await artifactTests(fixture);
       await errorTests(fixture);
     }
 

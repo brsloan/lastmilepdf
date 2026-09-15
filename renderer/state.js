@@ -76,6 +76,14 @@ export const state = {
   selectedNodeIds: new Set(), // full multi-selection (shift/ctrl+click); always a superset containing selectedNodeId
   selectionAnchorId: null,   // fixed point shift+click range-selects from; updated by plain/ctrl clicks, not by shift+click
   activePanel: 'properties', // 'properties' | 'bookmarks' - which details-pane tab is showing
+  treePanel: 'tree',         // 'tree' | 'artifacts' - which tag-tree-pane tab is showing
+  artifacts: [],             // the Artifacts tab's list, as the worker last returned it
+  artifactsTruncated: false, // the document has more artifacts than the list reports
+  artifactsStale: true,      // the list needs re-reading before it can be shown - see markArtifactsStale()
+  artifactsToken: 0,         // invalidates an in-flight list_artifacts() read superseded by a newer one
+  selectedArtifactId: null,  // the "active" artifact - drives the page outline; always a member of selectedArtifactIds
+  selectedArtifactIds: new Set(), // full multi-selection (shift/ctrl+click), all tagged together under one tag
+  artifactAnchorId: null,    // fixed point shift+click range-selects from - mirrors selectionAnchorId
   outline: null,             // current bookmark tree, as returned by the worker (null before a doc is opened)
   bookmarksById: new Map(),  // id -> { node, parentId }, rebuilt every time `outline` is replaced - mirrors nodesById
   selectedBookmarkId: null,

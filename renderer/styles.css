@@ -469,8 +469,25 @@ body.proofread-mode .tree-pane {
   cursor: pointer;
 }
 
-.tree-filter:hover {
+.tree-filter:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+/* The filter belongs to the Tag Tree tab, and sits between the two tabs to
+   say so (see the comment on the header in index.html). Disabled rather than
+   hidden while Artifacts is showing: hiding it would slide the Artifacts tab
+   sideways every time the pane is switched. */
+.tree-pane-header {
+  justify-content: flex-start;
+}
+
+.pane-tabs .tree-filter {
+  margin: 0 2px;
+}
+
+.tree-filter:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* --- viewer pane --- */
@@ -1030,6 +1047,10 @@ body.proofread-mode .tree-pane {
 
 .pane-tab {
   background: transparent;
+  /* A pane header is one line tall. Let a two-word tab wrap and it becomes
+     two, which moves the tree/panel below it down by a row as soon as the
+     window is narrow enough. */
+  white-space: nowrap;
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--text-dim);
@@ -1132,6 +1153,49 @@ body.proofread-mode .tree-pane {
 }
 
 .bookmark-tree {
+  flex: 1;
+}
+
+/* --- Artifacts tab (see artifacts.js) --- */
+
+.artifacts-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Same [hidden]-vs-flex gotcha as .details-panel above: the rule right up
+   there beats the UA's `[hidden] { display: none }`, which left the whole
+   panel - list, toolbar and Tag button - sitting under the tag tree on the
+   Tag Tree tab, and on an empty window at startup. */
+.artifacts-panel[hidden] {
+  display: none;
+}
+
+.artifacts-toolbar {
+  padding: 10px 14px 0;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifacts-note {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.artifact-list {
+  flex: 1;
+}
+
+/* A row's own text, where it has any, reads like a content leaf's preview in
+   the tag tree; where it hasn't, the chip alone carries the row, so let it
+   sit against the page/kind meta rather than a blank stretch. */
+.artifact-row-text {
   flex: 1;
 }
 

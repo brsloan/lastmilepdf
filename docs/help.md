@@ -9,6 +9,8 @@ LastMilePDF edits the accessibility tag tree, bookmarks, and metadata. The **Pag
 
 A PDF with no tag tree can still be viewed, but there is nothing to edit until it has been tagged elsewhere. This app is not for tagging from scratch.
 
+The Tag Tree pane and the Tag Properties pane each carry a second tab: **Artifacts** lists the content the document leaves untagged on purpose, and **Bookmarks** shows the PDF's outline.
+
 ## Selecting & navigating tags
 
 Click a row in the Tag Tree to select it and jump the preview to it; the matching content is highlighted on the page. ←/→ collapse or expand the selected tag's children.
@@ -19,7 +21,7 @@ Drag a row onto another to reorder it or move it under a new parent; Ctrl/Cmd+�
 
 A dotted red line marks where one page of the PDF ends and the next begins — between two rows when the break falls between tags, and straight through a row whose own content carries over onto the next page. It passes behind the tags rather than over them. Page breaks are where reading order most often goes wrong, so these are worth reading carefully.
 
-The dropdown above the tree filters it to **Figures**, **Headings**, **Lists**, or **Tables** tags, or back to **All**. This is a view filter only — it doesn't change the document.
+The dropdown beside the Tag Tree tab filters the tree to **Figures**, **Headings**, **Lists**, or **Tables** tags, or back to **All**. This is a view filter only — it doesn't change the document.
 
 Three further filters narrow the tree to tags worth a second look. **Alt Missing** shows the Figure and Formula tags with no alt text. **Flagged** shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or — once Tools > Show AT Changes has swept the document — Actual Text that no longer matches the content underneath. **Empty** shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.
 
@@ -131,6 +133,18 @@ Open it from a selected Table tag's Table Preview. It lays the table out as a gr
 ## Bookmarks
 
 The Bookmarks tab shows the PDF's outline. Click a bookmark to jump to its page, double-click to rename it, or press Delete to remove the selected one. **+** adds a new bookmark pointing at whatever page is currently open in the preview, inserted into the tree wherever that page falls in the existing order. **Generate** clears the existing outline and builds a fresh one from the document's headings.
+
+## Artifacts
+
+The Artifacts tab, beside Tag Tree, lists everything the PDF marks as an *artifact* — content deliberately left out of the tag tree, so assistive technology skips it. Running heads, footers, page numbers, rules and the background image of a scanned page are all normally artifacts, and so is anything this app has artifacted itself: deleting a tag turns its content into one, and so do **Smartifact** and **Repair Orphaned Content**.
+
+Each row says what the artifact is made of (text, image, drawing, or a mix), the PDF's own name for it where it has one (Header, Footer, Watermark…), any text it paints, and its page. Click a row to jump to that page and outline the artifact on it, the same way clicking a tag outlines its content. ↑/↓ move through the list, and the usual selection shortcuts work: Shift+click selects a range, Ctrl/Cmd+click adds or removes one row, and Shift+↑/↓ extends the selection. Every selected artifact on the current page is outlined at once.
+
+**Tag** (or Enter, or double-clicking a row) turns the selection back into tagged content: it becomes a new Paragraph, selected in the Tag Tree, where its role can be changed to whatever it should have been. This is the way back from an artifacting you didn't mean — a heading deleted by accident, or a figure Smartifact took to be a scan background. Undo reverses it like any other edit.
+
+Several artifacts selected together become *one* Paragraph holding all of them, in page then reading order — not one Paragraph each. That is what to do with a running head the file artifacted as three separate spans, or a heading it broke up line by line: they are one piece of content, and tagging them one at a time would only move the problem into the tree. They can come from different pages; each keeps the page it was actually on.
+
+The list is read from the page content streams, which takes a moment on a long document, and is re-read the next time the tab is opened after an edit. A few things can't be outlined on the page: an artifact drawn with a shading, or one whose font carries no usable metrics, has no box this app is willing to state — those rows still list and can still be tagged, and hovering one says so.
 
 ## Proofread Mode
 

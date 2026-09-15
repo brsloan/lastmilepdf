@@ -8,7 +8,7 @@ import { collectTargetMcids, getPageTextContent, pullContentText } from './page-
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PAGE_SCALE, state } from './state.js';
 import { unionRects } from './util.js';
-import { computeHighlightRects, highlightNodeOnPage, renderCurrentPage, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
+import { computeHighlightRects, refreshHighlightForCurrentPage, renderCurrentPage, syncHighlightLayerBounds, updatePageNavUI } from './viewer.js';
 
 function indexOutline(outline) {
   const map = new Map();
@@ -108,7 +108,7 @@ async function jumpToPage(pageNumber, top) {
     state.currentPage = pageNumber;
     await renderCurrentPage();
     updatePageNavUI();
-    await highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+    refreshHighlightForCurrentPage();
   }
   await scrollToHeadingTop(top);
 }

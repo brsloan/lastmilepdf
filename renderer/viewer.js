@@ -422,6 +422,92 @@ export async function highlightNodeOnPage(nodeId, { allowPageJump }) {
   }
 }
 
+// --- the Artifacts tab's highlight ---------------------------------------
+//
+// An artifact has no marked-content id to look up in the text or graphics
+// layers - being untagged is what makes it an artifact - so its box doesn't
+// come from pdf.js at all. It comes from the worker's own walk of the page's
+// content stream (page_artifact_spans() in glyph_metrics.py), already in
+// page space, and only has to be put through the viewport the same way a
+// tag's /Layout /BBox is. Where that walk couldn't place what the span
+// paints, the span's declared /BBox stands in; with neither, there is
+// nothing honest to draw and the overlay is simply cleared.
+export async function highlightArtifactOnPage(artifactId, { allowPageJump = true } = {}) {
+  const token = ++state.highlightToken;
+  const artifact = state.artifacts.find((entry) => entry.id === artifactId);
+  const bbox = artifact && artifactBBox(artifact);
+  if (!state.pdfDoc || !bbox) {
+    clearHighlight();
+    return;
+  }
+
+  const pageNumber = artifact.pageIndex + 1;
+  if (pageNumber !== state.currentPage) {
+    if (!allowPageJump || pageNumber < 1 || pageNumber > state.pageCount) {
+      clearHighlight();
+      return;
+    }
+    state.currentPage = pageNumber;
+    await renderCurrentPage();
+    updatePageNavUI();
+    if (token !== state.highlightToken) return; // superseded by a newer selection/page change
+  }
+
+  try {
+    const { viewport } = await getPageTextContent(state.currentPage);
+    if (token !== state.highlightToken) return;
+    setProofreadScrollSpacersActive(state.proofreadMode);
+    syncHighlightLayerBounds();
+    // With several artifacts picked out, box every one of them that is on
+    // this page - they are about to become a single tag, so seeing the whole
+    // of what that tag will cover is the point. The active one is boxed like
+    // a single selection and the rest tinted, exactly as a multi-tag
+    // selection is drawn (see the top of this function).
+    //
+    // No role, so no role label: an artifact has no role to name, and the
+    // label is how the overlay says which tag it is drawing.
+    const boxes = [];
+    for (const entry of artifactsToBox(artifact)) {
+      const rect = bboxRectInViewport(artifactBBox(entry), viewport);
+      boxes.push({ rect, active: entry.id === artifactId, isFigure: false, role: null });
+    }
+    renderHighlightRects(boxes, viewport);
+  } catch (err) {
+    console.error('Could not compute artifact highlight:', err);
+  }
+}
+
+// What an artifact's box comes from: the walk's own measurement where it has
+// one, and otherwise the /BBox the file declares for it. Null when it has
+// neither, which is when there is nothing honest to draw.
+function artifactBBox(artifact) {
+  return artifact.bbox || artifact.declaredBBox || null;
+}
+
+// The selected artifacts worth drawing on the page now: those on the current
+// page that have somewhere to be drawn. Falls back to the active one alone
+// when the selection is a single artifact, which is every case but a
+// deliberate multi-selection.
+function artifactsToBox(active) {
+  const selected = state.selectedArtifactIds.size > 1
+    ? state.artifacts.filter((entry) => state.selectedArtifactIds.has(entry.id))
+    : [active];
+  return selected.filter((entry) => entry.pageIndex + 1 === state.currentPage && artifactBBox(entry));
+}
+
+// Redraws whatever the page should currently be showing, for the callers
+// that have just re-rendered a page and need the overlay put back on top of
+// it. The visible tab owns the box: an artifact selection only exists while
+// the Artifacts tab is up (setTreePanel() in tree-view.js drops it on the
+// way out), so it takes precedence when there is one.
+export function refreshHighlightForCurrentPage() {
+  if (state.selectedArtifactId) {
+    highlightArtifactOnPage(state.selectedArtifactId, { allowPageJump: false });
+  } else if (state.selectedNodeId) {
+    highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+  }
+}
+
 // Shared by loadPdfPreview() (a brand new document - jumps to page 1) and
 // refreshPdfPreviewBytes() (the same document, just-edited - stays on
 // whatever page the user was looking at): swaps in a fresh pdf.js
@@ -552,7 +638,7 @@ export async function goToPageFromIndicatorInput() {
   if (clamped !== state.currentPage) {
     state.currentPage = clamped;
     await renderCurrentPage();
-    if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
+    refreshHighlightForCurrentPage();
   }
   updatePageNavUI();
 }

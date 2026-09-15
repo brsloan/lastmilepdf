@@ -35,6 +35,7 @@ Measured against 22 real course-reading PDFs (645 pages, 15,540 spans,
 on both font paths that appear in them.
 """
 
+import math
 import re
 
 import pikepdf
@@ -657,3 +658,449 @@ def page_code_boxes(page):
     if refusals:
         boxes = [b for b in boxes if b["mcid"] not in refusals]
     return boxes, refusals
+
+
+# --- artifact spans -------------------------------------------------------
+#
+# What the Artifacts tab lists: every `/Artifact` marked-content span in a
+# page's content stream, with enough about each to show it in a list and
+# outline it on the page preview.
+#
+# This is a second walk of the same stream page_code_boxes() walks, not a
+# mode of it, because it asks a different question. That engine follows the
+# text pen and nothing else - colour, paths and images can't move it, so it
+# never looks at them. An artifact, though, is very often not text at all: a
+# scan background, a rule under a running head, a watermark. Placing one
+# needs the painting operators the text engine deliberately ignores, and
+# needs only a bounding box rather than per-character geometry, so the two
+# want different machinery over the same shared font primitives above.
+#
+# The "never guess" contract still holds, with one softening the difference
+# in purpose earns: an unmeasurable *font* doesn't sink a span here, because
+# a glyph's advance width comes from the font's metrics while its character
+# comes from /ToUnicode (see _metrics_for), and only the width is needed to
+# draw a box. A span whose font has no /ToUnicode therefore gets an exact
+# box and no text preview. Where even the width is unknowable, the span says
+# so via `unmeasured` rather than reporting a box built from an estimate.
+
+# Path-painting operators - the ones that turn the current path into ink.
+# `n` ends a path without painting (it exists for clipping), so it clears
+# the path without contributing a box.
+_PATH_PAINT_OPS = frozenset(["S", "s", "f", "F", "f*", "B", "B*", "b", "b*"])
+
+# How much decoded text a span reports. This is a list-row label, not the
+# content itself - a full-page artifact of body text has no business
+# shipping every character of itself to the renderer.
+_ARTIFACT_TEXT_LIMIT = 300
+
+
+def _name_text(value):
+    """A pikepdf Name as plain text without its leading slash, or None."""
+    if not isinstance(value, pikepdf.Name):
+        return None
+    return str(value).lstrip("/") or None
+
+
+def _bbox_list(value):
+    """A PDF rect array as a normalized [x0, y0, x1, y1] of floats, or None
+    if it isn't one."""
+    if not isinstance(value, pikepdf.Array) or len(value) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
+
+
+def _bdc_properties(page, instr, op, resource_cache):
+    """The property dictionary a BDC carries, whether written inline
+    (`/Artifact <</Subtype /Header>> BDC`) or named as a /Properties
+    resource (`/Artifact /P1 BDC`). A BMC has no properties at all, and a
+    named one that doesn't resolve reads the same as none."""
+    if op != "BDC" or len(instr.operands) != 2:
+        return None
+    props = instr.operands[1]
+    if isinstance(props, pikepdf.Dictionary):
+        return props
+    if not isinstance(props, pikepdf.Name):
+        return None
+    if "properties" not in resource_cache:
+        resources = resolve_inherited(page.obj, "/Resources")
+        entry = resources.get("/Properties") if isinstance(resources, pikepdf.Dictionary) else None
+        resource_cache["properties"] = entry if isinstance(entry, pikepdf.Dictionary) else None
+    table = resource_cache["properties"]
+    resolved = table.get(str(props)) if table is not None else None
+    return resolved if isinstance(resolved, pikepdf.Dictionary) else None
+
+
+def _corners_box(corners):
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _unit_square_box(ctm):
+    """Where an image is painted: every image, XObject or inline, draws into
+    the unit square, so the CTM alone says where it lands."""
+    return _corners_box([mat_apply(p, ctm)
+                         for p in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))])
+
+
+def _grow(box, other):
+    """Unions `other` into `box`, either of which may be None."""
+    if other is None:
+        return box
+    if box is None:
+        return list(other)
+    return [min(box[0], other[0]), min(box[1], other[1]),
+            max(box[2], other[2]), max(box[3], other[3])]
+
+
+def _xobject_box(page, name, ctm, resource_cache):
+    """Where `Do <name>` paints, in page space, as (bbox, measured):
+
+      - An Image XObject is painted into the unit square (see
+        _unit_square_box).
+      - A Form XObject declares its own /BBox in its own space, which its
+        /Matrix maps into the space the CTM then maps to the page. Its
+        contents are not walked - a form's own marked content, and any text
+        inside it, is out of scope here the same way it is for
+        _page_image_placements() in tag_worker.py.
+
+    `measured` is False when the XObject can't be resolved or a form won't
+    say where it draws, so the caller can flag the span rather than quietly
+    report a box that's missing part of it."""
+    if "xobject" not in resource_cache:
+        resources = resolve_inherited(page.obj, "/Resources")
+        entry = resources.get("/XObject") if isinstance(resources, pikepdf.Dictionary) else None
+        resource_cache["xobject"] = entry if isinstance(entry, pikepdf.Dictionary) else None
+    table = resource_cache["xobject"]
+    xobj = table.get(name) if table is not None else None
+    # An Image XObject is a *stream*, not a plain Dictionary, and
+    # pikepdf.Stream isn't a subclass of pikepdf.Dictionary - both need
+    # checking (same as _page_image_placements() in tag_worker.py).
+    if not isinstance(xobj, (pikepdf.Dictionary, pikepdf.Stream)):
+        return None, False
+
+    subtype = str(xobj.get("/Subtype", ""))
+    if subtype == "/Image":
+        return _unit_square_box(ctm), True
+    if subtype == "/Form":
+        bbox = _bbox_list(xobj.get("/BBox"))
+        if bbox is None:
+            return None, False
+        matrix = xobj.get("/Matrix")
+        form_ctm = ctm
+        if isinstance(matrix, pikepdf.Array) and len(matrix) == 6:
+            try:
+                form_ctm = mat_mult(tuple(float(v) for v in matrix), ctm)
+            except (TypeError, ValueError):
+                pass
+        x0, y0, x1, y1 = bbox
+        corners = [mat_apply(p, form_ctm) for p in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+        return _corners_box(corners), True
+    return None, False
+
+
+def page_artifact_spans(page):
+    """Every `/Artifact` marked-content span on `page`, in content-stream
+    order, as a list of dicts:
+
+      index        - the opening BMC/BDC's index in the page's instruction
+                     list, which is how restore_artifacts() (tag_worker.py)
+                     addresses the span to rewrite. Only meaningful against
+                     a parse of the same bytes, which is why that command
+                     re-derives the list and checks what it finds there
+                     rather than trusting an index handed in from outside.
+      nested       - True when the span sits inside another marked-content
+                     span (tagged content containing an artifact - legal,
+                     and rare).
+      subtype      - /Subtype from the span's properties ("Header",
+                     "Footer", "Watermark", "PageNum", ...), or None.
+      artifactType - /Type from the same ("Pagination", "Layout", "Page"),
+                     or None.
+      text         - what the span paints, decoded and whitespace-collapsed,
+                     capped at _ARTIFACT_TEXT_LIMIT characters. Empty when
+                     the span paints no text, or paints it in a font with no
+                     /ToUnicode to decode it by.
+      hasText / hasImage / hasPath - what kinds of thing it paints.
+      bbox         - [x0, y0, x1, y1] in page space covering everything it
+                     paints, or None when it paints nothing measurable.
+      declaredBBox - the /BBox its own properties claim, or None. Reported
+                     separately from `bbox` rather than folded into it: one
+                     is what the file says, the other what its operators
+                     actually do, and those are different kinds of fact.
+      unmeasured   - True when something it paints couldn't be placed (a
+                     font with no usable metrics, a shading, an XObject that
+                     doesn't resolve), so `bbox` may be short of the truth.
+
+    An artifact nested inside another artifact isn't listed separately - it
+    is part of the outer one, and the outer one is what a reader would
+    restore.
+    """
+    try:
+        instructions = pikepdf.parse_content_stream(page)
+    except Exception:
+        return []
+
+    spans = []
+    resource_cache = {}
+    font_cache = {}
+
+    ctm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    ctm_stack = []
+    tm = tlm = None          # text matrix / line matrix; only set inside BT/ET
+    leading = 0.0
+    char_spacing = 0.0
+    word_spacing = 0.0
+    hscale = 1.0
+    rise = 0.0
+    font_name = None
+    font_size = 0.0
+    path_box = None          # the current path so far, in page space
+    mc_stack = []            # one entry per open BDC/BMC: its span dict, or None
+    open_span = None         # innermost listed artifact span, or None
+
+    def innermost_span():
+        for frame in reversed(mc_stack):
+            if frame is not None:
+                return frame
+        return None
+
+    def note_char(span, char, origin, end, em):
+        """Adds one decoded character to `span`'s text preview, putting a
+        space in front of it when the pen jumped to get there.
+
+        A PDF paints words wherever it likes and never paints the gaps
+        between them, so the only word boundaries recoverable from a
+        content stream are the places the pen moved further than setting
+        the next glyph would have. `origin`/`end` are this glyph's start and
+        end on the page and `em` its size there, so the test scales with the
+        type rather than assuming a point size. The thresholds are the usual
+        text-extraction rules of thumb, and the output is a list-row label,
+        not text anything is measured against."""
+        text = span["_text"]
+        if sum(len(part) for part in text) >= _ARTIFACT_TEXT_LIMIT:
+            return
+        pen = span["_pen"]
+        if pen is not None and em > 0:
+            dx, dy = origin[0] - pen[0], origin[1] - pen[1]
+            # A quarter of an em forward, half an em back, or any real
+            # change of line. Tuned against the corpus: tighter than this
+            # and ordinary kerning inside letter-spaced display type reads
+            # as a word break; looser and genuine word gaps close up.
+            if abs(dy) > 0.4 * em or dx > 0.25 * em or dx < -0.5 * em:
+                text.append(" ")
+        text.append(char)
+        span["_pen"] = end
+
+    def show(parts):
+        """Advances the pen over one text-showing operator's glyphs, growing
+        the open span's box by each one and collecting its characters where
+        the font can supply them. `parts` is a list of ("str", bytes) and
+        ("adj", number), as in page_code_boxes()."""
+        nonlocal tm
+        span = open_span
+        try:
+            if not font_name:
+                raise Unmeasurable("This text has no font set")
+            metrics = _metrics_for(page, font_name, font_cache)
+        except Unmeasurable:
+            if span is not None:
+                span["hasText"] = True
+                span["unmeasured"] = True
+            return
+        if span is not None:
+            span["hasText"] = True
+
+        for kind, value in parts:
+            if kind == "adj":
+                # A TJ number is a displacement in thousandths of a unit of
+                # text space, subtracted from the pen position.
+                tm = mat_mult(
+                    (1.0, 0.0, 0.0, 1.0, (-value / 1000.0) * font_size * hscale, 0.0), tm)
+                continue
+            raw = value
+            if len(raw) % metrics.code_width != 0:
+                if span is not None:
+                    span["unmeasured"] = True
+                return
+            for offset in range(0, len(raw), metrics.code_width):
+                code = int.from_bytes(raw[offset:offset + metrics.code_width], "big")
+                try:
+                    w0 = metrics.width_for_code(code) / 1000.0
+                except Unmeasurable:
+                    if span is not None:
+                        span["unmeasured"] = True
+                    return
+                # Trm = [Tfs*Th 0 0 Tfs 0 Ts] x Tm x CTM - the same
+                # text-space-to-page-space transform page_code_boxes()
+                # builds per glyph.
+                trm = mat_mult(
+                    (font_size * hscale, 0.0, 0.0, font_size, 0.0, rise),
+                    mat_mult(tm, ctm))
+                if span is not None:
+                    y0 = metrics.descent / 1000.0
+                    y1 = metrics.ascent / 1000.0
+                    corners = [mat_apply(p, trm)
+                               for p in ((0.0, y0), (w0, y0), (w0, y1), (0.0, y1))]
+                    span["bbox"] = _grow(span["bbox"], _corners_box(corners))
+
+                # Word spacing applies only to a single-byte code 32, so
+                # never to Identity-H text, whose codes are two bytes.
+                extra = char_spacing
+                if code == 32 and metrics.code_width == 1:
+                    extra += word_spacing
+                tm = mat_mult(
+                    (1.0, 0.0, 0.0, 1.0, (w0 * font_size + extra) * hscale, 0.0), tm)
+
+                char = metrics.tounicode.get(code) if metrics.tounicode else None
+                if span is not None and char is not None:
+                    # Where the pen now rests, which is where the next glyph
+                    # goes if nothing moves it - taken after the advance so
+                    # it includes character and word spacing. Letter-spaced
+                    # display type (Tc 3 on 8pt text is a real running head
+                    # in the corpus) would otherwise read as one space per
+                    # letter.
+                    after = mat_mult(
+                        (font_size * hscale, 0.0, 0.0, font_size, 0.0, rise),
+                        mat_mult(tm, ctm))
+                    note_char(span, char, mat_apply((0.0, 0.0), trm),
+                              mat_apply((0.0, 0.0), after),
+                              math.hypot(trm[0], trm[1]))
+
+    def add_path_point(x, y):
+        nonlocal path_box
+        path_box = _grow(path_box, _corners_box([mat_apply((x, y), ctm)]))
+
+    for idx, instr in enumerate(instructions):
+        op = str(instr.operator)
+        ops = instr.operands
+
+        if op == "q":
+            ctm_stack.append(ctm)
+        elif op == "Q":
+            if ctm_stack:
+                ctm = ctm_stack.pop()
+        elif op == "cm" and len(ops) == 6:
+            ctm = mat_mult(tuple(_num(v, 0.0) for v in ops), ctm)
+        elif op == "BT":
+            tm = tlm = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        elif op == "ET":
+            tm = tlm = None
+        elif op == "Tm" and len(ops) == 6:
+            tm = tlm = tuple(_num(v, 0.0) for v in ops)
+        elif op == "TL" and len(ops) == 1:
+            leading = _num(ops[0], leading)
+        elif op == "Tc" and len(ops) == 1:
+            char_spacing = _num(ops[0], char_spacing)
+        elif op == "Tw" and len(ops) == 1:
+            word_spacing = _num(ops[0], word_spacing)
+        elif op == "Tz" and len(ops) == 1:
+            hscale = _num(ops[0], 100.0) / 100.0
+        elif op == "Ts" and len(ops) == 1:
+            rise = _num(ops[0], rise)
+        elif op == "Tf" and len(ops) == 2:
+            font_name = str(ops[0])
+            font_size = _num(ops[1], 0.0)
+        elif op in ("Td", "TD") and len(ops) == 2 and tlm is not None:
+            tx, ty = _num(ops[0], 0.0), _num(ops[1], 0.0)
+            if op == "TD":
+                leading = -ty
+            tlm = mat_mult((1.0, 0.0, 0.0, 1.0, tx, ty), tlm)
+            tm = tlm
+        elif op == "T*" and tlm is not None:
+            tlm = mat_mult((1.0, 0.0, 0.0, 1.0, 0.0, -leading), tlm)
+            tm = tlm
+        elif op == "Tj" and ops and tm is not None:
+            show([("str", bytes(ops[-1]))])
+        elif op == "'" and ops and tlm is not None:
+            tlm = mat_mult((1.0, 0.0, 0.0, 1.0, 0.0, -leading), tlm)
+            tm = tlm
+            show([("str", bytes(ops[-1]))])
+        elif op == '"' and len(ops) == 3 and tlm is not None:
+            word_spacing = _num(ops[0], word_spacing)
+            char_spacing = _num(ops[1], char_spacing)
+            tlm = mat_mult((1.0, 0.0, 0.0, 1.0, 0.0, -leading), tlm)
+            tm = tlm
+            show([("str", bytes(ops[2]))])
+        elif op == "TJ" and len(ops) == 1 and isinstance(ops[0], pikepdf.Array) and tm is not None:
+            show([("str", bytes(e)) if isinstance(e, pikepdf.String) else ("adj", _num(e, 0.0))
+                  for e in ops[0]])
+        elif op in ("m", "l") and len(ops) == 2:
+            add_path_point(_num(ops[0], 0.0), _num(ops[1], 0.0))
+        elif op == "c" and len(ops) == 6:
+            # The control points, not the curve they describe: a Bezier
+            # never leaves its control hull, so this box certainly contains
+            # the curve, and may be a little roomier than it needs to be.
+            for i in (0, 2, 4):
+                add_path_point(_num(ops[i], 0.0), _num(ops[i + 1], 0.0))
+        elif op in ("v", "y") and len(ops) == 4:
+            for i in (0, 2):
+                add_path_point(_num(ops[i], 0.0), _num(ops[i + 1], 0.0))
+        elif op == "re" and len(ops) == 4:
+            x, y = _num(ops[0], 0.0), _num(ops[1], 0.0)
+            w, h = _num(ops[2], 0.0), _num(ops[3], 0.0)
+            for corner in ((x, y), (x + w, y), (x + w, y + h), (x, y + h)):
+                add_path_point(*corner)
+        elif op in _PATH_PAINT_OPS:
+            if open_span is not None:
+                open_span["hasPath"] = True
+                open_span["bbox"] = _grow(open_span["bbox"], path_box)
+            path_box = None
+        elif op == "n":
+            path_box = None
+        elif op == "sh":
+            # A shading fills the current clip region, which nothing here
+            # tracks - it paints, but where is not something this can say.
+            if open_span is not None:
+                open_span["hasPath"] = True
+                open_span["unmeasured"] = True
+        elif op == "Do" and ops:
+            box, measured = _xobject_box(page, str(ops[0]), ctm, resource_cache)
+            if open_span is not None:
+                open_span["hasImage"] = True
+                open_span["bbox"] = _grow(open_span["bbox"], box)
+                if not measured:
+                    open_span["unmeasured"] = True
+        elif op == "INLINE_IMAGE":
+            if open_span is not None:
+                open_span["hasImage"] = True
+                open_span["bbox"] = _grow(open_span["bbox"], _unit_square_box(ctm))
+        elif op in ("BDC", "BMC"):
+            frame = None
+            if _name_text(ops[0] if ops else None) == "Artifact" and open_span is None:
+                props = _bdc_properties(page, instr, op, resource_cache)
+                frame = {
+                    "index": idx,
+                    "nested": len(mc_stack) > 0,
+                    "subtype": _name_text(props.get("/Subtype")) if props is not None else None,
+                    "artifactType": _name_text(props.get("/Type")) if props is not None else None,
+                    "declaredBBox": _bbox_list(props.get("/BBox")) if props is not None else None,
+                    "hasText": False, "hasImage": False, "hasPath": False,
+                    "bbox": None, "unmeasured": False,
+                    "_text": [], "_pen": None,
+                }
+                spans.append(frame)
+            mc_stack.append(frame)
+            open_span = innermost_span()
+        elif op == "EMC":
+            if mc_stack:
+                mc_stack.pop()
+            open_span = innermost_span()
+
+    listed = []
+    for span in spans:
+        # An artifact span that paints nothing is a marker, not content -
+        # there is nothing to look at on the page and nothing to restore, so
+        # it would only pad the list. One that declares a /BBox is kept even
+        # when empty: the file is pointing at a region on purpose.
+        if not (span["hasText"] or span["hasImage"] or span["hasPath"]
+                or span["declaredBBox"] is not None):
+            continue
+        text = re.sub(r"\s+", " ", "".join(span.pop("_text"))).strip()
+        span.pop("_pen", None)
+        span["text"] = text[:_ARTIFACT_TEXT_LIMIT]
+        listed.append(span)
+    return listed

@@ -4,6 +4,7 @@
 // prompt that guards each of those.
 
 import { computeAtChangeFlags } from './actual-text.js';
+import { refreshArtifactList, resetArtifacts } from './artifacts.js';
 import { applyFreshOutline } from './bookmarks.js';
 import { closeDetails } from './details.js';
 import { el } from './dom.js';
@@ -96,6 +97,7 @@ export async function performOpen(filePath) {
     state.atChangeSweepToken += 1;   // invalidate any per-node flag refresh still in flight for the outgoing document
     resetPerDocumentNodeState();
 
+    resetArtifacts(); // the list belongs to the outgoing document
     el.noStructBanner.hidden = !!opened.hasStructTree;
     state.docInfo = opened.docInfo || { title: null, author: null };
     applyFreshTree(opened.tree || null);
@@ -138,6 +140,11 @@ export async function performOpen(filePath) {
     // details panel is where Title/Author/Language get set (see
     // showRootDetails() in details.js).
     if (state.tree) selectNode('root');
+
+    // Landing on the root above puts the pane back on the tag tree, so this
+    // only has anything to do for an untagged PDF - which has no root to
+    // land on, and can still perfectly well have artifacts to list.
+    if (state.treePanel === 'artifacts') await refreshArtifactList();
 
     setStatus((opened.hasStructTree ? 'Loaded.' : 'Loaded (untagged PDF).') + atChangesSummary);
   } catch (err) {
@@ -305,6 +312,7 @@ export async function performClose() {
   clearPageCaches();
 
   closeDetails();
+  resetArtifacts();
   applyFreshTree(null);
   applyFreshOutline([]);
   setFileName(null);

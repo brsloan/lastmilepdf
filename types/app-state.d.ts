@@ -13,7 +13,7 @@
 // reachable here through a relative import of its bundle, and modelling its
 // API is a separate job from modelling ours.
 
-import type { TagNode, BookmarkNode, DocInfo, IndexedNode, UpdateInfo, UpdateState } from './domain';
+import type { ArtifactEntry, TagNode, BookmarkNode, DocInfo, IndexedNode, UpdateInfo, UpdateState } from './domain';
 
 /** A point in canvas-pixel space. */
 export interface Point {
@@ -258,6 +258,22 @@ export interface AppState {
   // --- panels, filtering, display --------------------------------------
   /** Which details-pane tab is showing. */
   activePanel: 'properties' | 'bookmarks';
+  /** Which tag-tree-pane tab is showing. */
+  treePanel: 'tree' | 'artifacts';
+  /** The Artifacts tab's list, as the worker last returned it. */
+  artifacts: ArtifactEntry[];
+  /** The document has more artifacts than one list reports. */
+  artifactsTruncated: boolean;
+  /** The list needs re-reading before it can be shown again. */
+  artifactsStale: boolean;
+  /** Invalidates an in-flight list read superseded by a newer one. */
+  artifactsToken: number;
+  /** The "active" artifact; always a member of selectedArtifactIds. */
+  selectedArtifactId: string | null;
+  /** Full multi-selection - Tag puts all of these under one tag. */
+  selectedArtifactIds: Set<string>;
+  /** Fixed point shift+click range-selects from. */
+  artifactAnchorId: string | null;
   /** Which tags the tree shows - see renderFilteredTree(). */
   filter: 'all' | 'headings' | 'figures' | 'lists' | 'table' | 'alt-missing' | 'empty' | 'flagged';
   /** nodeId -> explicit user toggle; absence means the role-based default. */

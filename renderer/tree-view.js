@@ -900,11 +900,52 @@ function attachDropHandlers(row, targetNodeId, opts = {}) {
   });
 }
 
+// --- the Tag Tree pane's two tabs ----------------------------------------
+//
+// The pane shows either the tag tree or the Artifacts list (see
+// artifacts.js). The switch itself lives here, not there, because switching
+// *to* the tag tree is something the tree does to itself: selecting a tag by
+// any route - a page click, a Find/Replace hit, a Verify issue - has to put
+// the tree back in front of the user, and routing that through the artifacts
+// module would be the renderer's second import cycle for no gain.
+//
+// The tab on show also owns the page's highlight box, which is why leaving
+// the Artifacts tab drops its selection rather than leaving a box on the
+// page for a list nobody can see (see refreshHighlightForCurrentPage() in
+// viewer.js).
+export function setTreePanel(panel) {
+  if (state.treePanel === panel) return;
+  state.treePanel = panel;
+  const onTree = panel === 'tree';
+  el.tabTagTree.classList.toggle('active', onTree);
+  el.tabTagTree.setAttribute('aria-selected', String(onTree));
+  el.tabArtifacts.classList.toggle('active', !onTree);
+  el.tabArtifacts.setAttribute('aria-selected', String(!onTree));
+  el.tagTree.hidden = !onTree;
+  el.artifactsPanel.hidden = onTree;
+  // The filter belongs to the tree, not the pane - see the header comment in
+  // index.html for why it is disabled rather than hidden.
+  el.tagFilter.disabled = !onTree;
+  if (onTree) {
+    state.selectedArtifactId = null;
+    state.selectedArtifactIds = new Set();
+    state.artifactAnchorId = null;
+  }
+}
+
 export function applyFreshTree(tree) {
   state.tree = tree;
   state.nodesById = indexTree(tree);
   state.hiddenDocumentId = findHiddenDocumentWrapperId(tree);
   state.mcidIndex = tree ? buildMcidIndex(tree) : new Map();
+  // Every mutation, undo and document swap comes through here, which makes
+  // it the one place that reliably sees "what this document contains has
+  // changed" - and an edit that tags an artifact, or artifacts a tag, moves
+  // the Artifacts list too. Marking it rather than re-reading it keeps the
+  // whole-document content-stream walk off the edit path: the panel pays for
+  // it when (and only if) it is next shown. See refreshArtifactList() in
+  // artifacts.js.
+  state.artifactsStale = true;
   pruneStaleAiProposals();
   // A pending rectangle selection is a list of node ids, and every rebuild
   // reassigns those (see the note above pruneStaleAiProposals) - so after
@@ -948,6 +989,7 @@ export function selectNode(nodeId) {
   // whole document anyway, so falling back to the structure root - which
   // shows the same Title/Author/Language - is the closest actual match.
   if (nodeId === state.hiddenDocumentId) nodeId = 'root';
+  setTreePanel('tree');
   state.selectedNodeIds = new Set([nodeId]);
   state.selectionAnchorId = nodeId;
   state.selectedNodeId = nodeId;
@@ -974,6 +1016,7 @@ export function selectNodes(nodeIds) {
     closeDetails();
     return;
   }
+  setTreePanel('tree');
   state.selectedNodeIds = new Set(ids);
   state.selectionAnchorId = ids[0];
   state.selectedNodeId = ids[ids.length - 1];

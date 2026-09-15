@@ -74,18 +74,26 @@
     </section>
 
     <section class="pane tree-pane">
-      <div class="pane-header">
-        <span>Tag Tree</span>
-        <select id="tag-filter" class="tree-filter" title="Filter tag tree">
-          <option value="all">All</option>
-          <option value="figures">Figures</option>
-          <option value="headings">Headings</option>
-          <option value="lists">Lists</option>
-          <option value="table">Tables</option>
-          <option value="alt-missing">Alt Missing</option>
-          <option value="empty">Empty</option>
-          <option value="flagged">Flagged</option>
-        </select>
+      <!-- The filter sits between the two tabs rather than beside them: it
+           belongs to the Tag Tree, not to the pane, and reads that way next
+           to the tab it applies to. It is disabled while Artifacts is
+           showing, which keeps the tabs from shifting about as they would if
+           it came and went. -->
+      <div class="pane-header tree-pane-header">
+        <div class="pane-tabs" role="tablist" aria-label="Tag Tree pane">
+          <button type="button" id="tab-tag-tree" class="pane-tab active" role="tab" aria-selected="true" aria-controls="tag-tree">Tag Tree</button>
+          <select id="tag-filter" class="tree-filter" title="Filter tag tree">
+            <option value="all">All</option>
+            <option value="figures">Figures</option>
+            <option value="headings">Headings</option>
+            <option value="lists">Lists</option>
+            <option value="table">Tables</option>
+            <option value="alt-missing">Alt Missing</option>
+            <option value="empty">Empty</option>
+            <option value="flagged">Flagged</option>
+          </select>
+          <button type="button" id="tab-artifacts" class="pane-tab" role="tab" aria-selected="false" aria-controls="artifacts-panel">Artifacts</button>
+        </div>
       </div>
       <div id="tag-tree" class="tag-tree">
         <div id="tag-tree-scroll-spacer-top" class="tag-tree-scroll-spacer" aria-hidden="true"></div>
@@ -93,6 +101,15 @@
           <p class="tree-placeholder">No document loaded.</p>
         </div>
         <div id="tag-tree-scroll-spacer-bottom" class="tag-tree-scroll-spacer" aria-hidden="true"></div>
+      </div>
+
+      <div id="artifacts-panel" class="artifacts-panel" hidden>
+        <div class="artifacts-toolbar">
+          <button type="button" id="btn-restore-artifact" class="btn btn-primary" disabled title="Tag the selected artifact as a paragraph and select it in the tag tree, where its role can be changed">Tag</button>
+          <span id="artifacts-note" class="artifacts-note"></span>
+        </div>
+        <p id="artifacts-empty" class="details-empty">Open a PDF to list its artifacts.</p>
+        <div id="artifact-list" class="tag-tree artifact-list" hidden></div>
       </div>
     </section>
 
@@ -406,6 +423,19 @@
       </section>
 
       <section class="shortcuts-group">
+        <h3>Artifacts</h3>
+        <dl>
+          <div class="shortcut-row"><dt><kbd>Click</kbd></dt><dd>Select an artifact, jump to its page and outline it</dd></div>
+          <div class="shortcut-row"><dt><kbd>Shift</kbd>+<kbd>Click</kbd></dt><dd>Select range</dd></div>
+          <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd></dt><dd>Add/remove one artifact from the selection</dd></div>
+          <div class="shortcut-row"><dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the list</dd></div>
+          <div class="shortcut-row"><dt><kbd>Shift</kbd>+<kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>Extend selection</dd></div>
+          <div class="shortcut-row"><dt><kbd>Enter</kbd> / <kbd>Double-click</kbd></dt><dd>Tag the selection as one Paragraph</dd></div>
+          <div class="shortcut-row"><dt><kbd>Tag</kbd> button</dt><dd>The same thing</dd></div>
+        </dl>
+      </section>
+
+      <section class="shortcuts-group">
         <h3>Walk</h3>
         <dl>
           <div class="shortcut-row"><dt><kbd>+</kbd>/<kbd>-</kbd></dt><dd>Increase/decrease walk speed</dd></div>
@@ -434,6 +464,7 @@
         <h3>Overview</h3>
         <p>LastMilePDF edits the accessibility tag tree, bookmarks, and metadata. The <strong>Page Preview</strong> pane shows the current page, the <strong>Tag Tree</strong> pane shows its structure, and the <strong>Tag Properties</strong> pane lets you edit whatever tag is selected.</p>
         <p>A PDF with no tag tree can still be viewed, but there is nothing to edit until it has been tagged elsewhere. This app is not for tagging from scratch.</p>
+        <p>The Tag Tree pane and the Tag Properties pane each carry a second tab: <strong>Artifacts</strong> lists the content the document leaves untagged on purpose, and <strong>Bookmarks</strong> shows the PDF's outline.</p>
       </section>
 
       <section class="help-section">
@@ -442,7 +473,7 @@
         <p>&uarr;/&darr; arrow keys move through the tree, and the usual shortcuts work for selection: Shift+click selects a range, Ctrl/Cmd+click adds or removes a single row from the selection, and Shift+&uarr;/&darr; extends the selection.</p>
         <p>Drag a row onto another to reorder it or move it under a new parent; Ctrl/Cmd+&uarr;/&darr; moves the selection earlier/later among its siblings without touching the mouse.</p>
         <p>A dotted red line marks where one page of the PDF ends and the next begins &mdash; between two rows when the break falls between tags, and straight through a row whose own content carries over onto the next page. It passes behind the tags rather than over them. Page breaks are where reading order most often goes wrong, so these are worth reading carefully.</p>
-        <p>The dropdown above the tree filters it to <strong>Figures</strong>, <strong>Headings</strong>, <strong>Lists</strong>, or <strong>Tables</strong> tags, or back to <strong>All</strong>. This is a view filter only &mdash; it doesn't change the document.</p>
+        <p>The dropdown beside the Tag Tree tab filters the tree to <strong>Figures</strong>, <strong>Headings</strong>, <strong>Lists</strong>, or <strong>Tables</strong> tags, or back to <strong>All</strong>. This is a view filter only &mdash; it doesn't change the document.</p>
         <p>Three further filters narrow the tree to tags worth a second look. <strong>Alt Missing</strong> shows the Figure and Formula tags with no alt text. <strong>Flagged</strong> shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or &mdash; once Tools &gt; Show AT Changes has swept the document &mdash; Actual Text that no longer matches the content underneath. <strong>Empty</strong> shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.</p>
         <p>Figures, Lists and Tables keep each match's own contents browsable underneath it. The rest are flat lists, one row per match in page order, so there is nothing to expand and tags can't be dragged into a new place while one is on.</p>
         <p>When the tree is filtered to Headings, &larr;/&rarr; step the heading level.</p>
@@ -519,6 +550,15 @@
       <section class="help-section">
         <h3>Bookmarks</h3>
         <p>The Bookmarks tab shows the PDF's outline. Click a bookmark to jump to its page, double-click to rename it, or press Delete to remove the selected one. <strong>+</strong> adds a new bookmark pointing at whatever page is currently open in the preview, inserted into the tree wherever that page falls in the existing order. <strong>Generate</strong> clears the existing outline and builds a fresh one from the document's headings.</p>
+      </section>
+
+      <section class="help-section">
+        <h3>Artifacts</h3>
+        <p>The Artifacts tab, beside Tag Tree, lists everything the PDF marks as an <em>artifact</em> &mdash; content deliberately left out of the tag tree, so assistive technology skips it. Running heads, footers, page numbers, rules and the background image of a scanned page are all normally artifacts, and so is anything this app has artifacted itself: deleting a tag turns its content into one, and so do <strong>Smartifact</strong> and <strong>Repair Orphaned Content</strong>.</p>
+        <p>Each row says what the artifact is made of (text, image, drawing, or a mix), the PDF's own name for it where it has one (Header, Footer, Watermark&hellip;), any text it paints, and its page. Click a row to jump to that page and outline the artifact on it, the same way clicking a tag outlines its content. &uarr;/&darr; move through the list, and the usual selection shortcuts work: Shift+click selects a range, Ctrl/Cmd+click adds or removes one row, and Shift+&uarr;/&darr; extends the selection. Every selected artifact on the current page is outlined at once.</p>
+        <p><strong>Tag</strong> (or Enter, or double-clicking a row) turns the selection back into tagged content: it becomes a new Paragraph, selected in the Tag Tree, where its role can be changed to whatever it should have been. This is the way back from an artifacting you didn't mean &mdash; a heading deleted by accident, or a figure Smartifact took to be a scan background. Undo reverses it like any other edit.</p>
+        <p>Several artifacts selected together become <em>one</em> Paragraph holding all of them, in page then reading order &mdash; not one Paragraph each. That is what to do with a running head the file artifacted as three separate spans, or a heading it broke up line by line: they are one piece of content, and tagging them one at a time would only move the problem into the tree. They can come from different pages; each keeps the page it was actually on.</p>
+        <p>The list is read from the page content streams, which takes a moment on a long document, and is re-read the next time the tab is opened after an edit. A few things can't be outlined on the page: an artifact drawn with a shading, or one whose font carries no usable metrics, has no box this app is willing to state &mdash; those rows still list and can still be tagged, and hovering one says so.</p>
       </section>
 
       <section class="help-section">

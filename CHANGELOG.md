@@ -11,6 +11,22 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **Artifacts tab.** The Tag Tree pane now has a second tab listing everything
+  the document marks `/Artifact` - the content deliberately left out of the
+  tag tree, which assistive technology skips: running heads, footers, page
+  numbers, rules, the background image of a scanned page, and anything this
+  app artifacted itself (deleting a tag does, and so do Smartifact and Repair
+  Orphaned Content). Each row says what the artifact is made of, the PDF's own
+  name for it where it has one, any text it paints and its page; clicking one
+  jumps to that page and outlines it, the same way clicking a tag does.
+  **Tag** turns the selection back into tagged content - a new Paragraph,
+  selected in the tree, where its role can be set to whatever it should have
+  been. Rows select like tag tree rows do (Shift+click, Ctrl/Cmd+click,
+  Shift+arrows), and several selected together become *one* Paragraph holding
+  all of them in reading order, rather than one each - which is what a running
+  head the file artifacted as three separate spans actually needs. Artifacting
+  was a one-way door until now; this is the way back from a heading deleted by
+  accident, or a figure Smartifact took for a scan background.
 - **Select Content → Table.** With a rectangle selected on the page, T no
   longer just says that tables are built from the tree: it lays a grid over
   the rectangle. Click to place column dividers, Enter, click to place row

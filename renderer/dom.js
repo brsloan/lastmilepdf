@@ -56,7 +56,14 @@ export const el = {
   btnNextPage: asButton('btn-next-page'),
   pageIndicatorInput: asInput('page-indicator-input'),
   pageIndicatorTotal: asElement('page-indicator-total'),
+  tabTagTree: asButton('tab-tag-tree'),
+  tabArtifacts: asButton('tab-artifacts'),
   tagTree: asElement('tag-tree'),
+  artifactsPanel: asElement('artifacts-panel'),
+  artifactsEmpty: asElement('artifacts-empty'),
+  artifactsNote: asElement('artifacts-note'),
+  artifactList: asElement('artifact-list'),
+  btnRestoreArtifact: asButton('btn-restore-artifact'),
   tagTreeContent: asElement('tag-tree-content'),
   tagTreeScrollSpacerTop: asElement('tag-tree-scroll-spacer-top'),
   tagTreeScrollSpacerBottom: asElement('tag-tree-scroll-spacer-bottom'),
@@ -203,5 +210,17 @@ export const el = {
 export function selectableRows() {
   return /** @type {HTMLElement[]} */ (
     Array.from(el.tagTree.querySelectorAll('.tree-row.selectable'))
+  );
+}
+
+/**
+ * Every artifact row currently listed, in display order - the Artifacts
+ * tab's counterpart to selectableRows(), for the same arrow-key navigation.
+ *
+ * @returns {HTMLElement[]}
+ */
+export function artifactRows() {
+  return /** @type {HTMLElement[]} */ (
+    Array.from(el.artifactList.querySelectorAll('.tree-row.selectable'))
   );
 }

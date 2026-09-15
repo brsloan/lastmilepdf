@@ -1246,6 +1246,14 @@ ipcMain.handle('tags:count-orphaned-content', async (_event, { docId }) => {
   return callWorker('count_orphaned_artifacts', { docId });
 });
 
+ipcMain.handle('tags:list-artifacts', async (_event, { docId }) => {
+  return callWorker('list_artifacts', { docId });
+});
+
+ipcMain.handle('tags:restore-artifacts', async (_event, { docId, targets, role }) => {
+  return callWorker('restore_artifacts', { docId, targets, role });
+});
+
 ipcMain.handle('tags:verify-facts', async (_event, { docId }) => {
   return callWorker('verify_document_facts', { docId });
 });

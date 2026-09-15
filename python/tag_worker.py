@@ -3636,6 +3636,299 @@ def repair_orphaned_marked_content(doc_id):
     return {"tree": _rebuild_after_mutation(doc_id), "repairedCount": repaired_count, **_undo_state(doc)}
 
 
+
+# --- the artifacts list ---------------------------------------------------
+#
+# Backs the Tag Tree pane's Artifacts tab: the counterpart to the tag tree,
+# listing what a page *doesn't* tag. Everything in it is content the file
+# marks `/Artifact` - either because it always was one (running heads, page
+# numbers, rules, scan backgrounds) or because this editor made it one, which
+# is what deleting a tag, Smartifact and Repair Orphaned Content all do (see
+# _artifact_leaves and _artifact_marked_content_on_page above).
+#
+# Artifacting is otherwise a one-way door in this editor: a tag can be
+# deleted into an artifact, but until now nothing could bring one back. The
+# list exists to make that reversible, and restore_artifacts() is the reverse
+# edit - the same content-stream rewrite as the delete, run backwards.
+
+# How many artifacts one list_artifacts() call will report. A document is
+# free to have more; a list is not a useful way to work with more, and the
+# renderer draws a row per entry. The cap is reported so the panel can say
+# the list is short rather than quietly showing a prefix of the truth.
+ARTIFACT_LIST_LIMIT = 2000
+
+
+def _artifact_kind(span):
+    """One word for what an artifact is made of, for its row in the list.
+    'mixed' is reserved for a span that genuinely paints more than one kind
+    of thing; a span that paints nothing at all is listed only when it
+    declares its own /BBox (see page_artifact_spans), and reads as
+    'region'."""
+    kinds = [name for name, present in (
+        ("text", span["hasText"]), ("image", span["hasImage"]), ("path", span["hasPath"]),
+    ) if present]
+    if not kinds:
+        return "region"
+    return kinds[0] if len(kinds) == 1 else "mixed"
+
+
+def list_artifacts(doc_id):
+    """Every `/Artifact` marked-content span in the document, in page then
+    content-stream order - see page_artifact_spans() in glyph_metrics.py for
+    what the walk finds and what it declines to guess at.
+
+    Read-only: nothing here writes, so the panel can re-read the list after
+    any edit without that itself counting as one.
+
+    Ids are `aN` by position in this response, assigned the same way (and
+    with the same warning) as the tag tree's node ids: they are a handle for
+    the reply the renderer is holding, never a name for a span that survives
+    an edit. What actually addresses a span is (pageIndex, index), and
+    restore_artifacts() re-derives the page's spans and checks what it finds
+    at that index rather than trusting it.
+
+    Returns {"artifacts": [...], "truncated": bool}."""
+    doc = documents[doc_id]
+    pdf = doc["pdf"]
+
+    artifacts = []
+    truncated = False
+    for page_index, page in enumerate(pdf.pages):
+        for span in glyph_metrics.page_artifact_spans(page):
+            if len(artifacts) >= ARTIFACT_LIST_LIMIT:
+                truncated = True
+                break
+            artifacts.append({
+                "id": f"a{len(artifacts) + 1}",
+                "pageIndex": page_index,
+                "index": span["index"],
+                "nested": span["nested"],
+                "kind": _artifact_kind(span),
+                "subtype": span["subtype"],
+                "artifactType": span["artifactType"],
+                "text": span["text"],
+                # Page space, rounded to two places - the renderer converts
+                # these into its own viewport space anyway, and the digits
+                # below that describe nothing it can draw.
+                "bbox": [round(v, 2) for v in span["bbox"]] if span["bbox"] else None,
+                "declaredBBox": ([round(v, 2) for v in span["declaredBBox"]]
+                                 if span["declaredBBox"] else None),
+                "unmeasured": span["unmeasured"],
+            })
+        if truncated:
+            break
+
+    return {"artifacts": artifacts, "truncated": truncated}
+
+
+# What a caller is told when the span it named is not (or is no longer) an
+# artifact's opening operator. Deliberately actionable rather than technical:
+# the index came from a list the renderer is still holding, and re-reading
+# that list is exactly the fix.
+STALE_ARTIFACT_MESSAGE = (
+    "That artifact is no longer where it was - reopen the Artifacts list and try again")
+
+# The roles restore_artifacts() will build a tag from. A role becomes a PDF
+# Name, and a Name with a space or a slash in it is not one - refuse it here
+# with something readable rather than let pikepdf raise about syntax.
+_ROLE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_\-]*")
+
+
+def _page_instructions(page, page_index):
+    try:
+        return pikepdf.parse_content_stream(page)
+    except Exception as exc:
+        raise ValueError(f"Could not read page {page_index + 1}'s content stream: {exc}") from exc
+
+
+def _artifact_at(instructions, index):
+    """The instruction at `index`, if it opens an artifact's marked content -
+    otherwise None."""
+    if not (0 <= index < len(instructions)):
+        return None
+    instr = instructions[index]
+    if str(instr.operator) not in ("BDC", "BMC"):
+        return None
+    if not instr.operands or str(instr.operands[0]) != "/Artifact":
+        return None
+    return instr
+
+
+def _artifact_span_at(page, index):
+    """The listed artifact span opening at instruction `index` on `page`, or
+    None - the same walk list_artifacts() reports from, so the two can't
+    disagree about which spans exist."""
+    for span in glyph_metrics.page_artifact_spans(page):
+        if span["index"] == index:
+            return span
+    return None
+
+
+def _artifact_targets(pdf, targets):
+    """`targets` as a deduplicated list of (page_index, index) in document
+    order, with every page index range-checked. Order matters twice over:
+    it is the order the restored content is read in, and (page, instruction
+    index) is exactly content-stream order, which is the order the page
+    paints in."""
+    if not targets:
+        raise ValueError("No artifacts to tag")
+
+    seen = set()
+    wanted = []
+    for target in targets:
+        try:
+            page_index = int(target["pageIndex"])
+            index = int(target["index"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Not a usable artifact reference: {target!r}") from exc
+        if not (0 <= page_index < len(pdf.pages)):
+            raise ValueError(f"Invalid page index: {page_index}")
+        key = (page_index, index)
+        if key not in seen:
+            seen.add(key)
+            wanted.append(key)
+    wanted.sort()
+    return wanted
+
+
+def _kid_for_restored_mcid(pdf, page_index, mcid, home_page_index):
+    """One kid of a restored tag. A bare MCID reads its page off the tag's
+    own /Pg, which is only right for content on that page; content from any
+    other page is promoted to an /MCR, which carries a /Pg of its own - the
+    same rule _kid_for_leaf() applies when a move takes a leaf off its
+    container's page."""
+    if page_index == home_page_index:
+        return mcid
+    return pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/MCR"),
+        "/Pg": pdf.pages[page_index].obj,
+        "/MCID": mcid,
+    })
+
+
+def restore_artifacts(doc_id, targets, role="P"):
+    """Turns artifacts back into tagged content: the exact reverse of what
+    deleting a tag does to its content (see _artifact_leaves).
+
+    Each target's `/Artifact BMC` - or `/Artifact <<...>> BDC` - becomes
+    `<role> <</MCID n>> BDC` carrying a freshly minted MCID. Nothing else in
+    any content stream moves: one token per artifact is rewritten, exactly
+    as the artifacting direction rewrites exactly one token.
+
+    Every target named lands under *one* new struct element, in document
+    order, which is what makes tagging several at once worth doing rather
+    than repeating the single case: a running head split into three spans,
+    or a heading the file artifacted a line at a time, is one paragraph, not
+    three. Content from a page other than the tag's own is referenced
+    through an /MCR so it keeps pointing where it always did (see
+    _kid_for_restored_mcid).
+
+    `targets` is [{"pageIndex", "index"}, ...] from list_artifacts(), and
+    each index is checked rather than trusted - the page is re-walked here
+    and what sits at that index has to still be an artifact's opening
+    operator. One stale index refuses the whole call: a partly-applied batch
+    would leave the user with some artifacts tagged, some not, and a list
+    that describes neither.
+
+    The new tag attaches under the document's /Document element, the same
+    place figure_from_rect() puts a new top-level tag, positioned among its
+    siblings by where the first artifact sits on the page. Like every other
+    freshly created tag here it carries no Alt text or Actual Text - those
+    are filled in afterward through the normal update_node path.
+
+    Carries a fresh `pdfBase64` for the same reason split_leaf() does: this
+    rewrites page content streams, and the renderer's pdf.js copy is its own
+    separate parse of those bytes."""
+    doc = documents[doc_id]
+    if "/StructTreeRoot" not in doc["pdf"].Root:
+        raise ValueError("This document has no structure tree to tag into")
+
+    pdf = doc["pdf"]
+    clean_role = (str(role) if role is not None else "").strip().lstrip("/") or "P"
+    if not _ROLE_NAME_RE.fullmatch(clean_role):
+        raise ValueError(f"Not a usable tag role: {role!r}")
+
+    wanted = _artifact_targets(pdf, targets)
+
+    # Checked before anything at all happens to the document: the whole point
+    # of an index being re-derived rather than trusted is that a stale one
+    # rewrites nothing, and a call that fails this has to leave the document
+    # exactly as it found it - not even an undo snapshot banked for an edit
+    # that never happened.
+    spans = {}
+    for page_index, index in wanted:
+        span = _artifact_span_at(pdf.pages[page_index], index)
+        if span is None:
+            raise ValueError(STALE_ARTIFACT_MESSAGE)
+        spans[(page_index, index)] = span
+
+    _push_undo_snapshot(doc)
+
+    # One rewrite pass per page, not per artifact: the MCIDs a page hands out
+    # have to be minted in sequence (the stream isn't written until the end
+    # of the page's turn, so _next_mcid_on_page can't see the ones already
+    # promised), and the stream is written once.
+    by_page = {}
+    for page_index, index in wanted:
+        by_page.setdefault(page_index, []).append(index)
+
+    mcids = {}
+    for page_index, indices in by_page.items():
+        page = pdf.pages[page_index]
+        # Only a single stream can be rewritten in place, so a /Contents
+        # array has to be joined first. parse_content_stream() already reads
+        # such an array as one instruction list, so this doesn't move any
+        # index - but each one is re-checked below rather than assumed.
+        page.contents_coalesce()
+        instructions = _page_instructions(page, page_index)
+        next_mcid = _next_mcid_on_page(doc, page_index)
+        for index in indices:
+            if _artifact_at(instructions, index) is None:
+                raise ValueError(STALE_ARTIFACT_MESSAGE)
+            instructions[index] = pikepdf.ContentStreamInstruction(
+                [pikepdf.Name(f"/{clean_role}"), pikepdf.Dictionary({"/MCID": next_mcid})],
+                pikepdf.Operator("BDC"),
+            )
+            mcids[(page_index, index)] = next_mcid
+            next_mcid += 1
+        page.obj.Contents.write(pikepdf.unparse_content_stream(instructions))
+    doc["content_gen"] += 1
+
+    home_page_index = wanted[0][0]
+    parent_obj, parent_node_id = _document_insertion_parent(doc)
+    element = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/StructElem"),
+        "/S": pikepdf.Name(f"/{clean_role}"),
+        "/P": parent_obj,
+        "/Pg": pdf.pages[home_page_index].obj,
+    }))
+    kids = [_kid_for_restored_mcid(pdf, page_index, mcids[(page_index, index)], home_page_index)
+            for page_index, index in wanted]
+    element["/K"] = kids[0] if len(kids) == 1 else pikepdf.Array(kids)
+
+    # Where it sits among its new siblings, by where its first artifact sits
+    # on the page - the same ordering figure_from_rect() gives a drawn
+    # Figure. An artifact with no measurable box (see page_artifact_spans)
+    # has no position to order by, so it lands at the end.
+    first = spans[wanted[0]]
+    top_y = first["bbox"][3] if first["bbox"] else (
+        first["declaredBBox"][3] if first["declaredBBox"] else None)
+    insert_index = (len(_iter_kids(parent_obj)) if top_y is None
+                    else _estimate_insert_index(doc, parent_node_id, home_page_index, top_y))
+    _insert_kid(parent_obj, element, insert_index)
+
+    tree = _rebuild_after_mutation(doc_id)
+    new_node_id = next((nid for nid, obj in doc["elements"].items() if _same_object(obj, element)), None)
+
+    return {
+        "tree": tree,
+        "newNodeId": new_node_id,
+        "taggedCount": len(wanted),
+        "pdfBase64": base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii"),
+        **_undo_state(doc),
+    }
+
+
 def delete_nodes(doc_id, node_ids):
     """Removes each of `node_ids` from its parent's /K, taking its entire
     subtree with it. Backs the tag tree's Delete key for both cases it
@@ -5336,6 +5629,11 @@ def main():
                 result = repair_orphaned_marked_content(request["docId"])
             elif cmd == "count_orphaned_artifacts":
                 result = count_orphaned_marked_content(request["docId"])
+            elif cmd == "list_artifacts":
+                result = list_artifacts(request["docId"])
+            elif cmd == "restore_artifacts":
+                result = restore_artifacts(
+                    request["docId"], request["targets"], request.get("role", "P"))
             elif cmd == "verify_document_facts":
                 result = verify_document_facts(request["docId"])
             elif cmd == "set_structure_tab_order":
