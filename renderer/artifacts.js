@@ -9,8 +9,8 @@
 // about?" - which until now was invisible in the app even though several of
 // its own commands put content there: deleting a tag artifacts its content,
 // and so do Smartifact and Repair Orphaned Content (see _artifact_leaves()
-// in tag_worker.py). That made artifacting a one-way door. The Tag button
-// here is the way back.
+// in tag_worker.py). That made artifacting a one-way door. The tagging
+// shortcuts here are the way back.
 //
 // The list comes from the worker's own walk of every page's content stream
 // (list_artifacts() / page_artifact_spans()), because an artifact has no
@@ -21,17 +21,30 @@
 
 import { artifactRows, el } from './dom.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
-import { state } from './state.js';
+import { TAG_SHORTCUT_ACTIONS, state } from './state.js';
 import { applyFreshTree, selectNode, setTreePanel } from './tree-view.js';
 import { clearHighlight, highlightArtifactOnPage, refreshHighlightForCurrentPage, refreshPdfPreviewBytes } from './viewer.js';
 
-// The role a restored artifact starts out as. A paragraph is the neutral
-// choice - it claims the content is content and nothing more - and the tag
-// lands selected in the tree, where its role can be changed like any other.
-const RESTORE_ROLE = 'P';
+// What each tagging shortcut (File > Settings > Preferences > Tagging
+// Shortcuts) makes of a selected artifact, keyed by TAG_SHORTCUT_ACTIONS id.
+// The same keys the tag tree is driven with, doing the same thing they do
+// there: say what this content is. An artifact isn't a tag yet, so there is
+// no role to change - the shortcut is what decides the role the new tag is
+// born with, which is the point of tagging from this list at all.
+//
+// Deliberately the same map as RECT_SELECT_ROLES in renderer.js minus its
+// list entries, and for the same reason the five missing actions are missing
+// (see tagSelectedArtifacts() below): restore_artifacts() builds exactly one
+// struct element, and a bare L or LI is structure this app's own
+// accessibility check would then flag - an LI has to sit in an L, and its
+// content in an LBody.
+const ARTIFACT_TAG_ROLES = {
+  h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
+  paragraph: 'P', td: 'TD', th: 'TH', caption: 'Caption', figure: 'Figure',
+};
 
-// What each kind of artifact is called in its row, and in the sentence the
-// Tag button's status line uses.
+// What each kind of artifact is called in its row, and in the sentence
+// tagging one reports.
 const KIND_LABELS = {
   text: 'text',
   image: 'image',
@@ -138,11 +151,12 @@ function emptyMessage() {
 
 function noteText() {
   if (!state.docId || state.artifacts.length === 0) return '';
-  // With several picked out, what the button is about to do matters more
-  // than how long the list is - Tag puts them under one tag, not one each,
-  // and that is worth saying before it happens rather than after.
+  // With several picked out, what a keystroke is about to do matters more
+  // than how long the list is - a tagging shortcut puts them under one tag,
+  // not one each, and that is worth saying before it happens rather than
+  // after.
   if (state.selectedArtifactIds.size > 1) {
-    return `${state.selectedArtifactIds.size} selected — Tag puts them under one <${RESTORE_ROLE}>`;
+    return `${state.selectedArtifactIds.size} selected — a tagging shortcut puts them under one tag`;
   }
   const count = `${state.artifacts.length} artifact${state.artifacts.length === 1 ? '' : 's'}`;
   return state.artifactsTruncated ? `First ${count} — this document has more` : count;
@@ -155,7 +169,6 @@ export function renderArtifactList() {
   el.artifactsEmpty.textContent = emptyMessage();
   el.artifactList.hidden = !hasArtifacts;
   el.artifactsNote.textContent = noteText();
-  el.btnRestoreArtifact.disabled = state.selectedArtifactIds.size === 0;
 
   if (!hasArtifacts) return;
   const ul = document.createElement('ul');
@@ -209,7 +222,6 @@ function renderArtifactRow(artifact) {
   row.appendChild(page);
 
   row.addEventListener('click', (e) => handleArtifactRowClick(artifact.id, e));
-  row.addEventListener('dblclick', () => restoreSelectedArtifacts());
 
   li.appendChild(row);
   return li;
@@ -248,7 +260,6 @@ function applyArtifactSelectionClasses(row, artifactId) {
 // of thousand rows per keypress.
 function syncArtifactRowSelection() {
   for (const row of artifactRows()) applyArtifactSelectionClasses(row, row.dataset.artifactId);
-  el.btnRestoreArtifact.disabled = state.selectedArtifactIds.size === 0;
   el.artifactsNote.textContent = noteText();
 }
 
@@ -313,10 +324,41 @@ function afterArtifactSelectionChange(activeId) {
   state.selectedArtifactId = activeId;
   syncArtifactRowSelection();
   highlightArtifactOnPage(activeId, { allowPageJump: true });
+  setStatus(selectionStatus());
+}
+
+// What the status line says about a fresh selection. Nothing here is a
+// button any more, so this is where the user is told what to press - the
+// same sentence the rectangle-select tool ends on, for the same reason: a
+// selection is a question ("as what?") and the answer is a keystroke.
+function selectionStatus() {
+  const count = state.selectedArtifactIds.size;
   const artifact = selectedArtifact();
   if (artifact && !artifact.bbox && !artifact.declaredBBox) {
-    setStatus('This artifact paints nothing that could be placed on the page, so there is nothing to outline.');
+    return 'This artifact paints nothing that could be placed on the page, so there is nothing to outline.'
+      + ' Press a tagging shortcut to tag it.';
   }
+  return count > 1
+    ? `${count} artifacts selected - press a tagging shortcut to tag them as one tag.`
+    : 'Artifact selected - press a tagging shortcut to tag it.';
+}
+
+// The Artifacts tab's half of the tagging shortcuts (the dispatch is in
+// renderer.js, beside the tree's). `action` is a TAG_SHORTCUT_ACTIONS id.
+export function tagSelectedArtifacts(action) {
+  const role = ARTIFACT_TAG_ROLES[action];
+  if (role) {
+    restoreSelectedArtifacts(role);
+    return;
+  }
+  // The five that aren't here - L, I, T, R, J by default - all restructure
+  // tags that already exist (or, for T, open the table grid over a page
+  // rectangle). An artifact is content, not a tag, so there is nothing yet
+  // for them to work on; answering them with this beats letting the
+  // keystroke fall through to whatever is selected in the hidden tree.
+  const label = TAG_SHORTCUT_ACTIONS.find((a) => a.id === action)?.label || action;
+  setStatus(`"${label}" works on tags that are already in the tree, not on artifacts.`
+    + ' Tag these first - P makes a paragraph - then press it in the Tag Tree.');
 }
 
 // Arrow-key navigation over the rows on show, matching the tag tree's - it
@@ -337,9 +379,10 @@ export function moveArtifactSelection(delta, { extend = false } = {}) {
   rows[next].scrollIntoView({ block: 'nearest' });
 }
 
-// Backs the Tag button (and double-clicking a row): turns the selected
-// artifacts back into tagged content and hands the selection to the new tag,
-// which also switches the pane back to the tag tree (see selectNode()).
+// Backs the tagging shortcuts: turns the selected artifacts back into tagged
+// content with the role the shortcut asked for, and hands the selection to
+// the new tag, which also switches the pane back to the tag tree (see
+// selectNode()).
 //
 // A multi-selection becomes *one* tag holding all of it, not one tag each -
 // which is the point of being able to select several. A running head the
@@ -350,7 +393,7 @@ export function moveArtifactSelection(delta, { extend = false } = {}) {
 // is replaced before the tree is applied - the same order split_leaf()'s
 // callers use, since the new tag's content leaves can only be read out of
 // the new bytes.
-export async function restoreSelectedArtifacts() {
+async function restoreSelectedArtifacts(role) {
   const artifacts = selectedArtifacts();
   if (artifacts.length === 0 || !state.docId) return;
 
@@ -359,13 +402,13 @@ export async function restoreSelectedArtifacts() {
     const result = await window.api.restoreArtifacts(
       state.docId,
       artifacts.map((a) => ({ pageIndex: a.pageIndex, index: a.index })),
-      RESTORE_ROLE,
+      role,
     );
     if (result.pdfBase64 && state.pdfDoc) await refreshPdfPreviewBytes(result.pdfBase64);
     applyFreshTree(result.tree);
     applyUndoState(result);
     if (result.newNodeId) selectNode(result.newNodeId);
-    setStatus(restoredStatus(artifacts, result.taggedCount));
+    setStatus(restoredStatus(artifacts, result.taggedCount, role));
   } catch (err) {
     reportError(artifacts.length === 1 ? 'Could not tag this artifact' : 'Could not tag these artifacts', err);
   } finally {
@@ -373,15 +416,15 @@ export async function restoreSelectedArtifacts() {
   }
 }
 
-function restoredStatus(artifacts, taggedCount) {
+function restoredStatus(artifacts, taggedCount, role) {
   if (artifacts.length === 1) {
     const [only] = artifacts;
     const kind = KIND_LABELS[only.kind] || only.kind;
-    return `Tagged a ${kind} artifact on page ${only.pageIndex + 1} as <${RESTORE_ROLE}>.`;
+    return `Tagged a ${kind} artifact on page ${only.pageIndex + 1} as <${role}>.`;
   }
   const pages = new Set(artifacts.map((a) => a.pageIndex));
   const where = pages.size === 1
     ? `page ${artifacts[0].pageIndex + 1}`
     : `${pages.size} pages`;
-  return `Tagged ${taggedCount} artifacts on ${where} as one <${RESTORE_ROLE}>.`;
+  return `Tagged ${taggedCount} artifacts on ${where} as one <${role}>.`;
 }

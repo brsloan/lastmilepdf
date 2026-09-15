@@ -1,7 +1,7 @@
 import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
-import { moveArtifactSelection, restoreSelectedArtifacts, showArtifactsPanel, showTagTreePanel } from './artifacts.js';
+import { moveArtifactSelection, showArtifactsPanel, showTagTreePanel, tagSelectedArtifacts } from './artifacts.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
@@ -87,30 +87,23 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 // The switch itself is setTreePanel() in tree-view.js (see the comment
 // there); these are the two buttons that drive it, plus the Artifacts list's
 // own keyboard handling - Up/Down steps the list and Shift+Up/Down extends
-// the selection, the way they step and extend in the tag tree, and Enter
-// tags whatever is selected.
+// the selection, the way they step and extend in the tag tree. Tagging what
+// is selected is the tagging shortcuts' job, handled with the tree's own
+// further down.
 
 el.tabTagTree.addEventListener('click', () => showTagTreePanel());
 
 el.tabArtifacts.addEventListener('click', () => { showArtifactsPanel(); });
 
-el.btnRestoreArtifact.addEventListener('click', () => { restoreSelectedArtifacts(); });
-
 window.addEventListener('keydown', (e) => {
   if (state.treePanel !== 'artifacts') return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
 
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (document.activeElement?.closest('dialog[open]')) return;
 
-  if (e.key === 'Enter') {
-    if (e.shiftKey || state.selectedArtifactIds.size === 0) return;
-    e.preventDefault();
-    restoreSelectedArtifacts();
-    return;
-  }
   e.preventDefault();
   moveArtifactSelection(e.key === 'ArrowUp' ? -1 : 1, { extend: e.shiftKey });
 });
@@ -1917,7 +1910,7 @@ window.addEventListener('keydown', (e) => {
 
 // The configured tagging shortcuts (File > Settings > Preferences > Tagging
 // Shortcuts - 1-6/P/L/I/T/R/D/H/F/C/J by default, see TAG_SHORTCUT_ACTIONS in
-// state.js) convert the current selection's role, each via a dedicated
+// state.js) convert the current tag selection's role, each via a dedicated
 // backend op (set_role_or_wrap/convert_to_paragraph/make_list/make_table/
 // make_tr/convert_to_figure/convert_to_list_item in tag_worker.py) rather
 // than a plain Role edit, since a content/object-ref leaf has no role of its
@@ -1991,6 +1984,21 @@ window.addEventListener('keydown', (e) => {
       setStatus(`"${label}" works on tags in the tree, not on a selection from the page.`
         + ' Tag the selection first, or press Esc to drop it.');
     }
+    return;
+  }
+
+  // The Artifacts tab answers the same keys, and answers all of them: an
+  // artifact is content the document declined to tag, so the shortcut isn't
+  // changing a role but choosing the one the new tag is born with (see
+  // ARTIFACT_TAG_ROLES in artifacts.js). Every key is taken here rather than
+  // falling through, because the tree is not on show - a keystroke aimed at
+  // the artifact list must not restructure whichever tag happens to still be
+  // selected behind the tab.
+  if (state.treePanel === 'artifacts') {
+    if (document.activeElement?.closest('dialog[open]')) return;
+    if (state.selectedArtifactIds.size === 0) return;
+    e.preventDefault();
+    tagSelectedArtifacts(action);
     return;
   }
 

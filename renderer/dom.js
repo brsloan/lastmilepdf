@@ -63,7 +63,6 @@ export const el = {
   artifactsEmpty: asElement('artifacts-empty'),
   artifactsNote: asElement('artifacts-note'),
   artifactList: asElement('artifact-list'),
-  btnRestoreArtifact: asButton('btn-restore-artifact'),
   tagTreeContent: asElement('tag-tree-content'),
   tagTreeScrollSpacerTop: asElement('tag-tree-scroll-spacer-top'),
   tagTreeScrollSpacerBottom: asElement('tag-tree-scroll-spacer-bottom'),

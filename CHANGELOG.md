@@ -19,13 +19,17 @@ they summarise each release rather than record every change as it landed.
   Orphaned Content). Each row says what the artifact is made of, the PDF's own
   name for it where it has one, any text it paints and its page; clicking one
   jumps to that page and outlines it, the same way clicking a tag does.
-  **Tag** turns the selection back into tagged content - a new Paragraph,
-  selected in the tree, where its role can be set to whatever it should have
-  been. Rows select like tag tree rows do (Shift+click, Ctrl/Cmd+click,
-  Shift+arrows), and several selected together become *one* Paragraph holding
-  all of them in reading order, rather than one each - which is what a running
-  head the file artifacted as three separate spans actually needs. Artifacting
-  was a one-way door until now; this is the way back from a heading deleted by
+  The tagging shortcuts turn the selection back into tagged content, with the
+  role the shortcut names: the same keys as in the tag tree, configured in the
+  same place - 1-6, P, F, C, D, H - so an artifact is tagged as what it should
+  have been rather than as a placeholder to correct afterwards. The new tag
+  lands selected in the tree. L, I, T, R and J are answered with a hint
+  instead: each regroups tags that already exist, and an artifact has no tag
+  yet. Rows select like tag tree rows do (Shift+click, Ctrl/Cmd+click,
+  Shift+arrows), and several selected together become *one* tag holding all of
+  them in reading order, rather than one each - which is what a running head
+  the file artifacted as three separate spans actually needs. Artifacting was
+  a one-way door until now; this is the way back from a heading deleted by
   accident, or a figure Smartifact took for a scan background.
 - **Select Content → Table.** With a rectangle selected on the page, T no
   longer just says that tables are built from the tree: it lays a grid over

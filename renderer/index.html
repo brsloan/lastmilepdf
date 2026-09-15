@@ -104,8 +104,10 @@
       </div>
 
       <div id="artifacts-panel" class="artifacts-panel" hidden>
+        <!-- No Tag button: an artifact has no role yet, and a button can't
+             say which one it should get. The tagging shortcuts do, and they
+             are the same ones the tag tree is driven with. -->
         <div class="artifacts-toolbar">
-          <button type="button" id="btn-restore-artifact" class="btn btn-primary" disabled title="Tag the selected artifact as a paragraph and select it in the tag tree, where its role can be changed">Tag</button>
           <span id="artifacts-note" class="artifacts-note"></span>
         </div>
         <p id="artifacts-empty" class="details-empty">Open a PDF to list its artifacts.</p>
@@ -430,8 +432,8 @@
           <div class="shortcut-row"><dt><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd></dt><dd>Add/remove one artifact from the selection</dd></div>
           <div class="shortcut-row"><dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the list</dd></div>
           <div class="shortcut-row"><dt><kbd>Shift</kbd>+<kbd>&uarr;</kbd>/<kbd>&darr;</kbd></dt><dd>Extend selection</dd></div>
-          <div class="shortcut-row"><dt><kbd>Enter</kbd> / <kbd>Double-click</kbd></dt><dd>Tag the selection as one Paragraph</dd></div>
-          <div class="shortcut-row"><dt><kbd>Tag</kbd> button</dt><dd>The same thing</dd></div>
+          <div class="shortcut-row"><dt><kbd>1</kbd>&ndash;<kbd>6</kbd>, <kbd>P</kbd>, <kbd>D</kbd>, <kbd>H</kbd>, <kbd>C</kbd>, <kbd>F</kbd></dt><dd>Tag the selection as that role &mdash; several selected become one tag</dd></div>
+          <div class="shortcut-row"><dt><kbd>L</kbd>, <kbd>I</kbd>, <kbd>T</kbd>, <kbd>R</kbd>, <kbd>J</kbd></dt><dd>Not available &mdash; these build on tags that already exist</dd></div>
         </dl>
       </section>
 
@@ -556,8 +558,9 @@
         <h3>Artifacts</h3>
         <p>The Artifacts tab, beside Tag Tree, lists everything the PDF marks as an <em>artifact</em> &mdash; content deliberately left out of the tag tree, so assistive technology skips it. Running heads, footers, page numbers, rules and the background image of a scanned page are all normally artifacts, and so is anything this app has artifacted itself: deleting a tag turns its content into one, and so do <strong>Smartifact</strong> and <strong>Repair Orphaned Content</strong>.</p>
         <p>Each row says what the artifact is made of (text, image, drawing, or a mix), the PDF's own name for it where it has one (Header, Footer, Watermark&hellip;), any text it paints, and its page. Click a row to jump to that page and outline the artifact on it, the same way clicking a tag outlines its content. &uarr;/&darr; move through the list, and the usual selection shortcuts work: Shift+click selects a range, Ctrl/Cmd+click adds or removes one row, and Shift+&uarr;/&darr; extends the selection. Every selected artifact on the current page is outlined at once.</p>
-        <p><strong>Tag</strong> (or Enter, or double-clicking a row) turns the selection back into tagged content: it becomes a new Paragraph, selected in the Tag Tree, where its role can be changed to whatever it should have been. This is the way back from an artifacting you didn't mean &mdash; a heading deleted by accident, or a figure Smartifact took to be a scan background. Undo reverses it like any other edit.</p>
-        <p>Several artifacts selected together become <em>one</em> Paragraph holding all of them, in page then reading order &mdash; not one Paragraph each. That is what to do with a running head the file artifacted as three separate spans, or a heading it broke up line by line: they are one piece of content, and tagging them one at a time would only move the problem into the tree. They can come from different pages; each keeps the page it was actually on.</p>
+        <p>The tagging shortcuts turn the selection back into tagged content, and they are the same keys, configured in the same place, as the ones that set a role in the Tag Tree: <kbd>1</kbd>&ndash;<kbd>6</kbd> for a heading, <kbd>P</kbd> for a paragraph, <kbd>F</kbd> for a figure, <kbd>C</kbd> for a caption, <kbd>D</kbd> and <kbd>H</kbd> for table cells. The artifact becomes a new tag with that role &mdash; the role it should have had, not a placeholder to correct afterwards &mdash; and lands selected in the Tag Tree. This is the way back from an artifacting you didn't mean: a heading deleted by accident, or a figure Smartifact took to be a scan background. Undo reverses it like any other edit.</p>
+        <p><kbd>L</kbd>, <kbd>I</kbd>, <kbd>T</kbd>, <kbd>R</kbd> and <kbd>J</kbd> are not available here. Each of them regroups tags that already exist &mdash; a list is built from list items, a row from cells, a join needs a tag to join to &mdash; and an artifact is content that has no tag yet. Tag it first, then press them in the Tag Tree.</p>
+        <p>Several artifacts selected together become <em>one</em> tag holding all of them, in page then reading order &mdash; not one tag each. That is what to do with a running head the file artifacted as three separate spans, or a heading it broke up line by line: they are one piece of content, and tagging them one at a time would only move the problem into the tree. They can come from different pages; each keeps the page it was actually on.</p>
         <p>The list is read from the page content streams, which takes a moment on a long document, and is re-read the next time the tab is opened after an edit. A few things can't be outlined on the page: an artifact drawn with a shading, or one whose font carries no usable metrics, has no box this app is willing to state &mdash; those rows still list and can still be tagged, and hovering one says so.</p>
       </section>
 

@@ -1809,6 +1809,29 @@ async function artifactTests(fixture) {
     });
   }));
 
+  // The Artifacts tab drives this with the tagging shortcuts rather than a
+  // Tag button, so every role those shortcuts name (ARTIFACT_TAG_ROLES in
+  // renderer/artifacts.js) has to survive the round trip, not just P.
+  await test('an artifact takes whichever role the shortcut asked for', async () => {
+    // A document per role, so each one tags the same artifact from the same
+    // starting point rather than whatever the previous role left behind.
+    for (const role of ['H2', 'Figure', 'TH', 'Caption']) {
+      await withDoc(fixture, async (doc) => {
+        const { list } = await artifactKeys(doc.docId);
+        if (list.artifacts.length === 0) skip('fixture has no artifacts');
+        const target = list.artifacts[0];
+        const restored = await worker.call('restore_artifacts', {
+          docId: doc.docId,
+          targets: [{ pageIndex: target.pageIndex, index: target.index }],
+          role,
+        });
+        const tag = findById(restored.tree, restored.newNodeId);
+        assert(tag, `newNodeId is not in the tree returned for ${role}`);
+        assertEqual(tag.role, role, `the restored tag has the wrong role for ${role}`);
+      });
+    }
+  });
+
   await test('one stale target refuses the whole batch', () => withDoc(fixture, async (doc) => {
     const { list } = await artifactKeys(doc.docId);
     if (list.artifacts.length === 0) skip('fixture has no artifacts');
