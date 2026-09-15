@@ -2071,6 +2071,51 @@ kbd {
   border-radius: 4px;
 }
 
+/* --- what's new dialog ---
+   Borrows the help dialog's frame (.help-dialog) and scrolling prose body
+   (.help-body) wholesale - it is the same kind of thing to sit and read.
+   Only what the help dialog has no equivalent for is written out here: the
+   line saying which version this arrived from, the Added/Changed/Fixed
+   sub-headings, and the entries themselves as a bulleted list. */
+
+.whats-new-lead {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+/* Sub-headings inside a section, so they read as smaller than the version
+   heading .help-section h3 draws above them. */
+.whats-new-group {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.whats-new-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.whats-new-list li {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.whats-new-list li:last-child {
+  margin-bottom: 0;
+}
+
+.whats-new-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 /* --- AI batch progress dialog ---
    Shown for the duration of "Fix All Actual Text (AI)" (see
    showAiBatchProgress()/hideAiBatchProgress() in renderer.js) - no close

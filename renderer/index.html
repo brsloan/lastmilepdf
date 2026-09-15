@@ -604,6 +604,18 @@
     </div>
   </dialog>
 
+  <!-- Filled in from the changelog by renderWhatsNew() in renderer.js:
+       shown once after an update, and on demand from Help > What's New.
+       Borrows the help dialog's frame and prose layout - it is the same
+       kind of thing to read. -->
+  <dialog id="whats-new-dialog" class="help-dialog" aria-labelledby="whats-new-title">
+    <div class="shortcuts-header">
+      <h2 id="whats-new-title">What&rsquo;s New</h2>
+      <button type="button" id="btn-close-whats-new" class="btn btn-ghost" aria-label="Close">&times;</button>
+    </div>
+    <div id="whats-new-body" class="help-body whats-new-body" tabindex="-1"></div>
+  </dialog>
+
   <dialog id="ai-batch-progress-dialog" class="ai-batch-progress-dialog">
     <div class="ai-batch-progress-body">
       <p class="ai-batch-progress-title">Processing with AI. Please wait.</p>

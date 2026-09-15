@@ -35,6 +35,7 @@ const { contextBridge, ipcRenderer } = require('electron');
  * @typedef {import('./types/domain').Script} Script
  * @typedef {import('./types/domain').UpdateState} UpdateState
  * @typedef {import('./types/domain').UpdateInfo} UpdateInfo
+ * @typedef {import('./types/domain').WhatsNew} WhatsNew
  */
 
 const api = {
@@ -635,6 +636,19 @@ const api = {
   openReleasePage: () => ipcRenderer.invoke('updates:open-release-page'),
   /** @param {(event: unknown, state: UpdateState) => void} callback */
   onUpdateState: (callback) => ipcRenderer.on('update:state', callback),
+
+  // What's New - the changelog entries for the version now running. The
+  // renderer calls takeWhatsNew() once as it boots: main.js hands back a
+  // summary only on the first launch after an update, and only to whichever
+  // window asks first, so the dialog appears once rather than every launch
+  // or once per window. getWhatsNew() is the Help > What's New path, which
+  // answers any time and always describes the running version.
+  /** @returns {Promise<WhatsNew | null>} */
+  takeWhatsNew: () => ipcRenderer.invoke('whats-new:take'),
+  /** @returns {Promise<WhatsNew>} */
+  getWhatsNew: () => ipcRenderer.invoke('whats-new:get'),
+  /** @param {() => void} callback */
+  onMenuWhatsNew: (callback) => ipcRenderer.on('menu:whats-new', callback),
 
   /** @param {() => void} callback */
   onMenuScripts: (callback) => ipcRenderer.on('menu:scripts', callback),

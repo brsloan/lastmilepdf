@@ -1285,6 +1285,116 @@ el.helpDialog.addEventListener('click', (e) => {
   if (e.target === el.helpDialog) el.helpDialog.close();
 });
 
+// --- What's New --------------------------------------------------------
+//
+// What changed in the version now running, taken from the changelog shipped
+// inside the build (main.js's "What's new" section does the reading, and
+// lib/changelog.js the parsing). It opens by itself once, on the first
+// launch after an update - the moment the notes are worth reading - and any
+// time from Help > What's New.
+//
+// Nothing here has to understand Markdown: an entry arrives as spans already
+// marked plain/bold/italic/code, and each one becomes its own element, so a
+// changelog line is never handed to anything that builds HTML out of a
+// string.
+
+/**
+ * @param {import('../types/domain').ChangelogSpan[]} spans
+ * @returns {DocumentFragment}
+ */
+function changelogSpansToNodes(spans) {
+  const fragment = document.createDocumentFragment();
+  for (const span of spans) {
+    if (span.style === 'plain') {
+      fragment.append(document.createTextNode(span.text));
+      continue;
+    }
+    const node = document.createElement(span.style === 'code' ? 'code' : span.style);
+    node.textContent = span.text;
+    fragment.append(node);
+  }
+  return fragment;
+}
+
+/** @param {import('../types/domain').WhatsNew} whatsNew */
+function renderWhatsNew(whatsNew) {
+  const { current, previous, entries } = whatsNew;
+  el.whatsNewTitle.textContent = `What’s New in ${current}`;
+  el.whatsNewBody.replaceChildren();
+
+  // Which version this arrived from matters when an update skipped one:
+  // the dialog is then reporting more releases than the one just installed.
+  if (previous) {
+    const lead = document.createElement('p');
+    lead.className = 'whats-new-lead';
+    lead.textContent = `Updated from ${previous}.`;
+    el.whatsNewBody.append(lead);
+  }
+
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'whats-new-lead';
+    empty.textContent = `The changelog has no entry for version ${current}.`;
+    el.whatsNewBody.append(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const section = document.createElement('section');
+    section.className = 'help-section';
+
+    // Only when there is more than one: with a single entry the dialog's
+    // own title already says which version this is.
+    if (entries.length > 1) {
+      const heading = document.createElement('h3');
+      heading.textContent = entry.date ? `${entry.version} — ${entry.date}` : entry.version;
+      section.append(heading);
+    }
+
+    for (const group of entry.groups) {
+      if (group.heading) {
+        const groupHeading = document.createElement('h4');
+        groupHeading.className = 'whats-new-group';
+        groupHeading.textContent = group.heading;
+        section.append(groupHeading);
+      }
+      const list = document.createElement('ul');
+      list.className = 'whats-new-list';
+      for (const item of group.items) {
+        const li = document.createElement('li');
+        li.append(changelogSpansToNodes(item));
+        list.append(li);
+      }
+      section.append(list);
+    }
+
+    el.whatsNewBody.append(section);
+  }
+}
+
+/** @param {import('../types/domain').WhatsNew} whatsNew */
+function showWhatsNew(whatsNew) {
+  renderWhatsNew(whatsNew);
+  openScrollableDialog(el.whatsNewDialog, el.whatsNewBody); // see openScrollableDialog() for why focus goes to the body
+}
+
+window.api.onMenuWhatsNew(async () => {
+  showWhatsNew(await window.api.getWhatsNew());
+});
+
+el.btnCloseWhatsNew.addEventListener('click', () => el.whatsNewDialog.close());
+
+el.whatsNewDialog.addEventListener('click', (e) => {
+  if (e.target === el.whatsNewDialog) el.whatsNewDialog.close();
+});
+
+// Asked for once, as the renderer boots. main.js answers with a summary only
+// on the first launch after an update, and only to the first window that
+// asks, so this opens itself once and then not again until the next one.
+window.api.takeWhatsNew().then((whatsNew) => {
+  if (whatsNew) showWhatsNew(whatsNew);
+});
+
 window.api.onMenuAbout(async (_event, data) => {
   el.aboutVersion.textContent = data?.version || '';
   state.updateInfo = await window.api.getUpdateInfo();

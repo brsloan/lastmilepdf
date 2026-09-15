@@ -625,3 +625,23 @@ export interface UpdateInfo {
   currentVersion: string;
   state: UpdateState;
 }
+
+/*
+ * What the What's New dialog renders, parsed out of CHANGELOG.md by
+ * lib/changelog.js. The three shapes below are re-exported from that module
+ * rather than written out again here: it owns the parsing, and a second copy
+ * of the shape could only ever disagree with it. `WhatsNew` itself is the
+ * envelope main.js wraps them in (see whats-new:take / whats-new:get).
+ */
+export type ChangelogSpan = import('../lib/changelog').ChangelogSpan;
+export type ChangelogGroup = import('../lib/changelog').ChangelogGroup;
+export type ChangelogEntry = import('../lib/changelog').ChangelogEntry;
+
+export interface WhatsNew {
+  /** The running version - the one the entries lead up to. */
+  current: string;
+  /** The version that ran before it, or null when asked for on demand from the Help menu. */
+  previous: string | null;
+  /** Newest first. Empty only from getWhatsNew(), when the changelog has no section for this version. */
+  entries: ChangelogEntry[];
+}

@@ -20,7 +20,7 @@
     "help:export": "node scripts/help-doc.js export",
     "help:import": "node scripts/help-doc.js import",
     "help:check": "node scripts/help-doc.js check",
-    "test": "node scripts/contrast-check.js && node scripts/table-seed-test.js && node scripts/smoke-test.js",
+    "test": "node scripts/contrast-check.js && node scripts/changelog-test.js && node scripts/table-seed-test.js && node scripts/smoke-test.js",
     "test:contrast": "node scripts/contrast-check.js",
     "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
     "build:worker:linux": ".venv/bin/python -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
@@ -53,6 +53,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "lib/**/*",
+      "CHANGELOG.md",
       "renderer/**/*",
       "!renderer/jsconfig.json",
       "node_modules/**/*",

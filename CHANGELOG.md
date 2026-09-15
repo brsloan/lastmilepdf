@@ -11,6 +11,16 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **What changed, after an update.** The first launch on a new version opens
+  a What's New dialog saying what came with it, taken from that version's
+  section of the changelog - the same text the release notes on GitHub are
+  made of, now shipped inside the build and shown at the one moment it is
+  worth reading. Until now an update announced itself as "Update 0.5.0
+  downloaded" and never said what was in it. An update that skipped releases
+  lists those too (up to five), since from here they all arrived at once.
+  Help > What's New reopens the running version's entry any time. Nothing
+  appears on a fresh install, after a downgrade, or for a version the
+  changelog has no section for, which keeps a build run from source quiet.
 - **Documents reopen where you left them.** A PDF opened again comes back to
   the tag that was selected, the tags that were expanded, how far down the tag
   tree was scrolled and the page the preview was on, instead of the structure

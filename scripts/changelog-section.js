@@ -13,12 +13,15 @@
 // deliberate trade: every version tag now needs a matching, non-empty
 // `## [x.y.z]` heading in CHANGELOG.md before it can be released.
 //
-// Headings are matched as plain strings rather than by regex, so a version
-// never has to be escaped, and the closing bracket keeps `## [0.4.1]` from
-// matching `## [0.4.10]`.
+// The parsing itself lives in lib/changelog.js, shared with main.js so that
+// the release notes on GitHub and the app's own What's New dialog are the
+// same text read the same way. Versions are matched as whole strings, so
+// `0.4.1` never matches `0.4.10` and nothing has to be escaped.
 
 const fs = require('fs');
 const path = require('path');
+
+const changelog = require('../lib/changelog');
 
 const CHANGELOG = path.join(__dirname, '..', 'CHANGELOG.md');
 
@@ -34,39 +37,27 @@ function main() {
   const version = raw.replace(/^v/, '');
   if (!fs.existsSync(CHANGELOG)) fail(`no CHANGELOG.md at ${CHANGELOG}`);
 
-  const lines = fs.readFileSync(CHANGELOG, 'utf8').split(/\r?\n/);
-
-  // "## [0.4.1] - 2026-09-10" - the date is not part of the match, so a
-  // heading that is missing one still works.
-  const heading = `## [${version}]`;
-  const start = lines.findIndex((line) => line.trim().startsWith(heading));
-  if (start === -1) {
+  const text = fs.readFileSync(CHANGELOG, 'utf8');
+  const sections = changelog.parseSections(text);
+  const section = sections.find((s) => s.version === version);
+  if (!section) {
     fail(
-      `CHANGELOG.md has no "${heading}" section. Add one (moving the entries ` +
-        'out of ## [Unreleased]) before tagging this version.',
+      `CHANGELOG.md has no "## [${version}]" section. Add one (moving the ` +
+        'entries out of ## [Unreleased]) before tagging this version.',
     );
   }
-
-  // Everything up to the next section heading. A nested "### Added" is part
-  // of the body; only a "## " heading ends it.
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((line) => line.startsWith('## '));
-  const body = (end === -1 ? rest : rest.slice(0, end)).join('\n').trim();
-
-  if (!body) {
+  if (!section.body) {
     fail(
-      `the "${heading}" section in CHANGELOG.md is empty - a release needs ` +
-        'at least one entry.',
+      `the "## [${version}]" section in CHANGELOG.md is empty - a release ` +
+        'needs at least one entry.',
     );
   }
 
   // The compare link at the foot of the changelog, kept so the release still
   // offers a diff the way GitHub's generated notes did.
-  const linkPrefix = `[${version}]:`;
-  const linkLine = lines.find((line) => line.startsWith(linkPrefix));
-  const url = linkLine ? linkLine.slice(linkPrefix.length).trim() : '';
+  const url = changelog.compareLink(text, version);
 
-  process.stdout.write(url ? `${body}\n\n**Full diff:** ${url}\n` : `${body}\n`);
+  process.stdout.write(url ? `${section.body}\n\n**Full diff:** ${url}\n` : `${section.body}\n`);
 }
 
 main();

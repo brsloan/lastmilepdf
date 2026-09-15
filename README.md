@@ -475,6 +475,16 @@ About. The Windows *portable* exe can't replace its own running file in
 place, so it skips downloading/installing and just opens the release page
 instead (see `isPortableBuild` in main.js).
 
+The first launch on a new version says what changed, in a What's New
+dialog built from that version's section of the `CHANGELOG.md` shipped
+inside the build - the same text the GitHub release notes are made of
+(`lib/changelog.js` is shared by both; see "Packaging" above). It is
+keyed on the version changing between launches rather than on the
+updater, so the portable build gets it too, and it stays quiet on a fresh
+install, on a downgrade, and for any version the changelog has no section
+for - which is every build run from source between releases. Help >
+What's New reopens the running version's entry any time.
+
 This relies on `.github/workflows/release.yml` uploading each platform's
 `latest.yml`/`latest-linux.yml` and `.blockmap` files alongside the
 installers - `dist:win`/`dist:linux` build with `--publish never` (see

@@ -18,6 +18,7 @@ const { Anthropic } = require('@anthropic-ai/sdk');
 const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 const { z } = require('zod');
 const { autoUpdater } = require('electron-updater');
+const changelog = require('./lib/changelog');
 
 // --- Diagnostic log ---------------------------------------------------------
 //
@@ -670,6 +671,20 @@ function setAutoCheckForUpdates(value) {
   writeSettingsFile(settings);
 }
 
+// The version that ran last time, which is how the What's New dialog below
+// notices that an update has landed since. Written on every launch, so a
+// crash between installing and reading it costs at most one summary.
+function getLastRunVersion() {
+  const value = readSettingsFile().lastRunVersion;
+  return typeof value === 'string' ? value : null;
+}
+
+function setLastRunVersion(version) {
+  const settings = readSettingsFile();
+  settings.lastRunVersion = version;
+  writeSettingsFile(settings);
+}
+
 // Tools > Scripts… - user-defined sequences of the existing toolbar actions
 // (Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
 // Find/Replace, Fix All Actual Text (AI)), built and reordered in the
@@ -1017,6 +1032,7 @@ function buildAppMenu() {
       submenu: [
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => sendToWindow(win, 'menu:shortcuts') },
         { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => sendToWindow(win, 'menu:help-doc') },
+        { label: "What's New", click: (_item, win) => sendToWindow(win, 'menu:whats-new') },
         { type: 'separator' },
         { label: 'Open Log Folder', click: () => shell.showItemInFolder(LOG_PATH) },
         { type: 'separator' },
@@ -1113,11 +1129,67 @@ autoUpdater.on('update-downloaded', (info) => {
   pushUpdateState();
 });
 
+// --- What's new --------------------------------------------------------
+//
+// The first launch after an update says what changed, taken from the same
+// CHANGELOG.md section the GitHub release notes are built from (see
+// lib/changelog.js). Installing an update is the one moment those notes are
+// worth reading, and until now they only existed on a page nobody was sent
+// to - the About dialog said "Update 0.5.0 downloaded" and never what was in
+// it.
+//
+// Keyed on the version changing between launches rather than on the updater
+// itself, so the portable build - which updates by downloading a new .exe
+// rather than through electron-updater - gets the same summary. Nothing is
+// shown on a fresh install (there's no "before" to report against), on a
+// downgrade, or when the running version has no section in the changelog,
+// which is what keeps a build run from source quiet. An update that skipped
+// releases reports the skipped ones too, up to WHATS_NEW_MAX_VERSIONS of
+// them, since from the user's side they all arrived at once.
+const CHANGELOG_PATH = path.join(__dirname, 'CHANGELOG.md');
+const WHATS_NEW_MAX_VERSIONS = 5;
+
+function readChangelogFile() {
+  try {
+    return fs.readFileSync(CHANGELOG_PATH, 'utf8');
+  } catch (err) {
+    console.error('[whats-new] could not read CHANGELOG.md:', err);
+    return '';
+  }
+}
+
+/**
+ * What the first window to ask gets handed, then cleared - one summary per
+ * update, not one per window.
+ * @type {{ current: string, previous: string, entries: import('./lib/changelog').ChangelogEntry[] } | null}
+ */
+let pendingWhatsNew = null;
+
+/**
+ * Called once at startup, before any window exists. Records the running
+ * version either way, so the summary is offered exactly once however the
+ * launch goes on.
+ */
+function prepareWhatsNew() {
+  const current = app.getVersion();
+  const previous = getLastRunVersion();
+  setLastRunVersion(current);
+  if (!previous || changelog.compareVersions(current, previous) <= 0) return;
+  const entries = changelog.entriesSince(readChangelogFile(), current, previous, {
+    max: WHATS_NEW_MAX_VERSIONS,
+  });
+  if (!entries.length) return;
+  pendingWhatsNew = { current, previous, entries };
+}
+
 app.whenReady().then(() => {
   // Before the menu is built and before the window exists: Windows only
   // takes the title bar's light/dark cue at window-creation time.
   applyNativeThemeSource(getThemePreference());
   Menu.setApplicationMenu(buildAppMenu());
+  // Before the window: the renderer asks for this as it boots, so the
+  // answer has to be ready by the time it does.
+  prepareWhatsNew();
   startWorker();
   createWindow();
 
@@ -1655,6 +1727,26 @@ ipcMain.handle('updates:install', () => {
 // finding an update just opens the release in a browser instead.
 ipcMain.handle('updates:open-release-page', async () => {
   await shell.openExternal('https://github.com/brsloan/lastmilepdf/releases/latest');
+});
+
+// --- What's new (see the section of that name above) --------------------
+
+// Asked once by each window as it boots; only the first one gets anything
+// back, and only when this launch is the first on a newer version.
+ipcMain.handle('whats-new:take', async () => {
+  const pending = pendingWhatsNew;
+  pendingWhatsNew = null;
+  return pending;
+});
+
+// Help > What's New - the running version's entry on demand, whether or not
+// this launch happens to be the first after an update. `entries` is empty
+// when the changelog has nothing for this version (a build run from source
+// between releases), which the dialog says rather than opening blank.
+ipcMain.handle('whats-new:get', async () => {
+  const current = app.getVersion();
+  const entry = changelog.entryFor(readChangelogFile(), current);
+  return { current, previous: null, entries: entry ? [entry] : [] };
 });
 
 // --- Tools > Scripts… --------------------------------------------------------
