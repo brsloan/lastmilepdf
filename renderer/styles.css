@@ -2071,6 +2071,65 @@ kbd {
   border-radius: 4px;
 }
 
+/* --- quickstart dialog ---
+   Borrows the help dialog's frame (.help-dialog) and prose body (.help-body)
+   wholesale. QUICKSTART.md only needs two shapes the Help dialog has no
+   equivalent for: a sub-heading below a section heading, and the numbered
+   steps the table-tagging walkthroughs are written as.
+
+   It is also set larger than the Help dialog. The two are read differently:
+   the Help doc is looked *up*, a definition at a time, with the app already
+   understood, while this is read start to finish by someone who has just
+   opened the app for the first time. So the type rises to 15px here, scoped
+   to #quickstart-body rather than changed on .help-section, which the Help
+   and What's New dialogs also draw with. The section headings keep the
+   relationship they have there - an uppercase label slightly smaller than
+   the prose under it - rather than each growing on its own. */
+
+/* Scoped to this dialog: .help-section is shared with Help and What's New. */
+#quickstart-body p,
+#quickstart-body .quickstart-list li {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+#quickstart-body p {
+  margin-bottom: 10px;
+}
+
+#quickstart-body .help-section h3 {
+  font-size: 13.5px;
+}
+
+/* Sits under .help-section h3 in the hierarchy but is set larger, because
+   that heading carries uppercase tracking to mark it and this does not. */
+.quickstart-subhead {
+  margin: 18px 0 7px;
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quickstart-list {
+  margin: 0 0 10px;
+  padding-left: 26px;
+}
+
+.quickstart-list li {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+/* A nested step list indents from its parent item rather than restarting at
+   the body margin, and stops adding a gap the outer item already has. */
+.quickstart-list .quickstart-list {
+  margin: 6px 0 0;
+}
+
+.quickstart-list li:last-child {
+  margin-bottom: 0;
+}
+
 /* --- what's new dialog ---
    Borrows the help dialog's frame (.help-dialog) and scrolling prose body
    (.help-body) wholesale - it is the same kind of thing to sit and read.

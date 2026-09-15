@@ -12,6 +12,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const readline = require('readline');
 const { Anthropic } = require('@anthropic-ai/sdk');
@@ -1030,6 +1031,9 @@ function buildAppMenu() {
     {
       label: 'Help',
       submenu: [
+        { label: 'Quickstart', click: (_item, win) => sendToWindow(win, 'menu:quickstart') },
+        { label: 'Open Quickstart PDF', click: (_item, win) => sendToWindow(win, 'menu:open-quickstart-pdf') },
+        { type: 'separator' },
         { label: 'Shortcuts', accelerator: 'CmdOrCtrl+/', click: (_item, win) => sendToWindow(win, 'menu:shortcuts') },
         { label: 'Help Doc', accelerator: 'F1', click: (_item, win) => sendToWindow(win, 'menu:help-doc') },
         { label: "What's New", click: (_item, win) => sendToWindow(win, 'menu:whats-new') },
@@ -1747,6 +1751,77 @@ ipcMain.handle('whats-new:get', async () => {
   const current = app.getVersion();
   const entry = changelog.entryFor(readChangelogFile(), current);
   return { current, previous: null, entries: entry ? [entry] : [] };
+});
+
+// --- Quickstart --------------------------------------------------------
+//
+// QUICKSTART.md ships twice: as the Help > Quickstart dialog (built into
+// renderer/index.html by scripts/quickstart-doc.js) and as
+// assets/quickstart.pdf, a tagged PDF of the same text. The PDF is the
+// tutorial to read *and* a document to practise the tools on, so it has to
+// be editable - and the bundled copy is not: in an installed build it sits
+// in a read-only program directory, inside an asar archive at that, where
+// Save would have nowhere to write. So every open goes through a copy in the
+// user data folder, which behaves like any other file the user opened: it
+// saves, it remembers where it was left (see view-memory.js), and it lands
+// in Open Recent.
+
+const QUICKSTART_PDF_SOURCE = path.join(__dirname, 'assets', 'quickstart.pdf');
+const QUICKSTART_PDF_COPY = path.join(app.getPath('userData'), 'Quick Start.pdf');
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+/**
+ * The path to open, copying the bundled PDF out on the way if it needs to be.
+ *
+ * A later version may ship a revised tutorial, so the copy is refreshed when
+ * the bundled one changes - but only while the copy is still byte-for-byte
+ * what was put there, which is what the recorded hash is for. Once the user
+ * has saved anything into it, it is their document and an update leaves it
+ * alone rather than overwriting work with a fresh tutorial.
+ */
+function quickstartPdfPath() {
+  const source = fs.readFileSync(QUICKSTART_PDF_SOURCE);
+  const settings = readSettingsFile();
+  const copied = typeof settings.quickstartPdfHash === 'string' ? settings.quickstartPdfHash : null;
+  let existing = null;
+  try {
+    existing = fs.readFileSync(QUICKSTART_PDF_COPY);
+  } catch {
+    existing = null; // never copied out, or the user deleted it
+  }
+  const untouched = existing && copied && sha256(existing) === copied;
+  if (!existing || (untouched && sha256(existing) !== sha256(source))) {
+    fs.mkdirSync(path.dirname(QUICKSTART_PDF_COPY), { recursive: true });
+    fs.writeFileSync(QUICKSTART_PDF_COPY, source);
+    settings.quickstartPdfHash = sha256(source);
+    writeSettingsFile(settings);
+  }
+  return QUICKSTART_PDF_COPY;
+}
+
+// Help > Open Quickstart PDF. Always answers.
+ipcMain.handle('quickstart:get-pdf', async () => quickstartPdfPath());
+
+// Asked once as the renderer boots, and answered with a path only on a first
+// run - so the tutorial opens itself the first time the app is used and then
+// never again on its own. The flag is written before the copy is made, so a
+// failure to copy still counts as the one offer rather than retrying every
+// launch. Someone updating from a version that predates this gets the offer
+// once too, which is the point: the tutorial is new to them as well.
+ipcMain.handle('quickstart:take-pdf', async () => {
+  const settings = readSettingsFile();
+  if (settings.quickstartOffered) return null;
+  settings.quickstartOffered = true;
+  writeSettingsFile(settings);
+  try {
+    return quickstartPdfPath();
+  } catch (err) {
+    console.error('[quickstart] could not copy out the bundled PDF:', err);
+    return null;
+  }
 });
 
 // --- Tools > Scripts… --------------------------------------------------------

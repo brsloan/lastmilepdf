@@ -430,6 +430,22 @@ const api = {
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuProofread: (callback) => ipcRenderer.on('menu:proofread', callback),
   /** @param {() => void} callback */
+  onMenuQuickstart: (callback) => ipcRenderer.on('menu:quickstart', callback),
+  /** @param {() => void} callback */
+  onMenuOpenQuickstartPdf: (callback) => ipcRenderer.on('menu:open-quickstart-pdf', callback),
+
+  // The bundled quick-start PDF. It ships read-only inside the app, so main.js
+  // hands back a copy in the user data folder instead - a document that can be
+  // edited and saved like any other, which is half its point.
+  // takeQuickstartPdf() is asked once as the renderer boots and answers with a
+  // path only on a first run, so the tutorial opens itself once and never
+  // again; getQuickstartPdf() is the Help > Open Quickstart PDF path and
+  // always answers.
+  /** @returns {Promise<string | null>} */
+  takeQuickstartPdf: () => ipcRenderer.invoke('quickstart:take-pdf'),
+  /** @returns {Promise<string>} */
+  getQuickstartPdf: () => ipcRenderer.invoke('quickstart:get-pdf'),
+  /** @param {() => void} callback */
   onMenuShortcuts: (callback) => ipcRenderer.on('menu:shortcuts', callback),
   /** @param {() => void} callback */
   onMenuHelpDoc: (callback) => ipcRenderer.on('menu:help-doc', callback),

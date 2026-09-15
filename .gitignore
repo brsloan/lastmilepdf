@@ -9,6 +9,7 @@ __pycache__/
 python-dist/
 build/pyinstaller/
 build/*.spec
+build/quickstart-blocks.json
 
 .DS_Store
 *.log

@@ -11,6 +11,18 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **A quick start, in the app and as a PDF.** Help > Quickstart is a short
+  tutorial on the keyboard-first way of working - the tag shortcuts, what the
+  toolbar buttons do, the three ways to build a table, and a suggested AI
+  workflow - written for someone opening the app for the first time, where the
+  existing Help doc is a reference for someone already in it. Help > Open
+  Quickstart PDF opens the same text as a tagged PDF, which a first run opens
+  by itself so the app starts with something on screen rather than an empty
+  window. It is a document to practise on as much as one to read: correctly
+  tagged headings, paragraphs and nested lists to re-level, join, split and
+  artifact, and a list item carried across a page break. It opens from a copy
+  in the user data folder, so it saves like any other document; a later
+  version's tutorial replaces that copy only while it is still untouched.
 - **What changed, after an update.** The first launch on a new version opens
   a What's New dialog saying what came with it, taken from that version's
   section of the changelog - the same text the release notes on GitHub are

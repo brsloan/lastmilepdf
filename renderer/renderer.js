@@ -1277,6 +1277,38 @@ el.shortcutsDialog.addEventListener('click', (e) => {
   if (e.target === el.shortcutsDialog) el.shortcutsDialog.close();
 });
 
+// --- Quickstart --------------------------------------------------------
+//
+// Two doors onto the same tutorial (QUICKSTART.md, which builds both - see
+// scripts/quickstart-doc.js). Help > Quickstart reads it in a dialog;
+// Help > Open Quickstart PDF opens the tagged PDF of it, which is worth
+// having open while reading because it is also a document to try the tools
+// on. That goes through performOpen() like any other file, so it asks about
+// unsaved changes first and joins Open Recent afterwards.
+
+window.api.onMenuQuickstart(() => openScrollableDialog(el.quickstartDialog, el.quickstartBody));
+
+el.btnCloseQuickstart.addEventListener('click', () => el.quickstartDialog.close());
+
+el.quickstartDialog.addEventListener('click', (e) => {
+  if (e.target === el.quickstartDialog) el.quickstartDialog.close();
+});
+
+window.api.onMenuOpenQuickstartPdf(async () => {
+  try {
+    await performOpen(await window.api.getQuickstartPdf());
+  } catch (err) {
+    reportError('Could not open the quick-start PDF', err);
+  }
+});
+
+// Asked for once, as the renderer boots. main.js answers with a path only on
+// a first run (see quickstart:take-pdf), so the tutorial opens itself the
+// first time the app is used and never again on its own.
+window.api.takeQuickstartPdf().then((filePath) => {
+  if (filePath) performOpen(filePath);
+});
+
 window.api.onMenuHelpDoc(() => openScrollableDialog(el.helpDialog, el.helpBody));
 
 el.btnCloseHelp.addEventListener('click', () => el.helpDialog.close());

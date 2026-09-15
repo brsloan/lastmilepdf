@@ -298,10 +298,12 @@ Two caveats worth knowing:
 npm test
 ```
 
-Runs two things: `scripts/contrast-check.js` first (instant, no Python
-needed), then `scripts/smoke-test.js`, which drives `python/tag_worker.py`
-directly over the same JSON-lines protocol `main.js` uses - no Electron and no
-UI involved. It takes about 8 seconds.
+Runs the fast checks first - `scripts/contrast-check.js`, the Quickstart
+dialog check (see below), `scripts/changelog-test.js` and
+`scripts/table-seed-test.js`, none of which need Python - and then
+`scripts/smoke-test.js`, which drives `python/tag_worker.py` directly over the
+same JSON-lines protocol `main.js` uses, with no Electron and no UI involved.
+The whole run takes about 13 seconds.
 
 ### `scripts/contrast-check.js`
 
@@ -387,6 +389,48 @@ exercising something is visible.
 Adding a check is worthwhile whenever a bug turns out to have been in
 `tag_worker.py`: reproduce it as an edit/save/reopen assertion, and it can't
 come back quietly.
+
+## Quick-start tutorial
+
+`QUICKSTART.md` in the repo root is the source for both halves of the
+tutorial, and two generated things are built from it:
+
+```
+npm run quickstart
+```
+
+| Built | Where it goes | Seen as |
+| --- | --- | --- |
+| The Quickstart dialog | `renderer/index.html` | Help > Quickstart |
+| `assets/quickstart.pdf` | bundled into the build | Help > Open Quickstart PDF, and once on a first run |
+
+`scripts/quickstart-doc.js` parses the Markdown once - ATX headings,
+paragraphs, nested ordered lists, inline bold/italic/code, and nothing else,
+since anything it doesn't recognise is likelier a mistake than a feature - and
+writes the dialog markup. It then hands the same parse to
+`scripts/make-quickstart-pdf.py` as JSON, so the two can't drift into saying
+different things. `npm test` runs `node scripts/quickstart-doc.js check`,
+which fails if `QUICKSTART.md` has been edited without the dialog being
+rebuilt. The PDF can't be checked that way, so rebuild both together.
+
+The PDF is a small tagged-document generator rather than a conversion: it
+wraps text with the AFM metrics in `python/standard_fonts_data.py` (the same
+table the worker measures with) and writes the structure tree as it lays the
+text out, so headings, paragraphs and `L`/`LI`/`Lbl`/`LBody` come out
+correctly tagged, and a paragraph broken by a page break gets one `/MCR` per
+page under the one element.
+
+That matters because the file does double duty: it is the tutorial a first
+run opens, and it is a document to practise the tools on. Unlike the fixtures
+in the repo root, it is deliberately *correct* - clean tree, `/Lang`,
+`/MarkInfo`, per-page `/Tabs /S`, a title with `/DisplayDocTitle`, and
+`pdfuaid:part` in the XMP - so the Verify panel opens quiet on it and anything
+the user breaks while practising is something they broke.
+
+The bundled copy ships read-only inside the app, so `main.js` copies it into
+the user data folder and opens that instead - see the Quickstart section
+there, which also explains when a new version's copy replaces it and when it
+leaves the user's edits alone.
 
 ## Packaging
 
