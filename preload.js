@@ -10,7 +10,7 @@
 // object, so annotating a method here is what makes the renderer's calls to
 // it checked. Run `npm run typecheck` to see the result.
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 /**
  * @typedef {import('./types/domain').TagNode} TagNode
@@ -51,6 +51,18 @@ const api = {
    * @returns {Promise<OpenResult>}
    */
   openPdfPath: (filePath) => ipcRenderer.invoke('doc:open-path', filePath),
+  /**
+   * The on-disk path behind a dropped File. The renderer only ever sees a
+   * File object (dataTransfer hands it nothing else), and everything that
+   * opens a document here works from a path - openPdfPath() above, and the
+   * worker behind it, which needs pikepdf to open the file itself. Electron
+   * used to bolt a `path` property onto File for this; webUtils is its
+   * replacement, and it has to be called from a context with Electron APIs,
+   * which is here rather than the renderer.
+   * @param {File} file
+   * @returns {string} Empty for a File that isn't backed by a file on disk.
+   */
+  pathForDroppedFile: (file) => webUtils.getPathForFile(file),
 
   /**
    * @param {string} docId

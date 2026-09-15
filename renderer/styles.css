@@ -592,6 +592,24 @@ body.proofread-mode .pane-tabs .tree-filter {
   cursor: crosshair;
 }
 
+/* While a PDF is being dragged over the empty pane. An inset outline rather
+   than a border: the wrap is the scroll container, and a border would resize
+   its content box mid-drag, shifting the placeholder about under the
+   pointer.
+
+   The trough lifts to --panel-alt for the duration, which is both half the
+   cue on its own and what makes the outline legible: --canvas-ground has to
+   stay mid-to-dark to define the page edge (see the placeholder note below),
+   and the light theme's accent cannot clear 1.4.11's 3:1 on it - 2.99, which
+   the contrast guard duly failed. There is no page underneath to hide while
+   this is showing, since the drop target only exists when nothing is
+   loaded. */
+.canvas-wrap.drop-target {
+  background: var(--panel-alt);
+  outline: 2px dashed var(--accent-strong);
+  outline-offset: -6px;
+}
+
 /* The message sits on --canvas-ground, which is the one chrome surface that
    has to stay mid-to-dark in every theme so the white page reads as a page.
    That leaves no room for --text-faint to clear 4.5:1 on top of it - and in

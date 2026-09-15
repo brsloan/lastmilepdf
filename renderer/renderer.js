@@ -29,6 +29,11 @@ import { clearActualTextDiffOnPage, findNodeAtPoint, goToPageFromIndicatorInput,
 import { formatShortcutKey } from './util.js';
 import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 
+// Side-effect only: wires up dropping a PDF onto the Page Preview pane, and
+// the window-level guard that keeps a stray file drop anywhere else from
+// navigating the app away to the dropped file.
+import './file-drop.js';
+
 // renderer.js
 //
 // Vanilla JS, no framework, no bundler. Loaded as an ES module directly by

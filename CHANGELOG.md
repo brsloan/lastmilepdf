@@ -11,6 +11,15 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **Drag a PDF onto the Page Preview pane to open it.** While nothing is
+  loaded, the empty pane is a drop target: drag a PDF in from the file
+  manager and it opens the same way File > Open would, joining Open Recent
+  afterwards. The pane outlines itself while a file is over it, and the
+  placeholder says so. It only takes a drop while it is empty - with a
+  document open that pane belongs to Add Figures and Select Content, and a
+  stray drop there would be a document swap nobody asked for. Dropping a
+  file anywhere else in the window now does nothing at all, where before it
+  would have replaced the whole app with Chromium's view of that file.
 - **B groups the selection into a Block Quotation.** A new tagging shortcut,
   configurable like the rest, for the quoted passages a scan is full of and
   which until now had to be typed into the Role field by hand. It groups

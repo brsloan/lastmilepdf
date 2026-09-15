@@ -9,6 +9,8 @@ LastMilePDF edits the accessibility tag tree, bookmarks, and metadata. The **Pag
 
 A PDF with no tag tree can still be viewed, but there is nothing to edit until it has been tagged elsewhere. This app is not for tagging from scratch.
 
+Open a PDF with the toolbar's **Open** button, File > Open, or File > Open Recent. While nothing is loaded you can also drag one in from your file manager and drop it on the **Page Preview** pane, which outlines itself to show it will take the drop. Only while nothing is loaded: once a document is open that pane belongs to Add Figures and Select Content, so swapping documents goes through File > Open, which asks about unsaved changes first.
+
 The Tag Tree pane and the Tag Properties pane each carry a second tab: **Artifacts** lists the content the document leaves untagged on purpose, and **Bookmarks** shows the PDF's outline.
 
 ## Selecting & navigating tags

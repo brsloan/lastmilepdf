@@ -199,6 +199,14 @@ for (const { name, tokens: t, text: min } of THEMES) {
   require_(name, 'page edge', ratio(t['--canvas-ground'], dark['--page-ground']), 1.5,
     'trough vs the page');
 
+  // The dashed outline round the Page Preview pane while a PDF is being
+  // dragged onto it (.canvas-wrap.drop-target in styles.css). It is the only
+  // thing saying the drop will be accepted, so 1.4.11's 3:1 applies -
+  // measured against --panel-alt, which the trough lifts to for the duration
+  // of the drag precisely so this outline has a ground it can clear.
+  require_(name, 'drop outline', ratio(t['--accent-strong'], t['--panel-alt']), 3,
+    'file-drop target edge, 1.4.11');
+
   // State tints. Percentages of an accent over an unknown ground are exactly
   // what breaks quietly when the ground's polarity flips. Tree rows sit on
   // --bg: nothing between them sets a background.
