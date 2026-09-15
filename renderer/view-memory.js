@@ -42,7 +42,9 @@ const SAVE_DEBOUNCE_MS = 400;
 // overrides that are actually holding the user's place - and a document
 // where the user has toggled thousands of rows is one where settings.json
 // shouldn't quietly grow by a thousand ids per file either. Overflow costs
-// some expansion on reopen, not correctness.
+// some expansion on reopen, not correctness - and it drops the oldest
+// toggles (a Map iterates in insertion order), which are the ones least
+// likely to be holding the user's current place.
 const MAX_STORED_OVERRIDES = 2000;
 
 let saveTimerId = null;
@@ -125,16 +127,25 @@ function currentTreeSignature() {
  */
 function captureScrollAnchor() {
   const paneTop = el.tagTree.getBoundingClientRect().top;
-  for (const row of el.tagTree.querySelectorAll('.tree-row[data-node-id]')) {
-    const rect = row.getBoundingClientRect();
-    // The first row whose bottom edge is still below the pane's top edge is
-    // the first one the user can see any of.
-    if (rect.bottom > paneTop + 1) {
-      const nodeId = /** @type {HTMLElement} */ (row).dataset.nodeId;
-      return nodeId ? { nodeId, offset: Math.round(paneTop - rect.top) } : null;
-    }
+  const rows = el.tagTree.querySelectorAll('.tree-row[data-node-id]');
+  // The first row whose bottom edge is still below the pane's top edge is
+  // the first one the user can see any of. Rows sit in the DOM in the order
+  // they're drawn, top to bottom, so their bottom edges only ever increase
+  // down the list - which makes this a binary search rather than a walk
+  // from the top: the tree isn't virtualised, and this runs on every save
+  // while the user scrolls, so scrolled to the foot of a document with tens
+  // of thousands of rows a walk would measure every one of them each time.
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (rows[mid].getBoundingClientRect().bottom > paneTop + 1) hi = mid;
+    else lo = mid + 1;
   }
-  return null;
+  const row = rows[lo];
+  if (!row) return null;
+  const nodeId = /** @type {HTMLElement} */ (row).dataset.nodeId;
+  return nodeId ? { nodeId, offset: Math.round(paneTop - row.getBoundingClientRect().top) } : null;
 }
 
 /**
@@ -158,7 +169,7 @@ function captureViewState() {
     filter: state.filter,
     proofreadMode: state.proofreadMode,
     selectedNodeId: state.selectedNodeId,
-    collapseOverrides: Array.from(state.collapseOverrides.entries()).slice(0, MAX_STORED_OVERRIDES),
+    collapseOverrides: Array.from(state.collapseOverrides.entries()).slice(-MAX_STORED_OVERRIDES),
     scrollAnchor: captureScrollAnchor(),
     scrollTop: Math.round(el.tagTree.scrollTop),
     currentPage: state.currentPage,
@@ -184,7 +195,9 @@ function writeViewStateNow() {
  */
 export function rememberViewState() {
   if (restoring) return;
-  if (saveTimerId !== null) return;
+  // Restarted on every call, so a burst of moves produces one write after
+  // the burst ends - not one every SAVE_DEBOUNCE_MS for as long as it lasts.
+  if (saveTimerId !== null) clearTimeout(saveTimerId);
   saveTimerId = setTimeout(writeViewStateNow, SAVE_DEBOUNCE_MS);
 }
 

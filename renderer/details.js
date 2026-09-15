@@ -89,7 +89,12 @@ function scrollTagTreeRowIntoView(row) {
   }
 }
 
-export function refreshDetailsForSelection() {
+/**
+ * @param {{ allowPageJump?: boolean }} [options] Whether highlighting the
+ * selection may move the preview to the tag's own page (the default). See
+ * selectNode() in tree-view.js for the one caller that says no.
+ */
+export function refreshDetailsForSelection({ allowPageJump = true } = {}) {
   const nodeId = state.selectedNodeId;
   const entry = nodeId ? state.nodesById.get(nodeId) : null;
   if (!entry) {
@@ -97,7 +102,7 @@ export function refreshDetailsForSelection() {
     return;
   }
   if (entry.node.type === 'root') {
-    showRootDetails(nodeId);
+    showRootDetails(nodeId, { allowPageJump });
     return;
   }
   if (entry.node.type !== 'element') {
@@ -115,7 +120,7 @@ export function refreshDetailsForSelection() {
     updateActualTextReviewUI(null);
     refreshSplitContentPanel(nodeId);
     scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
-    highlightNodeOnPage(nodeId, { allowPageJump: true });
+    highlightNodeOnPage(nodeId, { allowPageJump });
     return;
   }
   const node = entry.node;
@@ -224,7 +229,7 @@ export function refreshDetailsForSelection() {
 
   scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
 
-  highlightNodeOnPage(nodeId, { allowPageJump: true });
+  highlightNodeOnPage(nodeId, { allowPageJump });
 }
 
 // The structure tree root has no /S role or accessibility attributes of its
@@ -234,7 +239,8 @@ export function refreshDetailsForSelection() {
 // shown in place of Alt/Actual Text when the /Document tag itself was
 // selected. Its own details form is just those three fields: everything
 // tag-shaped (Role, Alt, Actual Text, table attributes) is hidden.
-function showRootDetails(nodeId) {
+/** @param {string} nodeId @param {{ allowPageJump: boolean }} options */
+function showRootDetails(nodeId, { allowPageJump }) {
   const sameNode = el.fieldNodeId.value === nodeId;
   state.pendingPulledActualTextNodeId = null;
 
@@ -274,7 +280,7 @@ function showRootDetails(nodeId) {
   el.fieldLang.disabled = false;
 
   scrollTagTreeRowIntoView(el.tagTree.querySelector(`[data-node-id="${nodeId}"]`));
-  highlightNodeOnPage(nodeId, { allowPageJump: true });
+  highlightNodeOnPage(nodeId, { allowPageJump });
 }
 
 export function closeDetails() {

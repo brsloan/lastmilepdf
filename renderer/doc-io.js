@@ -163,10 +163,12 @@ export async function performOpen(filePath) {
     // has been edited since (its node ids would name different tags now),
     // and the defaults below take over.
     //
-    // The page goes back first and the tag second: selecting a tag jumps the
-    // preview to that tag's own page, so it gets the last word where the two
-    // disagree, and the remembered page is what answers for a document left
-    // on the structure root, or on a tag with no page of its own.
+    // The page is the user's, not the tag's. Selecting a tag normally jumps
+    // the preview to that tag's own page, but a document left with a tag
+    // selected and the preview paged elsewhere was left that way on
+    // purpose, so where a page was remembered the selection below is made
+    // without the jump - otherwise the remembered page would be rendered
+    // only to be replaced a moment later, and the user's page lost.
     const rememberedNodeId = applyRememberedTreeState(remembered);
     const rememberedPageNumber = rememberedPage(remembered);
     if (rememberedPageNumber !== null && rememberedPageNumber !== state.currentPage) {
@@ -179,7 +181,7 @@ export async function performOpen(filePath) {
     // state.pdfDoc) is in place for the resulting highlight to target - its
     // details panel is where Title/Author/Language get set (see
     // showRootDetails() in details.js).
-    if (state.tree) selectNode(rememberedNodeId || 'root');
+    if (state.tree) selectNode(rememberedNodeId || 'root', { allowPageJump: rememberedPageNumber === null });
 
     // A document left in Proofread Mode reopens in it, resuming from the tag
     // that was being read. The mode replaces the tree with its own flat list

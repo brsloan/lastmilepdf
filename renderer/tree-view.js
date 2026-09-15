@@ -1066,7 +1066,14 @@ function expandAncestors(nodeId) {
 
 // Plain click (and keyboard nav / page-click selection): replaces any
 // existing selection with just this one tag.
-export function selectNode(nodeId) {
+/**
+ * @param {string} nodeId
+ * @param {{ allowPageJump?: boolean }} [options] Passed through to
+ * highlightNodeOnPage() (see refreshDetailsForSelection() in details.js).
+ * Off only when reopening a document on the page it was left on, which is
+ * not necessarily the selected tag's page - see performOpen() in doc-io.js.
+ */
+export function selectNode(nodeId, { allowPageJump = true } = {}) {
   // The hidden /Document wrapper (see findHiddenDocumentWrapperId()) has no
   // row to select and no editable attributes of its own - every caller
   // that finds ids by walking the tree already excludes it (Find/Replace,
@@ -1081,7 +1088,7 @@ export function selectNode(nodeId) {
   state.selectedNodeId = nodeId;
   expandAncestors(nodeId);
   renderTree();
-  refreshDetailsForSelection();
+  refreshDetailsForSelection({ allowPageJump });
 }
 
 // The multi-tag form of selectNode(): hands the selection to a whole batch
@@ -1200,13 +1207,28 @@ function formatCachedLeafText(page0, mcid) {
 // its text after the selection was already scrolled into view would
 // otherwise be able to push the selection off screen with no way to bring
 // it back short of navigating again.
+//
+// Only a selection that was on screen to begin with, though. One the user
+// had deliberately scrolled away from - or that a reopened document put
+// back off screen on purpose, because that is where it was left (see
+// applyRememberedScroll() in view-memory.js) - is not being pushed anywhere
+// by a row changing height, and dragging the tree back to it would undo
+// the user's scrolling every time a page's text arrived.
 function applyLeafText(targetEl, { text, title }) {
-  targetEl.textContent = text;
-  targetEl.title = title;
   const selectedRow = state.selectedNodeId
     ? el.tagTree.querySelector(`[data-node-id="${state.selectedNodeId}"]`)
     : null;
-  selectedRow?.scrollIntoView({ block: 'nearest' });
+  const wasVisible = selectedRow ? rowIntersectsPane(selectedRow) : false;
+  targetEl.textContent = text;
+  targetEl.title = title;
+  if (wasVisible) selectedRow?.scrollIntoView({ block: 'nearest' });
+}
+
+/** @param {Element} row Whether any part of the row is within the tag tree pane's viewport. */
+function rowIntersectsPane(row) {
+  const pane = el.tagTree.getBoundingClientRect();
+  const rect = row.getBoundingClientRect();
+  return rect.bottom > pane.top && rect.top < pane.bottom;
 }
 
 // Fills in a content leaf's text preview once pdf.js has parsed its page.

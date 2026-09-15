@@ -614,8 +614,9 @@ function setProofreadViewPrefs(value) {
 // does own is the keying and the cap.
 const FILE_VIEW_STATES_MAX = 20;
 
-function readFileViewStates() {
-  const list = readSettingsFile().fileViewStates;
+/** @param {Record<string, any>} [settings] An already-read settings object, to save reading the file again. */
+function readFileViewStates(settings = readSettingsFile()) {
+  const list = settings.fileViewStates;
   return Array.isArray(list) ? list.filter((entry) => entry && typeof entry.path === 'string') : [];
 }
 
@@ -630,7 +631,7 @@ function getFileViewState(filePath) {
 // place would restore a position the user has since navigated away from.
 function setFileViewState(filePath, view) {
   const settings = readSettingsFile();
-  const existing = readFileViewStates().filter((item) => item.path !== filePath);
+  const existing = readFileViewStates(settings).filter((item) => item.path !== filePath);
   settings.fileViewStates = (view && typeof view === 'object'
     ? [{ path: filePath, view }, ...existing]
     : existing
