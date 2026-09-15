@@ -568,6 +568,30 @@ function setProofreadShortcuts(value) {
   writeSettingsFile(settings);
 }
 
+// The two view settings Proofread Mode carries over from one reading
+// session to the next: whether Show AT Changes is on, and what the tree
+// filter is set to (see applyProofreadViewPrefs() in proofread.js). Stored
+// as one { showAtChanges, filter } object, and null until the user has
+// actually changed one of them while proofreading - "no preference logged
+// yet" is a distinct answer from "logged as off/All", since it's what
+// selects the mode's own defaults rather than the user's.
+//
+// Not a Preferences item: it's written by using the mode, not by a dialog.
+// main.js doesn't validate the shape beyond "an object" - the renderer owns
+// the set of valid filter values (see state.filter in state.js) and
+// re-checks on the way back out, the same arrangement as the shortcut maps
+// above.
+function getProofreadViewPrefs() {
+  const value = readSettingsFile().proofreadViewPrefs;
+  return value && typeof value === 'object' ? value : null;
+}
+
+function setProofreadViewPrefs(value) {
+  const settings = readSettingsFile();
+  settings.proofreadViewPrefs = value;
+  writeSettingsFile(settings);
+}
+
 // Whether the renderer periodically saves the open document to disk on its
 // own, in addition to an explicit Save (File > Settings > Preferences).
 // Persisted the same way as showTagTypeLabel above, but defaults off - unlike
@@ -919,6 +943,7 @@ function buildAppMenu() {
           },
         },
         {
+          id: 'menu-show-at-changes',
           label: 'Show AT Changes',
           type: 'checkbox',
           checked: menuShowAtChangesChecked,
@@ -1153,6 +1178,22 @@ ipcMain.on('menu:undo-state-changed', (_event, { canUndo, canRedo }) => {
   const redoItem = menu?.getMenuItemById('menu-redo');
   if (undoItem) undoItem.enabled = menuUndoEnabled;
   if (redoItem) redoItem.enabled = menuRedoEnabled;
+});
+
+// Keeps the View menu's Show AT Changes checkbox in sync when the renderer
+// turns that mode on or off by itself rather than from a click on the item -
+// which Proofread Mode does at both ends, applying the remembered setting on
+// the way in and restoring the previous one on the way out (see
+// setProofreadMode() in proofread.js). Without this the checkbox would say
+// the opposite of what the renderer is actually doing, and the next click on
+// it would send the state the renderer is already in.
+//
+// Recorded as well as applied, for the same reason as the undo state above:
+// a later buildAppMenu() rebuilds the item from menuShowAtChangesChecked.
+ipcMain.on('menu:show-at-changes-state-changed', (_event, { checked }) => {
+  menuShowAtChangesChecked = !!checked;
+  const item = Menu.getApplicationMenu()?.getMenuItemById('menu-show-at-changes');
+  if (item) item.checked = menuShowAtChangesChecked;
 });
 
 ipcMain.handle('dialog:confirm-discard', async (event, { detail }) => {
@@ -1479,6 +1520,12 @@ ipcMain.handle('settings:set-tag-shortcuts', async (_event, { value }) => {
 ipcMain.handle('settings:get-proofread-shortcuts', async () => getProofreadShortcuts());
 ipcMain.handle('settings:set-proofread-shortcuts', async (_event, { value }) => {
   setProofreadShortcuts(value);
+  return true;
+});
+
+ipcMain.handle('settings:get-proofread-view-prefs', async () => getProofreadViewPrefs());
+ipcMain.handle('settings:set-proofread-view-prefs', async (_event, { value }) => {
+  setProofreadViewPrefs(value);
   return true;
 });
 

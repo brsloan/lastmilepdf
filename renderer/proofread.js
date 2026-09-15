@@ -8,11 +8,102 @@
 // tag-to-tag stepping that Page Up/Down and the Actual Text field's own
 // edge-of-line Up/Down arrows drive (both wired up in renderer.js).
 
+import { setShowAtChanges } from './actual-text.js';
 import { el, selectableRows } from './dom.js';
 import { flushPendingLiveApply, refreshDetailsForSelection } from './details.js';
+import { setStatus } from './shell.js';
 import { state } from './state.js';
 import { renderTree, selectNode, setTagTreeScrollSpacersActive, setTreePanel } from './tree-view.js';
 import { setProofreadScrollSpacersActive } from './viewer.js';
+
+// --- the view settings the mode carries between reading sessions ---------
+//
+// Show AT Changes and the tree filter are ordinary app-wide settings the
+// rest of the time, but proofreading wants its own pair of them: a
+// read-through is normally done with the flags up and often narrowed to
+// Flagged **, which is not how the same user wants the tree set while
+// tagging. So the mode owns them for as long as it is on - it applies its
+// own pair on the way in and puts the previous pair back on the way out -
+// and remembers whatever they were left at, so the next reading session
+// starts where the last one stopped rather than back at the defaults.
+//
+// Stored in settings.json rather than in this module, so "next time" spans
+// restarts too. See get/setProofreadViewPrefs() in preload.js.
+
+// Used until the user has actually changed one of them while proofreading.
+// Show AT Changes on, because the tags it flags are the ones a read-through
+// is looking for, and having to go turn it on every time is the friction
+// this whole arrangement exists to remove. The filter left at All, because
+// narrowing to the flagged rows decides how much of the document gets read
+// at all - that is the user's call to make, not a default to be dropped
+// into silently.
+const PROOFREAD_VIEW_DEFAULTS = { showAtChanges: true, filter: 'all' };
+
+// What the tree was set to before the mode took those two settings over -
+// null whenever the mode is off. Module-local rather than on `state` for
+// the same reason as emptyNodeIds in tree-view.js: nothing outside this
+// file reads it.
+/** @type {{ showAtChanges: boolean, filter: string } | null} */
+let preProofreadView = null;
+
+function currentProofreadViewPrefs() {
+  return { showAtChanges: state.showAtChanges, filter: state.filter };
+}
+
+// settings.json holds whatever was last written there, which may have come
+// from an older or newer build - and state.filter drives lookups (see
+// nodeMatchesFilter() in tree-view.js) that assume one of the dropdown's own
+// option values. Anything else falls back to the default rather than
+// filtering the tree to nothing. Read off the <select> so the accepted set
+// cannot drift from what the control actually offers.
+function sanitizeProofreadViewPrefs(prefs) {
+  if (!prefs || typeof prefs !== 'object') return null;
+  const known = [...el.tagFilter.options].some((option) => option.value === prefs.filter);
+  return {
+    showAtChanges: prefs.showAtChanges === true,
+    filter: known ? /** @type {string} */ (prefs.filter) : PROOFREAD_VIEW_DEFAULTS.filter,
+  };
+}
+
+// The filter half of the pair. Synchronous, and deliberately kept apart
+// from the Show AT Changes half below so it can be in place before the tree
+// is first drawn - the tree the mode opens onto is then already the right
+// list, rather than the full one narrowing a moment later.
+function applyProofreadViewFilter(filter) {
+  el.tagFilter.value = filter;
+  state.filter = /** @type {typeof state.filter} */ (filter);
+}
+
+// The Show AT Changes half. Turning it on re-reads every candidate tag's
+// content off the page, which is seconds of waiting on a long document -
+// hence the status line, and hence the caller drawing the tree before this
+// rather than after it. Neither is needed when the setting is already where
+// it is wanted, which is the common case once a reading habit has settled.
+//
+// The View menu's checkbox is a main-process MenuItem, so it only knows what
+// the renderer did here if the renderer says so - otherwise it would sit
+// unchecked while the flags are up, and the next click on it would send the
+// state the renderer is already in.
+async function applyProofreadShowAtChanges(enabled) {
+  if (enabled === state.showAtChanges) return false;
+  window.api.setMenuShowAtChangesChecked(enabled);
+  // Replaced by the caller's own "Proofread Mode on/off" message once this
+  // returns - see the onMenuProofread handler in renderer.js.
+  if (enabled) setStatus('Scanning tags for Actual Text changed from content…');
+  await setShowAtChanges(enabled, { announce: false });
+  return true;
+}
+
+// Records the pair as it now stands, for the next reading session to start
+// from - called from the filter dropdown's and the View menu's own handlers
+// in renderer.js, since a change made through either of those while the mode
+// is on is a change to the mode's settings. A no-op the rest of the time:
+// the same two controls outside Proofread Mode are just the ordinary
+// app-wide settings, and must not overwrite what proofreading remembers.
+export function rememberProofreadViewPrefs() {
+  if (!state.proofreadMode) return;
+  window.api.setProofreadViewPrefs(currentProofreadViewPrefs());
+}
 
 export async function setProofreadMode(enabled) {
   // Turning the mode on re-selects (below), and turning it off re-renders -
@@ -26,8 +117,9 @@ export async function setProofreadMode(enabled) {
   // mode's own flat list rather than replacing it (see renderProofreadTree()
   // in tree-view.js), so setting it to Flagged ** is a read-through of
   // exactly the tags whose words changed, in the same order and the same
-  // flat shape the mode reads everything else in. Whatever it is set to
-  // carries straight back to the ordinary tree when proofreading goes off.
+  // flat shape the mode reads everything else in. What it is set to is the
+  // mode's own remembered setting for as long as the mode is on, though -
+  // see the view-settings section at the top of this file.
   //
   // The Artifacts tab does go. An artifact has no Actual Text to read, so
   // there is nothing in that panel for this mode to do - and the tree pane
@@ -37,7 +129,44 @@ export async function setProofreadMode(enabled) {
   // never opens onto a panel whose tab has just been hidden.
   el.tabArtifacts.hidden = enabled;
   if (enabled) setTreePanel('tree');
+
+  // Swap the two view settings over. The filter goes in before the render
+  // below, so the mode opens straight onto the list it is meant to read;
+  // Show AT Changes follows it, after that render, because its sweep is slow
+  // enough that waiting on it would leave the pane showing the old tree.
+  // Turning the mode on captures the pair it is displacing first; turning it
+  // off hands that same pair back, so a proofreading detour leaves the tree
+  // exactly as it found it.
+  /** @type {boolean | null} */
+  let pendingShowAtChanges = null;
+  if (enabled) {
+    preProofreadView = currentProofreadViewPrefs();
+    const prefs = sanitizeProofreadViewPrefs(await window.api.getProofreadViewPrefs())
+      || PROOFREAD_VIEW_DEFAULTS;
+    applyProofreadViewFilter(prefs.filter);
+    pendingShowAtChanges = prefs.showAtChanges;
+  } else if (preProofreadView) {
+    const restore = preProofreadView;
+    preProofreadView = null;
+    applyProofreadViewFilter(restore.filter);
+    pendingShowAtChanges = restore.showAtChanges;
+  }
+
   renderTree(); // switches the tree between its normal and flat proofread-only rendering - see renderProofreadTree() in tree-view.js
+
+  // A second render only when the sweep actually ran: the flags it raises (or
+  // clears) change both the rows' change-flag badges and, under a Flagged
+  // filter, which rows are there at all.
+  if (pendingShowAtChanges !== null && await applyProofreadShowAtChanges(pendingShowAtChanges)) {
+    renderTree();
+  }
+
+  // That sweep is the one long await in here, and the menu item driving it is
+  // a checkbox the user can click again while it runs. If they did, the later
+  // call has already put the mode where it belongs and finishing this one on
+  // top of it would undo that - on the way in, by selecting a tag and taking
+  // over the Actual Text field in a mode that is now off.
+  if (state.proofreadMode !== enabled) return;
 
   if (!enabled) {
     // Drops both the PDF preview and the tag tree straight back to their

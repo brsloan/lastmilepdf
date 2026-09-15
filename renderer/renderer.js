@@ -1,5 +1,5 @@
 import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
-import { computeAtChangeFlags, updateActualTextReviewUI } from './actual-text.js';
+import { setShowAtChanges, updateActualTextReviewUI } from './actual-text.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { moveArtifactSelection, showArtifactsPanel, showTagTreePanel, tagSelectedArtifacts } from './artifacts.js';
 import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
@@ -16,7 +16,7 @@ import { handleTableGridKey, handleTableGridMouseDown, handleTableGridMouseMove,
 import { doFindNext, positionFindReplaceDialog } from './find-replace.js';
 import { getPageTextContent, hasDirectContentLeaf, pullContentText } from './page-content.js';
 import { cropNodeImages } from './page-crop.js';
-import { caretLineExtremes, relandProofreadAfterFilterChange, setProofreadMode, stepProofreadTag } from './proofread.js';
+import { caretLineExtremes, relandProofreadAfterFilterChange, rememberProofreadViewPrefs, setProofreadMode, stepProofreadTag } from './proofread.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { PROOFREAD_SHORTCUT_ACTIONS, TAG_SHORTCUT_ACTIONS, defaultProofreadShortcuts, defaultTagShortcuts, state } from './state.js';
 import { addTableEditorColumn, addTableEditorRow, convertTableEditorSelection, deleteTableEditorSelection, refreshTableEditorAfterEdit, renderTableEditor } from './table-editor.js';
@@ -691,24 +691,20 @@ el.preferencesNotifyChime.addEventListener('change', () => {
 // the page, which are drawn as part of the tag's highlight (see
 // highlightNodeOnPage() in viewer.js) and so only follow the flags when it
 // runs again.
+//
+// Flipping this while proofreading is a change to Proofread Mode's own
+// remembered setting, not to an app-wide one - see the view-settings
+// section at the top of proofread.js.
 window.api.onMenuShowAtChanges(async (_event, checked) => {
-  state.showAtChanges = checked;
-  if (!checked) {
-    state.atChangeFlags = new Map();
-    renderTree();
-    updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
-    if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
-    setStatus('Hid Actual Text change highlighting.');
-    return;
-  }
-  setStatus('Scanning tags for Actual Text changed from content…');
-  await computeAtChangeFlags();
+  await setShowAtChanges(checked);
   renderTree();
   updateActualTextReviewUI(state.selectedNodeIds.size > 1 ? null : state.selectedNodeId);
   if (state.selectedNodeId) highlightNodeOnPage(state.selectedNodeId, { allowPageJump: false });
-  setStatus(state.atChangeFlags.size > 0
-    ? `Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content - flagged in the tag tree.`
-    : 'No tags have Actual Text that differs from their pulled content.');
+  rememberProofreadViewPrefs();
+  // Turning the flags off under the Flagged/Flagged ** filter empties the
+  // list the mode is reading through, which would leave Page Up/Down with no
+  // selected row to step from. Same re-landing the filter dropdown does.
+  if (state.proofreadMode) relandProofreadAfterFilterChange();
 });
 
 // View > Proofread - see proofread.js for the layout/field-hiding toggle
@@ -2506,8 +2502,11 @@ el.tagFilter.addEventListener('change', () => {
   // In Proofread Mode the filter narrows the mode's own list rather than
   // replacing the tree, and reading carries on from a selected row - so the
   // selection, not the scroll position, is what has to be put right. See
-  // relandProofreadAfterFilterChange() in proofread.js.
+  // relandProofreadAfterFilterChange() in proofread.js. The setting itself
+  // belongs to the mode while the mode is on, so it is also what the next
+  // reading session will open on.
   if (state.proofreadMode) {
+    rememberProofreadViewPrefs();
     relandProofreadAfterFilterChange();
     return;
   }

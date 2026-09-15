@@ -409,6 +409,15 @@ const api = {
   onMenuRepairOrphanedContent: (callback) => ipcRenderer.on('menu:repair-orphaned-content', callback),
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuShowAtChanges: (callback) => ipcRenderer.on('menu:show-at-changes', callback),
+  /**
+   * Tells the main process the renderer has turned Show AT Changes on or off
+   * by itself, so the View menu's checkbox follows - Proofread Mode does this
+   * at both ends (see setProofreadMode() in proofread.js). One-way, like
+   * setUndoState() above.
+   * @param {boolean} checked
+   * @returns {void}
+   */
+  setMenuShowAtChangesChecked: (checked) => ipcRenderer.send('menu:show-at-changes-state-changed', { checked }),
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuProofread: (callback) => ipcRenderer.on('menu:proofread', callback),
   /** @param {() => void} callback */
@@ -558,6 +567,16 @@ const api = {
   getProofreadShortcuts: () => ipcRenderer.invoke('settings:get-proofread-shortcuts'),
   /** @param {Record<string, string | null>} value @returns {Promise<void>} */
   setProofreadShortcuts: (value) => ipcRenderer.invoke('settings:set-proofread-shortcuts', { value }),
+
+  // The view settings Proofread Mode remembers between reading sessions -
+  // Show AT Changes and the tree filter, as one { showAtChanges, filter }
+  // object. null means nothing has been logged yet, which is what puts the
+  // mode on its own defaults instead. Written by using the mode rather than
+  // by a Preferences control; persisted the same way as the settings above.
+  /** @returns {Promise<{ showAtChanges?: unknown, filter?: unknown } | null>} */
+  getProofreadViewPrefs: () => ipcRenderer.invoke('settings:get-proofread-view-prefs'),
+  /** @param {{ showAtChanges: boolean, filter: string }} value @returns {Promise<void>} */
+  setProofreadViewPrefs: (value) => ipcRenderer.invoke('settings:set-proofread-view-prefs', { value }),
 
   // File > Settings > Preferences - periodically save the open document to
   // disk automatically, in addition to an explicit Save. Persisted the same

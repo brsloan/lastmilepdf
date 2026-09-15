@@ -8,6 +8,7 @@
 import { walkTree } from './tree-index.js';
 import { el } from './dom.js';
 import { pullContentText } from './page-content.js';
+import { setStatus } from './shell.js';
 import { state } from './state.js';
 import { diffWordTokens } from './util.js';
 
@@ -133,6 +134,40 @@ export async function computeAtChangeFlags() {
   }
   if (token !== state.atChangeSweepToken) return;
   state.atChangeFlags = flags;
+}
+
+// Turns Show AT Changes on or off: the flag half of the toggle, without any
+// of the redrawing, which every caller does its own way afterwards (the View
+// menu's handler in renderer.js re-renders the tree, the details panel and
+// the page highlight; Proofread Mode folds it into the render it was going
+// to do anyway - see setProofreadMode() in proofread.js).
+//
+// Split out of that menu handler because the mode is no longer only reached
+// by clicking the menu item: Proofread Mode applies the setting the previous
+// reading session left behind on the way in and restores the previous one on
+// the way out, and both of those have to do exactly what a click does.
+//
+// `announce` is off for those programmatic ends, which have their own status
+// line to write and would otherwise have it overwritten by this one.
+export async function setShowAtChanges(enabled, { announce = true } = {}) {
+  state.showAtChanges = enabled;
+  if (!enabled) {
+    state.atChangeFlags = new Map();
+    // A sweep still in flight from the last time this was switched on would
+    // otherwise land its results in that fresh map - it only checks the
+    // token, and nothing has bumped it. Turning the mode off is now common
+    // enough to hit (Proofread Mode does it on the way out) to be worth the
+    // bump rather than relying on the sweep having finished.
+    state.atChangeSweepToken++;
+    if (announce) setStatus('Hid Actual Text change highlighting.');
+    return;
+  }
+  if (announce) setStatus('Scanning tags for Actual Text changed from content…');
+  await computeAtChangeFlags();
+  if (!announce) return;
+  setStatus(state.atChangeFlags.size > 0
+    ? `Found ${state.atChangeFlags.size} tag${state.atChangeFlags.size === 1 ? '' : 's'} with Actual Text changed from content - flagged in the tag tree.`
+    : 'No tags have Actual Text that differs from their pulled content.');
 }
 
 // Keeps a single tag's Show AT Changes flag in sync with a just-applied

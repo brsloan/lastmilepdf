@@ -156,6 +156,8 @@ View > Proofread Mode switches to a focused layout for reading through the docum
 
 The filter dropdown moves under the Tag Tree tab here, and narrows that flat list rather than replacing it: set it to **Flagged **** to read through only the tags whose words an AI fix or a **Show AT Changes** sweep actually changed, still one tag at a time and still in document order. The Artifacts tab is hidden while proofreading — an artifact has no Actual Text to read.
 
+That filter and **Show AT Changes** belong to Proofread Mode for as long as it is on. Turning the mode on sets both to whatever you left them at the last time you proofread — the first time, that means **Show AT Changes** on and the filter on **All** — and turning the mode off puts them back exactly as they were before, so the tree you were tagging in is waiting where you left it.
+
 While a tag is showing a highlighted diff (an AI fix, or a **Show AT Changes** flag), Proofread Mode also marks the same changes on the page: the words the OCR read differently are marked where they sit on the page, and a thin amber bar marks where words were added that the OCR missed. Positions within a line are estimated from character counts, so they point at the right spot rather than outline it exactly.
 
 ## Show AT Changes

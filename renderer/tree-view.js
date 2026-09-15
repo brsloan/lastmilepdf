@@ -230,8 +230,10 @@ export function renderTree() {
   // Proofread Mode (View > Proofread) overrides the dropdown filter
   // entirely rather than folding into state.filter - that way the
   // dropdown's own selection is left untouched underneath it and the tree
-  // just falls back to whatever it was already set to the moment
-  // proofreading turns back off (see setProofreadMode() in proofread.js).
+  // just falls back to whatever it is set to the moment proofreading turns
+  // back off. What it is set to while the mode is on is the mode's own
+  // remembered filter, which setProofreadMode() swaps in and back out again
+  // around this (see proofread.js).
   if (state.proofreadMode) {
     renderProofreadTree(hadFocus);
     return;
