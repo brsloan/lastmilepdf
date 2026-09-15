@@ -1506,6 +1506,10 @@ ipcMain.handle('tags:make-tr', async (_event, { docId, nodeIds }) => {
   return callWorker('make_tr', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:make-block-quote', async (_event, { docId, nodeIds }) => {
+  return callWorker('make_block_quote', { docId, nodeIds });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });

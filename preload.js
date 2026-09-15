@@ -337,6 +337,13 @@ const api = {
    */
   makeTr: (docId, nodeIds) =>
     ipcRenderer.invoke('tags:make-tr', { docId, nodeIds }),
+  /**
+   * @param {string} docId
+   * @param {string[]} nodeIds
+   * @returns {Promise<MutationResult>}
+   */
+  makeBlockQuote: (docId, nodeIds) =>
+    ipcRenderer.invoke('tags:make-block-quote', { docId, nodeIds }),
 
   /**
    * @param {string} docId

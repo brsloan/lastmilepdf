@@ -43,6 +43,7 @@ export const TAG_SHORTCUT_ACTIONS = [
   { id: 'paragraph', label: 'Convert to Paragraph', defaultKey: 'p' },
   { id: 'list', label: 'Group into List', defaultKey: 'l' },
   { id: 'listItem', label: 'Convert to List Item', defaultKey: 'i' },
+  { id: 'blockQuote', label: 'Group into Block Quotation', defaultKey: 'b' },
   { id: 'table', label: 'Group into Table', defaultKey: 't' },
   { id: 'tr', label: 'Group into Table Row', defaultKey: 'r' },
   { id: 'td', label: 'Set role to Table Cell (TD)', defaultKey: 'd' },

@@ -666,11 +666,12 @@ def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label,
                          label_split=None, li_items=None, table_rows=None):
     """Fills a freshly built tag's /K with the leaves the rectangle picked.
 
-    Three roles never hold bare leaves. An LI's content is always the
+    Four roles never hold bare leaves. An LI's content is always the
     Lbl/LBody pair, so it goes through the same _set_li_content() the 'I'
     shortcut uses; a list holds LI elements, one per run the rectangle
-    covered, rather than the runs themselves; and a table holds rows of
-    cells, laid out by the grid the user drew (see _fill_table())."""
+    covered, rather than the runs themselves; a table holds rows of
+    cells, laid out by the grid the user drew (see _fill_table()); and a
+    block quotation holds paragraphs (see _set_block_quote_content())."""
     if role == "LI":
         _set_li_content(doc, elem, leaf_ids, use_label, label_split)
         return
@@ -680,10 +681,28 @@ def _set_new_tag_content(doc, elem, leaf_ids, leaf_objs, role, use_label,
     if role == "Table" and table_rows:
         _fill_table(doc, elem, table_rows)
         return
+    if role == "BlockQuote":
+        _set_block_quote_content(doc, elem, leaf_ids)
+        return
     for leaf_obj in leaf_objs:
         if isinstance(leaf_obj, pikepdf.Dictionary):
             leaf_obj["/P"] = elem
     elem["/K"] = pikepdf.Array(leaf_objs)
+
+
+def _set_block_quote_content(doc, bq_elem, leaf_ids):
+    """Fills a freshly built /BlockQuote with a single /P holding the
+    leaves the rectangle picked.
+
+    A block quotation is a block of *paragraphs* attributed to someone
+    other than the surrounding author, not a run of text in its own right -
+    so text goes inside a paragraph inside it, the same shape the tree's
+    'B' shortcut builds (see make_block_quote()). Putting the leaves
+    straight under the BlockQuote would leave the quoted words belonging to
+    no paragraph at all."""
+    para = _make_leaf_container(doc, "P", leaf_ids)
+    para["/P"] = bq_elem
+    bq_elem["/K"] = para
 
 
 def _fill_list(doc, list_elem, li_items):
@@ -888,13 +907,17 @@ def _wrap_leaves_impl(doc_id, node_ids, role, use_label=False, label_split=None,
             relabelled_elem["/S"] = pikepdf.Name("/" + role)
             # Retyping to LI isn't enough on its own: a list item's content
             # is always the Lbl/LBody pair, so rebuild it the same way
-            # convert_to_list_item() does when it relabels an element.
+            # convert_to_list_item() does when it relabels an element. A
+            # BlockQuote is the same story one role along - it holds
+            # paragraphs, not text.
             if role == "LI":
                 _set_li_content(doc, relabelled_elem, ordered_ids, use_label, label_split)
             elif role == "L" and li_items:
                 _fill_list(doc, relabelled_elem, li_items)
             elif role == "Table" and table_rows:
                 _fill_table(doc, relabelled_elem, table_rows)
+            elif role == "BlockQuote":
+                _set_block_quote_content(doc, relabelled_elem, ordered_ids)
             tree = _rebuild_after_mutation(doc_id)
             return {
                 "tree": tree, "newNodeId": sole_parent_id, "removedTagCount": 0,
@@ -1625,6 +1648,10 @@ def convert_to_paragraph(doc_id, node_ids):
 
       - a List/Span/Div dissolves into the paragraphs its contents make
         (_paragraphize);
+      - a BlockQuote dissolves into the blocks it was holding
+        (_paragraphize_children) - the way back out of the 'B' shortcut,
+        and the reason quoted paragraphs come back as paragraphs rather
+        than as one run of text;
       - a Table, row group or row becomes one paragraph per TH/TD cell
         (_paragraphize_table) - the way back out of a table that was never
         a table on the page;
@@ -1670,6 +1697,15 @@ def convert_to_paragraph(doc_id, node_ids):
             role = str(doc["elements"][node_id].get("/S", "")).lstrip("/")
             if role in ("L", "Span", "Div"):
                 paragraphs.extend(_flatten_container_to_paragraphs(doc, node_id))
+                reshaped = True
+            elif role == "BlockQuote":
+                # Dissolved through _paragraphize_children() rather than
+                # _paragraphize(), which would see a role it doesn't treat
+                # as transparent and hand the BlockQuote straight back
+                # untouched. Its children are dissolved; the quotation
+                # itself always goes.
+                paragraphs.extend(_flatten_container_to_paragraphs(
+                    doc, node_id, _paragraphize_children))
                 reshaped = True
             elif role in _TABLE_CONTAINER_ROLES:
                 paragraphs.extend(_flatten_container_to_paragraphs(
@@ -2138,6 +2174,42 @@ def make_tr(doc_id, node_ids):
     return _group_into_container(
         doc_id, node_ids, "TR", "TD", {"TH"},
         "Can't group into a table row: selected tags don't share a parent.",
+    )
+
+
+# Roles the 'B' shortcut leaves exactly as they are when it groups tags into
+# a BlockQuote: anything that already says what kind of block it is. A quoted
+# passage is quoted paragraphs, quoted headings, a quoted list - relabelling
+# those to /P would throw away what they are for no gain, and on a List or
+# Table it would repeat the bug the 'P' shortcut had to grow a flatten to fix
+# (a tag claiming to be a paragraph with rows still hanging under it).
+#
+# What is left to become a /P is text that never had a block of its own: a
+# Span, a Quote, and - through _group_into_container()'s leaf branch, which
+# never consults this set - a bare content leaf.
+_BLOCK_QUOTE_KEPT_ROLES = {
+    "P", "H", "H1", "H2", "H3", "H4", "H5", "H6",
+    "L", "Table", "Figure", "Formula", "BlockQuote", "Caption", "Note",
+    "TOC", "Index", "Div", "Sect", "Part", "Art", "NonStruct", "Private",
+}
+
+
+def make_block_quote(doc_id, node_ids):
+    """Groups the selected tags into a newly created BlockQuote: each one
+    becomes a /P, except a tag whose role already names a block of its own
+    (_BLOCK_QUOTE_KEPT_ROLES), which is left untouched. Backs the tag tree's
+    'B' shortcut - see _group_into_container for the shared mechanics.
+
+    Grouping rather than relabelling is the whole point: a BlockQuote holds
+    paragraphs attributed to someone other than the surrounding author, so
+    one selected paragraph becomes <BlockQuote><P>...</P></BlockQuote> and
+    three become one quotation of three paragraphs, rather than three
+    quotations that have each lost their paragraph. convert_to_paragraph()
+    dissolves the result again, which is the way back out.
+    """
+    return _group_into_container(
+        doc_id, node_ids, "BlockQuote", "P", _BLOCK_QUOTE_KEPT_ROLES,
+        "Can't group into a block quotation: selected tags don't share a parent.",
     )
 
 
@@ -5784,6 +5856,8 @@ def main():
                 result = make_table(request["docId"], request["nodeIds"])
             elif cmd == "make_tr":
                 result = make_tr(request["docId"], request["nodeIds"])
+            elif cmd == "make_block_quote":
+                result = make_block_quote(request["docId"], request["nodeIds"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":

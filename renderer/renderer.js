@@ -2097,12 +2097,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 // The configured tagging shortcuts (File > Settings > Preferences > Tagging
-// Shortcuts - 1-6/P/L/I/T/R/D/H/F/C/J by default, see TAG_SHORTCUT_ACTIONS in
+// Shortcuts - 1-6/P/L/I/B/T/R/D/H/F/C/J by default, see TAG_SHORTCUT_ACTIONS in
 // state.js) convert the current tag selection's role, each via a dedicated
 // backend op (set_role_or_wrap/convert_to_paragraph/make_list/make_table/
-// make_tr/convert_to_figure/convert_to_list_item in tag_worker.py) rather
-// than a plain Role edit, since a content/object-ref leaf has no role of its
-// own to set - these wrap it in a brand-new struct element instead. See
+// make_tr/make_block_quote/convert_to_figure/convert_to_list_item in
+// tag_worker.py) rather than a plain Role edit, since a content/object-ref
+// leaf has no role of its own to set - these wrap it in a brand-new struct element instead. See
 // applyTagShortcutAction() in editing.js, which is where each action is
 // dispatched - shared with the Tag Tree's right-click menu (tree-menu.js),
 // so a menu entry and its key can't drift apart.
@@ -2117,10 +2117,13 @@ function findTagShortcutAction(key) {
 // rectangle selection can do, so those are answered with a hint instead
 // (see the handler below). table is its own case: it opens the grid tool
 // (table-grid.js) over the selection rather than tagging it outright.
+// blockQuote arrives here as the one role that isn't built flat: the worker
+// puts the covered text in a /P inside the quotation, since that is what a
+// block quotation holds (see _set_block_quote_content() in tag_worker.py).
 const RECT_SELECT_ROLES = {
   h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', h5: 'H5', h6: 'H6',
   paragraph: 'P', listItem: 'LI', list: 'L', td: 'TD', th: 'TH',
-  caption: 'Caption', figure: 'Figure',
+  caption: 'Caption', figure: 'Figure', blockQuote: 'BlockQuote',
 };
 
 // Ctrl+L: a list whose items are marked out by hanging indents rather than

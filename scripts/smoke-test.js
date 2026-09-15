@@ -786,6 +786,43 @@ async function editTests(fixture) {
     });
   }));
 
+  await test('a rectangle tagged as a BlockQuote puts the text in a paragraph inside it', () => withDoc(fixture, async (doc) => {
+    // Every other role built from a rectangle holds the covered text
+    // directly. A block quotation is a block of paragraphs, so the text goes
+    // one level further down - see _set_block_quote_content() in
+    // tag_worker.py. Straight under the BlockQuote it would belong to no
+    // paragraph at all.
+    const target = await pickCuttableLeaf(doc);
+    if (!target) skip('fixture has no measurable leaf long enough to cut twice');
+    const { leaf, text, offsets } = target;
+    const start = offsets[2];
+    const end = offsets[offsets.length - 3];
+
+    const result = await worker.call('tag_rect_content', {
+      docId: doc.docId,
+      pageIndex: leaf.page,
+      selections: [{ nodeId: leaf.id, startIndex: start, endIndex: end }],
+      role: 'BlockQuote',
+    });
+
+    const quote = findById(result.tree, result.newNodeId);
+    assertEqual(quote.role, 'BlockQuote', 'the new tag is not a BlockQuote');
+    assertEqual(quote.children.length, 1, 'the quotation should hold exactly one paragraph');
+    const para = quote.children[0];
+    assertEqual(para.role, 'P', 'the quotation holds its text directly instead of in a paragraph');
+    assertEqual(para.children.length, 1, 'the paragraph should hold exactly the cut run');
+    const taggedText = (await worker.call('get_leaf_text',
+      { docId: doc.docId, nodeId: para.children[0].id })).text;
+    assertEqual(taggedText, text.slice(start, end), 'the quoted text is not the run asked for');
+
+    await saveAndReopen(doc.docId, 'tag-rect-block-quote', (reopened) => {
+      const quotes = byRole(reopened.tree, 'BlockQuote');
+      assert(quotes.length >= 1, 'the new quotation did not survive save');
+      assert(quotes.some((q) => (q.children || []).every((k) => k.role === 'P')),
+        'the quotation came back holding something other than paragraphs');
+    });
+  }));
+
   await test('tagging part of a tag puts the new tag beside it, not inside', () => withDoc(fixture, async (doc) => {
     // Anchoring the new tag at the selected leaf's own slot - right for a
     // single hand-picked leaf - would nest it: <P><H3>..</H3>..</P>. Tagging
@@ -1635,6 +1672,143 @@ async function listAndTableTests(fixture) {
   }));
 }
 
+async function blockQuoteTests(fixture) {
+  await test('B groups paragraphs into one BlockQuote and keeps them paragraphs', () => withDoc(fixture, async (doc) => {
+    // The point of grouping rather than relabelling: a quotation is a block
+    // of paragraphs, so the two paragraphs go inside it still being
+    // paragraphs. Relabelling would have produced two quotations and no
+    // paragraph at all.
+    const pair = adjacentSiblings(doc.tree, 'P');
+    if (!pair) skip('no two adjacent P tags in this fixture');
+    const ids = pair.map((n) => n.id);
+    const quotesBefore = byRole(doc.tree, 'BlockQuote').length;
+    const paragraphsBefore = byRole(doc.tree, 'P').length;
+    const fingerprint = contentFingerprint(doc.tree);
+
+    const result = await worker.call('make_block_quote', { docId: doc.docId, nodeIds: ids });
+    const quotes = byRole(result.tree, 'BlockQuote');
+    assertEqual(quotes.length, quotesBefore + 1, 'no new BlockQuote tag was created');
+    assertEqual(byRole(result.tree, 'P').length, paragraphsBefore,
+      'grouping into a quotation changed how many paragraphs the document has');
+    const quote = quotes[quotes.length - 1];
+    assertEqual((quote.children || []).length, 2, 'the quotation did not take both tags');
+    for (const kid of quote.children || []) {
+      assertEqual(kid.role, 'P', 'a quoted paragraph came out as something else');
+    }
+    assertEqual(contentFingerprint(result.tree), fingerprint, 'grouping into a quotation moved content');
+
+    await saveAndReopen(doc.docId, 'block-quote', (reopened) => {
+      assertEqual(byRole(reopened.tree, 'BlockQuote').length, quotesBefore + 1,
+        'the new BlockQuote did not survive the save');
+      assertEqual(contentFingerprint(reopened.tree), fingerprint,
+        "the quotation's content moved on save");
+    });
+  }));
+
+  await test('pressing P on a BlockQuote hands back the blocks it held', () => withDoc(fixture, async (doc) => {
+    // The way back out. The quotation itself goes; what it was holding is
+    // spliced into its place unchanged, rather than being merged into one
+    // run of text or left nested under a tag now claiming to be a paragraph.
+    const pair = adjacentSiblings(doc.tree, 'P');
+    if (!pair) skip('no two adjacent P tags in this fixture');
+    const paragraphsBefore = byRole(doc.tree, 'P').length;
+    const fingerprint = contentFingerprint(doc.tree);
+
+    const grouped = await worker.call('make_block_quote', {
+      docId: doc.docId, nodeIds: pair.map((n) => n.id),
+    });
+    const quotes = byRole(grouped.tree, 'BlockQuote');
+    const quote = quotes[quotes.length - 1];
+
+    const result = await worker.call('convert_to_paragraph', { docId: doc.docId, nodeIds: [quote.id] });
+    assertEqual(result.reshaped, true, 'dissolving a quotation reported an unchanged tree');
+    assertEqual(byRole(result.tree, 'BlockQuote').length, quotes.length - 1,
+      'the BlockQuote tag is still there');
+    assertEqual(byRole(result.tree, 'P').length, paragraphsBefore,
+      'the paragraphs the quotation held did not come back as they were');
+    assertEqual(contentFingerprint(result.tree), fingerprint, 'dissolving the quotation moved content');
+  }));
+
+  await test('a rectangle covering a whole tag retypes it and paragraphs its text', () => withDoc(fixture, async (doc) => {
+    // wrap_leaves' relabel-in-place path: the rectangle covered everything
+    // one tag held, so that tag becomes the quotation rather than a new one
+    // being built beside it. Retyping alone would leave the quoted words
+    // sitting directly under the BlockQuote, so the text is re-housed in a
+    // paragraph on the way through.
+    const target = allNodes(doc.tree).find((n) => n.role === 'P'
+      && (n.children || []).length > 0
+      && n.children.every((c) => c.type === 'content' && c.page !== null && c.page !== undefined));
+    if (!target) skip('no P holding only content leaves in this fixture');
+    const leafIds = target.children.map((c) => c.id);
+    const fingerprint = contentFingerprint(doc.tree);
+
+    const result = await worker.call('wrap_leaves', {
+      docId: doc.docId, nodeIds: leafIds, role: 'BlockQuote',
+    });
+    assertEqual(result.relabelled, true, 'covering a whole tag should have retyped it in place');
+    const quote = findById(result.tree, result.newNodeId);
+    assertEqual(quote.role, 'BlockQuote', 'the covered tag is not a BlockQuote');
+    assertEqual(quote.children.length, 1, 'the quotation should hold exactly one paragraph');
+    assertEqual(quote.children[0].role, 'P',
+      'the quotation kept the text directly instead of re-housing it in a paragraph');
+    assertEqual(quote.children[0].children.length, leafIds.length,
+      'the paragraph did not take every leaf the tag held');
+    assertEqual(contentFingerprint(result.tree), fingerprint, 'retyping the tag moved content');
+  }));
+
+  await test('a quoted heading stays a heading inside the quotation', () => withDoc(fixture, async (doc) => {
+    // _BLOCK_QUOTE_KEPT_ROLES: a tag that already names a block of its own
+    // has nothing to gain from being told it is a paragraph.
+    let found = null;
+    walk(doc.tree, (n) => {
+      if (found) return;
+      const kids = n.children || [];
+      for (let i = 0; i < kids.length - 1; i += 1) {
+        if (/^H[1-6]$/.test(kids[i].role || '') && kids[i + 1].role === 'P') {
+          found = [kids[i], kids[i + 1]];
+          return;
+        }
+      }
+    });
+    if (!found) skip('no heading followed by a sibling paragraph in this fixture');
+    const headingRole = found[0].role;
+    const headingsBefore = byRole(doc.tree, headingRole).length;
+
+    const result = await worker.call('make_block_quote', {
+      docId: doc.docId, nodeIds: found.map((n) => n.id),
+    });
+    assertEqual(byRole(result.tree, headingRole).length, headingsBefore,
+      `a quoted ${headingRole} was relabelled instead of being left alone`);
+    const quotes = byRole(result.tree, 'BlockQuote');
+    const kids = quotes[quotes.length - 1].children || [];
+    assertEqual(kids[0]?.role, headingRole, 'the quotation did not keep the heading first');
+  }));
+
+  await test('grouping tags from different parents into a quotation is refused', () => withDoc(fixture, async (doc) => {
+    // Same rule as T and R: there is no single "where the first one was" to
+    // put the new container when the selection spans two parents.
+    const pair = adjacentSiblings(doc.tree, 'P');
+    if (!pair) skip('no two adjacent P tags in this fixture');
+    const grouped = await worker.call('make_block_quote', {
+      docId: doc.docId, nodeIds: pair.map((n) => n.id),
+    });
+    const quotes = byRole(grouped.tree, 'BlockQuote');
+    const quoted = (quotes[quotes.length - 1].children || [])[0];
+    const outsider = byRole(grouped.tree, 'P').find((n) => n.id !== quoted.id
+      && !(quotes[quotes.length - 1].children || []).some((k) => k.id === n.id));
+    if (!outsider) skip('no paragraph outside the new quotation to pair it with');
+
+    let message = null;
+    try {
+      await worker.call('make_block_quote', { docId: doc.docId, nodeIds: [quoted.id, outsider.id] });
+    } catch (err) {
+      message = err.message;
+    }
+    assert(message !== null, 'grouping across two parents was allowed');
+    assert(/share a parent/.test(message), `unexpected error: ${message}`);
+  }));
+}
+
 async function bookmarkTests(fixture) {
   await test('adding and renaming a bookmark survives save and reopen', () => withDoc(fixture, async (doc) => {
     const added = await worker.call('add_bookmark', {
@@ -2246,6 +2420,7 @@ async function main() {
       await structureTests(fixture);
       await editTests(fixture);
       await listAndTableTests(fixture);
+      await blockQuoteTests(fixture);
       await bookmarkTests(fixture);
       await figureTextTests(fixture);
       await artifactTests(fixture);

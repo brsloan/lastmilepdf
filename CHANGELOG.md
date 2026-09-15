@@ -11,6 +11,20 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
+- **B groups the selection into a Block Quotation.** A new tagging shortcut,
+  configurable like the rest, for the quoted passages a scan is full of and
+  which until now had to be typed into the Role field by hand. It groups
+  rather than relabels, because a BlockQuote is a block of *paragraphs*
+  attributed to someone other than the surrounding author: one selected
+  paragraph comes out as a quotation holding that paragraph, and three come
+  out as one quotation of three paragraphs, rather than three quotations that
+  have each stopped being a paragraph. A selected tag that already names a
+  block of its own - a heading, list, table or figure - is kept as it is
+  inside the quotation; a Span, or page content with no tag of its own,
+  becomes the paragraph the quotation holds. B answers a Select Content
+  rectangle too, putting the text it covered in a paragraph inside the new
+  quotation. Pressing P on a quotation dissolves it again and hands back the
+  blocks it was holding, so there is a way out as well as a way in.
 - **A quick start, in the app and as a PDF.** Help > Quickstart is a short
   tutorial on the keyboard-first way of working - the tag shortcuts, what the
   toolbar buttons do, the three ways to build a table, and a suggested AI

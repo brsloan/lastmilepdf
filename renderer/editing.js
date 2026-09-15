@@ -691,11 +691,12 @@ export async function groupSelectionIntoList() {
   }
 }
 
-// Shared by the 'T' and 'R' shortcuts: both group the whole selection into
-// a newly created container (Table/TR) the same way 'L' does for List, via
-// `apiCall` - each selected node becomes a child of the new container,
-// converted to TD unless it's already one of `preservedRoles`. See
-// make_table()/make_tr() in tag_worker.py for the per-role conversion rule.
+// Shared by the 'T', 'R' and 'B' shortcuts: each groups the whole selection
+// into a newly created container (Table/TR/BlockQuote) the same way 'L' does
+// for List, via `apiCall` - each selected node becomes a child of the new
+// container, relabelled to the container's item role unless it already holds
+// one the container keeps. See make_table()/make_tr()/make_block_quote() in
+// tag_worker.py for the per-role conversion rule.
 async function groupSelectionIntoContainer(apiCall, label) {
   const ids = Array.from(state.selectedNodeIds).filter((id) => id !== 'root');
   if (ids.length === 0) return;
@@ -723,6 +724,17 @@ export function groupSelectionIntoTable() {
 
 export function groupSelectionIntoTr() {
   return groupSelectionIntoContainer(window.api.makeTr, 'table row');
+}
+
+// Backs the 'B' shortcut: groups the whole selection into a newly created
+// BlockQuote, each selected tag becoming a /P inside it unless its role
+// already names a block of its own - a quoted heading or list stays what it
+// is. Grouping rather than relabelling, because a block quotation is a block
+// of paragraphs: one selected paragraph comes out as a quotation holding
+// that paragraph, not as a paragraph that has stopped being one. See
+// make_block_quote() in tag_worker.py; 'P' on the result dissolves it again.
+export function groupSelectionIntoBlockQuote() {
+  return groupSelectionIntoContainer(window.api.makeBlockQuote, 'block quotation');
 }
 
 // Backs the 'J' shortcut: merges tag(s) together via join_tags() in
@@ -844,6 +856,8 @@ export function applyTagShortcutAction(action) {
       return groupSelectionIntoList();
     case 'listItem':
       return convertSelectionToListItem();
+    case 'blockQuote':
+      return groupSelectionIntoBlockQuote();
     case 'table':
       return groupSelectionIntoTable();
     case 'tr':

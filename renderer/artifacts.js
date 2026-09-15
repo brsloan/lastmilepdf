@@ -351,7 +351,7 @@ export function tagSelectedArtifacts(action) {
     restoreSelectedArtifacts(role);
     return;
   }
-  // The five that aren't here - L, I, T, R, J by default - all restructure
+  // The six that aren't here - L, I, B, T, R, J by default - all restructure
   // tags that already exist (or, for T, open the table grid over a page
   // rectangle). An artifact is content, not a tag, so there is nothing yet
   // for them to work on; answering them with this beats letting the

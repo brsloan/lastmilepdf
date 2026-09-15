@@ -28,7 +28,7 @@ import { formatShortcutKey } from './util.js';
 // then join. Named by the action a rule follows rather than by index, so an
 // action inserted into TAG_SHORTCUT_ACTIONS simply joins the group it was
 // listed in instead of shifting a divider onto the wrong row.
-const SEPARATOR_AFTER = new Set(['h6', 'listItem', 'th', 'caption']);
+const SEPARATOR_AFTER = new Set(['h6', 'blockQuote', 'th', 'caption']);
 
 // The two tag-tree actions that aren't configurable tagging shortcuts, and
 // so aren't in TAG_SHORTCUT_ACTIONS: both act on the same selection and are
