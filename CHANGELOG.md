@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-15
+
 ### Added
 - **A contents sidebar in the Help and Quickstart dialogs.** Both are long
   enough to have to scroll for the part you wanted, so each now lists its own
@@ -80,6 +82,19 @@ they summarise each release rather than record every change as it landed.
   never saved - opens the old way: what was recorded is checked against the
   document's structure before any of it is trusted, since a tag's id only means
   anything against the exact tree it came from.
+- **The tagging shortcuts on a right-click menu.** Every structural edit in
+  the Tag Tree was a keystroke and nothing else - fast once the keys are
+  learned, and a dead end before that. Right-clicking a tag now opens the same
+  edits as a menu, each row printed with the key it is bound to, so the menu
+  teaches the shortcut rather than standing in for it, and the rarely-used
+  edits are reachable without a trip to the Shortcuts dialog. A key remapped
+  in Preferences is what the menu shows, and an action whose key has been
+  cleared still appears - which is exactly when the menu is the only way to
+  reach it. Right-clicking outside the selection selects that tag first;
+  right-clicking inside a multi-tag selection leaves it alone, so the menu
+  acts on the whole block the way the keys do. It steers by keyboard too -
+  arrows, Home/End, Esc back to the row it was opened on - and the Menu key
+  opens it anchored to the focused row.
 - **Artifacts tab.** The Tag Tree pane now has a second tab listing everything
   the document marks `/Artifact` - the content deliberately left out of the
   tag tree, which assistive technology skips: running heads, footers, page
@@ -191,6 +206,17 @@ they summarise each release rather than record every change as it landed.
   spellings are left as they are unless the image clearly shows otherwise. A
   provider that can't accept images gets the text alone, as before, and the
   status bar says which happened. Fix All Actual Text (AI) is unchanged.
+- Fix with AI now works on a tag that has no Actual Text of its own. It used
+  to refuse with "Nothing in Actual Text to fix.", which is backwards for the
+  documents it exists for: on a freshly OCR'd scan the tags that most need
+  fixing are the ones whose only text is the content preview sitting in the
+  field. An empty field now falls back to that content text, corrects it
+  against the page crop and commits the result as the tag's Actual Text - the
+  same fallback Fix All Actual Text (AI) already made for its own candidates.
+  A single-tag fix also records its proposal the way the batch does, so it
+  gets the highlighted diff, the Revert button and the flagged row. The
+  refusal survives only where there is genuinely no text on either side - no
+  pullable content, or no open preview to pull it from - and says which.
 - The tag tree's flags now say how much changed, not just that something did.
   A Show AT Changes flag wears one asterisk when only the white space moved -
   a line break pulled into a space - and two when the words themselves differ,
@@ -207,6 +233,18 @@ they summarise each release rather than record every change as it landed.
   Narrowing the currently selected tag off the list lands on the first row
   that survived, so Page Up/Down carries on reading. The Artifacts tab is
   hidden while proofreading - an artifact has no Actual Text to read.
+- The roles dropdown now says what each role means. It listed bare PDF
+  structure type abbreviations, so knowing that `TH` is a table header cell,
+  or `Lbl` a list item's bullet, meant knowing the spec already. Each option
+  carries its meaning beside the value, which the dropdown also matches
+  against while typing - so "header" finds `TH`. Reference, Code, BlockQuote,
+  Index and Private, which were missing from the list entirely, have been
+  added, and the order now runs document → headings → lists → tables →
+  figure/inline → TOC/index/private.
+- The status line is easier to notice: full-strength text rather than the
+  faint grey it was, with the toolbar's `/>` mark repeated in the accent
+  colour at the start of the line to anchor the eye.
+- Purdue GenAI Studio now defaults to `gemma4:26b-a4b`.
 
 ### Fixed
 - Selecting the Document root no longer outlines everything on the page. The
@@ -214,6 +252,24 @@ they summarise each release rather than record every change as it landed.
   in the preview at once - which said nothing about where anything was, and
   was the first thing a newly opened document showed, since that is the tag it
   lands on.
+- Two paragraphs of the Help text no longer come out garbled. The names of the
+  `Flagged **` and `Flagged *` tree filters contain literal asterisks, which
+  the help doc's Markdown round trip read back as emphasis markers and rewrote
+  into a jumble of bold and italic - nowhere near whatever had actually been
+  edited, which is how it went unnoticed. Asterisks the text means literally
+  are now escaped as such, and the round trip is checked end to end, so a
+  passage that imports back as something other than what was written is
+  reported rather than published.
+- Changing Proofread Mode's filter no longer lands on the new row with the
+  whole Actual Text field selected, where the next keystroke would have wiped
+  the tag out. Changing the filter is a navigation step, so the caret drops at
+  the start of the field - the same place Page Down lands. Turning the mode on
+  still selects the field, that being a deliberate starting gesture.
+- Proofread Mode's tag tree no longer scrolls through a screenful of nothing
+  before the first row and after the last. The spacers at each end are what
+  let the first and last rows sit level with the Actual Text field, so each is
+  now sized to exactly the distance its end of the list travels, instead of to
+  a full pane height.
 
 ## [0.5.0] - 2026-09-14
 
@@ -359,7 +415,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/brsloan/lastmilepdf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/brsloan/lastmilepdf/compare/v0.4.1...v0.4.2
