@@ -960,14 +960,36 @@ el.btnPullContent.addEventListener('click', async () => {
 el.btnFixActualText.addEventListener('click', async () => {
   const nodeId = el.fieldNodeId.value;
   if (!nodeId) return;
-  const text = el.fieldActualText.value.trim();
-  if (!text) {
-    setStatus('Nothing in Actual Text to fix.');
-    return;
-  }
+  let text = el.fieldActualText.value.trim();
+  // A tag with nothing in Actual Text yet is the ordinary case on a freshly
+  // OCR'd scan - and the case this is most useful for - so an empty field
+  // falls back to the tag's own content text (exactly what "Pull Content"
+  // would put there, and what the greyed-out preview already shows) instead
+  // of refusing. The batch makes the same fallback for its no-Actual-Text
+  // candidates; see runFixAllActualTextAi() in actions.js. The fixed text is
+  // then committed like any other, so the tag ends up with an Actual Text it
+  // never had - which is the point: the OCR text is what's wrong, and
+  // correcting it in place is the only way to fix it.
+  let pulled = false;
   try {
-    setStatus('Fixing Actual Text with AI…');
     el.btnFixActualText.disabled = true;
+    if (!text && state.pdfDoc) {
+      setStatus('Pulling content text…');
+      text = ((await pullContentText(nodeId)) || '').trim();
+      if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
+      pulled = Boolean(text);
+    }
+    // Still nothing to check the image against. Fix with AI proofreads text
+    // against the scan rather than transcribing the scan from scratch (that
+    // is what Alt text's "Fill with AI" is for), so with no text on either
+    // side there is nothing here for it to do.
+    if (!text) {
+      setStatus(state.pdfDoc
+        ? 'Nothing in Actual Text to fix, and no content text to pull from this tag.'
+        : 'Nothing in Actual Text to fix - open the PDF preview to pull this tag’s content text instead.');
+      return;
+    }
+    setStatus('Fixing Actual Text with AI…');
     let images = [];
     try {
       images = await cropNodeImages(nodeId);
@@ -979,6 +1001,34 @@ el.btnFixActualText.addEventListener('click', async () => {
     if (el.fieldNodeId.value !== nodeId) return; // selection changed mid-flight
     el.fieldActualText.value = result.text;
     updateActualTextLabel();
+    // Record the fix the same way the batch does (see runFixAllActualTextAi()
+    // in actions.js) so this tag gets the same highlighted diff, review bar
+    // and flagged tree row - one tag fixed on its own is no less worth
+    // reviewing than the same tag fixed as part of a sweep. `suggested` has
+    // to match what actually lands on the node, which is the *trimmed* field
+    // value (see applyDetailsChange()), or pruneStaleAiProposals() would
+    // drop the proposal as stale the moment the tree rebuilds below. Setting
+    // it before that commit is what lets the prune see it at all.
+    //
+    // A tag that already had a proposal (from a batch fix, or an earlier
+    // click here) keeps its recorded `original`, so the diff stays against
+    // the text before AI first touched it rather than against the previous
+    // fix.
+    const suggested = result.text.trim();
+    if (suggested !== text) {
+      const priorOriginal = state.aiProposals.get(nodeId)?.original;
+      state.aiProposals.set(nodeId, { original: priorOriginal ?? text, suggested });
+    }
+    // Asking for the text to be fixed is as much an act of ownership as
+    // typing into it, so a Proofread Mode content-pull still sitting
+    // unconfirmed (see updateActualTextPlaceholder() in details.js) stops
+    // being pending here - the same thing the field's own 'input' listener
+    // does above. Without this, applyDetailsChange() would read the field as
+    // an untouched pull and save the tag's old (normally empty) Actual Text
+    // instead, throwing the fix away along with the diff just recorded.
+    if (state.pendingPulledActualTextNodeId === nodeId) {
+      state.pendingPulledActualTextNodeId = null;
+    }
     // Commit explicitly rather than relying on the form's native 'change'
     // event (el.detailsForm's 'change' listener, see applyDetailsChange()
     // below) - that only fires on blur if the textarea was focused when its
@@ -986,12 +1036,13 @@ el.btnFixActualText.addEventListener('click', async () => {
     // focused the field, so it would otherwise sit there unsaved until the
     // user happened to edit it further.
     await applyDetailsChange();
+    const pulledNote = pulled ? ' Its text was pulled from the tag’s content first.' : '';
     if (result.imageUsed) {
-      setStatus('Fixed Actual Text with AI, checked against the page image.');
+      setStatus(`Fixed Actual Text with AI, checked against the page image.${pulledNote}`);
     } else if (images.length > 0) {
-      setStatus('Fixed Actual Text with AI from the text alone - the provider did not accept the page image.');
+      setStatus(`Fixed Actual Text with AI from the text alone - the provider did not accept the page image.${pulledNote}`);
     } else {
-      setStatus('Fixed Actual Text with AI from the text alone - no page image could be made for this tag.');
+      setStatus(`Fixed Actual Text with AI from the text alone - no page image could be made for this tag.${pulledNote}`);
     }
   } catch (err) {
     reportError('Could not fix Actual Text with AI', err);
