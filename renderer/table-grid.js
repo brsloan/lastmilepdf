@@ -9,17 +9,19 @@
 // cutting leaves at the cell edges the same way the plain rectangle cuts
 // them at its own.
 //
-// Why the grid is drawn by hand rather than inferred from the text: rows
-// by baseline and columns by whitespace go wrong on exactly the tables this
-// tool is pointed at - a cell whose text wraps reads as two rows, a header
-// spanning several columns hides the gap between them, and a divider a few
-// points off files text under the wrong cell. That last one is the killer:
-// the Table Editor can fix headers, scope and spans afterwards, but it
-// cannot move content from one cell to another, so a wrong grid can only be
-// undone, never corrected. So nothing here commits until the grid has been
-// looked at, with the text each cell will receive outlined inside it. A
-// later stage will seed the dividers from the geometry; the interaction
-// stays the same, the user just starts from a guess instead of from nothing.
+// The grid starts as a guess from the text's geometry (seedGrid() in
+// table-seed.js: rows from the gaps between lines, columns from the
+// whitespace most lines share) and is then corrected by hand. Why it is
+// never taken as read: rows by baseline and columns by whitespace go wrong
+// on exactly the tables this tool is pointed at - a cell whose text wraps
+// reads as two rows, a header spanning several columns hides the gap
+// between them, and a divider a few points off files text under the wrong
+// cell. That last one is the killer: the Table Editor can fix headers,
+// scope and spans afterwards, but it cannot move content from one cell to
+// another, so a wrong grid can only be undone, never corrected. So nothing
+// here commits until the grid has been looked at, with the text each cell
+// will receive outlined inside it. G guesses the current phase again and
+// Delete clears it, for when the guess is further from right than empty.
 //
 // Every position is in viewport space (pdf.js's page pixels, which is also
 // the canvas's own pixel size - see renderCurrentPage() in viewer.js), the
@@ -32,22 +34,39 @@ import { canvasPointFromEvent } from './figure-draw.js';
 import { glyphsInRun, intersectionArea, renderRectSelectOverlay } from './rect-select.js';
 import { setStatus } from './shell.js';
 import { state } from './state.js';
+import { MIN_LINE_GAP_PX, seedGrid } from './table-seed.js';
+
+// The seed module owns the crowding rule so it can apply it without the
+// DOM; the mouse handlers below apply the same one.
+export { MIN_LINE_GAP_PX };
 
 // How close (in canvas pixels) a click has to land to an existing divider to
 // pick it up rather than place a new one beside it.
 export const LINE_HIT_PX = 6;
-// A divider this close to the box's edge or to another divider is refused:
-// it would make a cell too thin to hold a glyph, and is far more likely a
-// double-click than an intention.
-export const MIN_LINE_GAP_PX = 4;
 // A mousedown that travels less than this before mouseup is a click, and a
 // click on a divider removes it; travelling further is a drag that moves it.
 const DRAG_THRESHOLD_PX = 3;
 
 const PROMPTS = {
-  columns: 'Columns: click inside the box to add a divider, click a divider to remove it, or drag one to move it. Enter for rows, Esc to drop the grid.',
-  rows: 'Rows: click to add a divider, click one to remove it, or drag it. Enter to review the cells, Backspace to go back to columns.',
+  columns: 'Columns: click inside the box to add a divider, click a divider to remove it, or drag one to move it. G guesses again, Delete clears. Enter for rows, Esc to drop the grid.',
+  rows: 'Rows: click to add a divider, click one to remove it, or drag it. G guesses again, Delete clears. Enter to review the cells, Backspace to go back to columns.',
 };
+
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+// What the geometry had to say about a fresh grid, ahead of the phase's
+// own prompt: the count is the only tell of which dividers were guessed,
+// since a guessed divider looks the same as a placed one.
+function seedSummary(seed) {
+  if (seed.lineCount < 2) {
+    return seed.lineCount === 0
+      ? 'No text to guess a grid from - the box starts empty.'
+      : 'Only one line of text in the box - nothing to guess a grid from.';
+  }
+  return `Guessed ${plural(seed.columns.length, 'column divider')} and ${plural(seed.rows.length, 'row divider')} from the text.`;
+}
 
 // --- geometry ------------------------------------------------------------
 
@@ -462,20 +481,51 @@ export function renderTableGridOverlay() {
 // --- the phases ---------------------------------------------------------------
 
 export function startTableGrid(box) {
+  const seed = seedGrid(state.rectSelectHits || [], box);
   state.tableGrid = {
     phase: 'columns',
     box,
-    columns: [],
-    rows: [],
+    columns: [...seed.columns],
+    rows: [...seed.rows],
     hover: null,
     drag: null,
     cells: null,
     selected: new Set(),
     anchor: null,
     contents: null,
+    seed,
   };
   renderTableGridOverlay();
-  setStatus(PROMPTS.columns);
+  setStatus(`${seedSummary(seed)} ${PROMPTS.columns}`);
+}
+
+// G in a divider phase: back to the geometry's guess for that phase, hand
+// edits and all. Recomputed rather than copied from the start - the hits
+// haven't changed, but it costs nothing and keeps one code path.
+function reseedPhase(grid) {
+  const seed = seedGrid(state.rectSelectHits || [], grid.box);
+  grid.seed = seed;
+  const guessed = grid.phase === 'columns' ? seed.columns : seed.rows;
+  if (grid.phase === 'columns') grid.columns = [...guessed];
+  else grid.rows = [...guessed];
+  grid.hover = null;
+  grid.drag = null;
+  const noun = grid.phase === 'columns' ? 'column divider' : 'row divider';
+  setStatus(seed.lineCount < 2
+    ? `${seedSummary(seed)} ${PROMPTS[grid.phase]}`
+    : `Guessed ${plural(guessed.length, noun)} from the text. ${PROMPTS[grid.phase]}`);
+}
+
+function clearPhase(grid) {
+  const lines = activeLines(grid);
+  const count = lines.length;
+  lines.length = 0;
+  grid.hover = null;
+  grid.drag = null;
+  const noun = grid.phase === 'columns' ? 'column divider' : 'row divider';
+  setStatus(count === 0
+    ? `No ${noun}s to clear. ${PROMPTS[grid.phase]}`
+    : `Cleared ${plural(count, noun)}. ${PROMPTS[grid.phase]}`);
 }
 
 function cellsPrompt(grid) {
@@ -583,6 +633,18 @@ export function handleTableGridKey(e) {
   if (e.key === 'Escape') {
     cancelTableGrid();
     return true;
+  }
+  if (grid.phase !== 'cells') {
+    if (e.key.toLowerCase() === 'g') {
+      reseedPhase(grid);
+      renderTableGridOverlay();
+      return true;
+    }
+    if (e.key === 'Delete') {
+      clearPhase(grid);
+      renderTableGridOverlay();
+      return true;
+    }
   }
   if (grid.phase === 'cells') {
     const key = e.key.toLowerCase();

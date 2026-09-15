@@ -168,6 +168,18 @@ export interface TableGridState {
   anchor: number | null;
   /** cell index -> what it will hold; null in the divider phases. */
   contents: Map<number, TableGridCellContent> | null;
+  /** The dividers guessed from the text when the grid started - see seedGrid() in table-seed.js. */
+  seed: TableGridSeed;
+}
+
+/** What seedGrid() in table-seed.js guesses from the text under a grid. */
+export interface TableGridSeed {
+  /** Guessed interior column dividers (x), ascending. */
+  columns: number[];
+  /** Guessed interior row dividers (y), ascending. */
+  rows: number[];
+  /** How many lines of text the guess came from; under 2 and nothing was guessed. */
+  lineCount: number;
 }
 
 export interface AppState {

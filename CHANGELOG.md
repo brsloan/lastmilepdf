@@ -21,10 +21,16 @@ they summarise each release rather than record every change as it landed.
   undo step, cutting every text run at the cell edges the same way the
   rectangle already cuts at its own - so a scanned table whose OCR painted
   each row as one run comes out one cell per column. Header scope is set as
-  Scope Tables would set it. The dividers are placed by hand on purpose:
-  the Table Editor can fix headers and spans afterwards but can't move text
-  between cells, so a guessed grid that's a few points off could only be
-  undone, not corrected. Esc drops the grid and keeps the selection.
+  Scope Tables would set it. The grid starts with the dividers guessed
+  from the text - rows from the gaps between lines (a wrapped cell's
+  tighter line pitch is told apart from the space between rows), columns
+  from the white space no line of text runs across, a spanning header
+  excepted - and the status line says how many it guessed. Every divider is still yours to correct, and nothing is built
+  until the cells have been looked at: the Table Editor can fix headers
+  and spans afterwards but can't move text between cells, so a grid that's
+  a few points off could only be undone, not corrected. G guesses the
+  current step again, Delete clears it, Esc drops the grid and keeps the
+  selection.
 - A **Fill with AI** button beside the Alt text label when a Figure or a
   Formula is selected. It sends an image of just that tag's own part of the
   page to the configured AI provider and writes what comes back into the
