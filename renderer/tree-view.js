@@ -26,50 +26,51 @@ import { clearRectSelect } from './rect-select.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
 import { state } from './state.js';
 import { buildMcidIndex, findHiddenDocumentWrapperId, indexTree, isDescendant, nodePathFromRoot, resolveNodeByPath } from './tree-index.js';
-import { categoryForRole } from './util.js';
+import { categoryForRole, isWhitespaceOnlyChange } from './util.js';
 
-// Node ids that have no AT change of their own but have a descendant (at any
-// depth) flagged in state.atChangeFlags - recomputed once per render pass
-// (not per node) and consulted by appendElementChipAndFlag() so an ancestor
-// can show a "changes below" badge instead of silently hiding them behind a
-// collapsed subtree.
-let descendantAtChangeIds = new Set();
-
-// Same idea as descendantAtChangeIds, but for AI-fix proposals - a node with
-// no AI fix of its own but a descendant (at any depth) in state.aiProposals
-// gets a "fix below" badge instead of silently hiding it behind a collapsed
-// subtree. Unlike AT changes this isn't gated behind a toggle, since
-// aiProposals badges are always shown.
-let descendantAiProposalIds = new Set();
-
-function computeDescendantAtChangeIds() {
-  const ids = new Set();
-  if (!state.showAtChanges || !state.tree) return ids;
-  function walk(node) {
-    let below = false;
-    for (const child of node.children || []) {
-      if (walk(child)) below = true;
-    }
-    if (below) ids.add(node.id);
-    return below || state.atChangeFlags.has(node.id);
-  }
-  walk(state.tree);
-  return ids;
+// How much a flagged { original, suggested } change actually altered the
+// text, as the number of asterisks its badge wears: 1 when only the white
+// space moved (a line break pulled into a space, a double space collapsed),
+// 2 when the words themselves differ. Both kinds of badge - an applied AI
+// fix and a Show AT Changes flag - grade the same way, so a glance at the
+// tree separates the cosmetic from the substantive.
+function proposalSeverity(proposal) {
+  return isWhitespaceOnlyChange(proposal.original, proposal.suggested) ? 1 : 2;
 }
 
-function computeDescendantAiProposalIds() {
-  const ids = new Set();
-  if (!state.tree) return ids;
+// Node ids that have no AT change of their own but have a descendant (at any
+// depth) flagged in state.atChangeFlags, mapped to the highest severity found
+// below them - recomputed once per render pass (not per node) and consulted
+// by appendElementChipAndFlag() so an ancestor can show a "changes below"
+// badge instead of silently hiding them behind a collapsed subtree. The
+// severity is the maximum rather than a mix, so a subtree holding one
+// substantive change never reads as purely cosmetic.
+let descendantAtChangeSeverity = new Map();
+
+// Same idea as descendantAtChangeSeverity, but for AI-fix proposals - a node
+// with no AI fix of its own but a descendant (at any depth) in
+// state.aiProposals gets a "fix below" badge instead of silently hiding it
+// behind a collapsed subtree. Unlike AT changes this isn't gated behind a
+// toggle, since aiProposals badges are always shown.
+let descendantAiProposalSeverity = new Map();
+
+// Shared walk behind both maps above: `own` gives a node's own proposal (or
+// null), and each node records the highest severity sitting strictly below
+// it, propagating that maximum back up to its own parent alongside its own.
+function computeDescendantSeverity(own) {
+  const severities = new Map();
+  if (!state.tree) return severities;
   function walk(node) {
-    let below = false;
+    let below = 0;
     for (const child of node.children || []) {
-      if (walk(child)) below = true;
+      below = Math.max(below, walk(child));
     }
-    if (below) ids.add(node.id);
-    return below || state.aiProposals.has(node.id);
+    if (below) severities.set(node.id, below);
+    const mine = own(node);
+    return Math.max(below, mine ? proposalSeverity(mine) : 0);
   }
   walk(state.tree);
-  return ids;
+  return severities;
 }
 
 // The <ul> each render path builds its rows into - role="tree" plus the
@@ -214,8 +215,10 @@ function markPageBreaks() {
 export function renderTree() {
   const hadFocus = el.tagTree.contains(document.activeElement);
   el.tagTreeContent.innerHTML = '';
-  descendantAtChangeIds = computeDescendantAtChangeIds();
-  descendantAiProposalIds = computeDescendantAiProposalIds();
+  descendantAtChangeSeverity = state.showAtChanges
+    ? computeDescendantSeverity((node) => state.atChangeFlags.get(node.id))
+    : new Map();
+  descendantAiProposalSeverity = computeDescendantSeverity((node) => state.aiProposals.get(node.id));
   pageRangeCache = new Map();
   if (!state.tree) {
     const p = document.createElement('p');
@@ -574,29 +577,34 @@ function appendElementChipAndFlag(row, node) {
     row.appendChild(flag);
   }
 
-  if (state.aiProposals.has(node.id)) {
-    const aiFlag = document.createElement('span');
-    aiFlag.className = 'ai-fix-flag';
-    aiFlag.textContent = 'AI fix';
-    row.appendChild(aiFlag);
-  } else if (descendantAiProposalIds.has(node.id)) {
-    const aiFlag = document.createElement('span');
-    aiFlag.className = 'ai-fix-flag';
-    aiFlag.textContent = '↓ AI fix';
-    aiFlag.title = 'A tag below this one has an AI fix applied';
-    row.appendChild(aiFlag);
+  // One badge per row, in priority order: the tag's own AI fix, an AI fix
+  // below it, its own AT change, an AT change below it. The text is built
+  // from three parts in a fixed order - an "AI" prefix when the change came
+  // from a fix, one asterisk for a white-space-only change or two for a
+  // substantive one, then the ↓ arrow when what's flagged sits below this
+  // tag rather than on it - so "AI**↓" reads as "an AI fix changed the words
+  // of a tag somewhere under this one".
+  const badge = (prefix, severity, below) => {
+    const flag = document.createElement('span');
+    flag.className = 'ai-fix-flag';
+    flag.textContent = `${prefix}${'*'.repeat(severity)}${below ? '↓' : ''}`;
+    const how = severity === 1 ? 'white space only' : 'words changed';
+    const what = prefix
+      ? ['AI fix applied', 'has an AI fix applied']
+      : ['Actual Text changed from content', 'has Actual Text changed from content'];
+    flag.title = below ? `A tag below this one ${what[1]} (${how})` : `${what[0]} (${how})`;
+    row.appendChild(flag);
+  };
+
+  const aiProposal = state.aiProposals.get(node.id);
+  if (aiProposal) {
+    badge('AI', proposalSeverity(aiProposal), false);
+  } else if (descendantAiProposalSeverity.has(node.id)) {
+    badge('AI', descendantAiProposalSeverity.get(node.id), true);
   } else if (state.showAtChanges && state.atChangeFlags.has(node.id)) {
-    const atFlag = document.createElement('span');
-    atFlag.className = 'ai-fix-flag';
-    atFlag.textContent = '*';
-    atFlag.title = 'Actual Text changed from content';
-    row.appendChild(atFlag);
-  } else if (state.showAtChanges && descendantAtChangeIds.has(node.id)) {
-    const atFlag = document.createElement('span');
-    atFlag.className = 'ai-fix-flag';
-    atFlag.textContent = '↓*';
-    atFlag.title = 'A tag below this one has Actual Text changed from content';
-    row.appendChild(atFlag);
+    badge('', proposalSeverity(state.atChangeFlags.get(node.id)), false);
+  } else if (state.showAtChanges && descendantAtChangeSeverity.has(node.id)) {
+    badge('', descendantAtChangeSeverity.get(node.id), true);
   }
 }
 

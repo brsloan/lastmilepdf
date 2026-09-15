@@ -160,6 +160,8 @@ While a tag is showing a highlighted diff (an AI fix, or a **Show AT Changes** f
 
 View > Show AT Changes flags every tag whose Actual Text no longer matches the real OCR content so you can find hand edits or old AI fixes even after saving, closing, and reopening the file (unlike an AI fix's own flag from **Fix All Actual Text (AI)** or **Fix with AI**, which only lasts the session). Selecting a flagged tag shows the same highlighted diff and Revert button as an AI fix.
 
+The flag itself says how much changed. One asterisk (`*`) means only the white space moved — a line break pulled into a space, say — and two (`**`) means the words themselves differ, so `**` is the one worth reading. An `AI` prefix marks a change made by **Fix All Actual Text (AI)** or **Fix with AI** this session rather than one found by the sweep, and a trailing `↓` means the flagged tag is somewhere below this one rather than this one itself — `AI**↓` is an AI fix that rewrote the words of a tag inside a collapsed subtree.
+
 ## Saving
 
 Every save is atomic — the new file is fully written before it replaces the old one, so a crash or power loss mid-save can't corrupt your PDF. Before that replacement, the previous version is copied to a backup in your system's temp folder. Backups older than 7 days are cleaned up automatically.

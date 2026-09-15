@@ -139,6 +139,20 @@ export function diffOldTextChanges(oldText, newText) {
   return regions;
 }
 
+// True when two texts say the same words in the same order and differ only
+// in the white space between them - a line break pulled into a space, a
+// double space collapsed, a trailing newline dropped. Callers use this to
+// tell a cosmetic Actual Text change apart from one that altered the words
+// themselves, so the tree can grade its badge (see appendElementChipAndFlag()
+// in tree-view.js) instead of flagging both alike. White space that
+// disappears entirely, joining two words into one ("foo bar" -> "foobar", or
+// a de-hyphenated line break), changes the words and so is NOT
+// whitespace-only: the normalized forms no longer match.
+export function isWhitespaceOnlyChange(oldText, newText) {
+  const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim();
+  return normalize(oldText) === normalize(newText);
+}
+
 export function extractMcidFromItemId(id) {
   // pdf.js formats this as "<pageObjId>_mc<mcid>" - the prefix is opaque
   // and irrelevant here since we already scope the lookup to one page.

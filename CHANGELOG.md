@@ -113,6 +113,13 @@ they summarise each release rather than record every change as it landed.
   spellings are left as they are unless the image clearly shows otherwise. A
   provider that can't accept images gets the text alone, as before, and the
   status bar says which happened. Fix All Actual Text (AI) is unchanged.
+- The tag tree's flags now say how much changed, not just that something did.
+  A Show AT Changes flag wears one asterisk when only the white space moved -
+  a line break pulled into a space - and two when the words themselves differ,
+  so the changes worth reading stand out from the cosmetic ones. An applied AI
+  fix is graded the same way and marked `AI` rather than "AI fix", and the
+  arrow for a flag below a collapsed subtree now follows the asterisks instead
+  of leading: `AI**↓` is an AI fix that rewrote the words of a tag inside.
 
 ## [0.5.0] - 2026-09-14
 

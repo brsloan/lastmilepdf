@@ -574,6 +574,7 @@
       <section class="help-section">
         <h3>Show AT Changes</h3>
         <p>View &gt; Show AT Changes flags every tag whose Actual Text no longer matches the real OCR content so you can find hand edits or old AI fixes even after saving, closing, and reopening the file (unlike an AI fix's own flag from <strong>Fix All Actual Text (AI)</strong> or <strong>Fix with AI</strong>, which only lasts the session). Selecting a flagged tag shows the same highlighted diff and Revert button as an AI fix.</p>
+        <p>The flag itself says how much changed. One asterisk (<code>*</code>) means only the white space moved &mdash; a line break pulled into a space, say &mdash; and two (<code>**</code>) means the words themselves differ, so <code>**</code> is the one worth reading. An <code>AI</code> prefix marks a change made by <strong>Fix All Actual Text (AI)</strong> or <strong>Fix with AI</strong> this session rather than one found by the sweep, and a trailing <code>↓</code> means the flagged tag is somewhere below this one rather than this one itself &mdash; <code>AI**↓</code> is an AI fix that rewrote the words of a tag inside a collapsed subtree.</p>
       </section>
 
       <section class="help-section">
