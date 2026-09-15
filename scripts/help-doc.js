@@ -16,6 +16,15 @@
  * Inline **bold**, *italic* and `code` map to strong/em/code; <kbd> stays literal HTML
  * because Markdown has no equivalent. Punctuation is written as real characters in the
  * Markdown and re-encoded as HTML entities on the way back in.
+ *
+ * An asterisk the help text means literally - the tree filters are named "Flagged **"
+ * and "Flagged *" after the badges they list - is written escaped, as \*, so it can't
+ * be read back as an emphasis marker. Without that, <strong>Flagged **</strong> exports
+ * as **Flagged **** and imports as whatever pairing the parser happens to land on, which
+ * silently rewrites a paragraph nobody was editing. Backslashes are escaped for the same
+ * reason, so the escape itself can be written. `check` verifies the whole round trip
+ * rather than just the export, so a passage the Markdown can't carry is reported instead
+ * of being quietly mangled the next time someone runs `import`.
  */
 
 const fs = require('fs');
@@ -58,13 +67,33 @@ function readHelpBlock(html) {
 
 /* ------------------------------------------------------------ html -> md */
 
-function inlineToMarkdown(html) {
-  let out = html
-    .replace(/<strong>([\s\S]*?)<\/strong>/g, '**$1**')
-    .replace(/<em>([\s\S]*?)<\/em>/g, '*$1*')
-    .replace(/<code>([\s\S]*?)<\/code>/g, '`$1`');
+function decodeEntities(text) {
+  let out = text;
   for (const [entity, char] of ENTITIES) out = out.split(entity).join(char);
-  return out.trim();
+  return out;
+}
+
+function inlineToMarkdown(html) {
+  // Code spans come out first and are held aside: their content is verbatim
+  // in Markdown, so the escaping below must not reach inside them (and
+  // doesn't need to - a backtick span carries an asterisk as it stands).
+  const stash = [];
+  const keep = (text) => `@@${stash.push(text) - 1}@@`;
+
+  let out = html.replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => keep(`\`${decodeEntities(code)}\``));
+
+  // Every asterisk still here is one the help text means literally - the
+  // "Flagged **" filters - since the emphasis markers aren't inserted until
+  // the next step. Escaping them is what keeps the import from reading them
+  // back as delimiters. Tags and entities hold none of these characters, so
+  // running over the raw HTML is safe.
+  out = out.replace(/[\\*]/g, (char) => `\\${char}`);
+
+  out = out
+    .replace(/<strong>([\s\S]*?)<\/strong>/g, '**$1**')
+    .replace(/<em>([\s\S]*?)<\/em>/g, '*$1*');
+  out = decodeEntities(out);
+  return out.replace(/@@(\d+)@@/g, (_, i) => stash[Number(i)]).trim();
 }
 
 function sectionToMarkdown(inner) {
@@ -112,7 +141,13 @@ function inlineToHtml(md) {
 
   let out = md
     .replace(/<\/?kbd>/g, (tag) => keep(tag))
-    .replace(/`([^`]*)`/g, (_, code) => keep(`<code>${escapeText(code)}</code>`));
+    .replace(/`([^`]*)`/g, (_, code) => keep(`<code>${escapeText(code)}</code>`))
+    // A \* the export wrote is a literal asterisk, not a delimiter. Held
+    // aside like the code spans so the emphasis pass below can't see it;
+    // after the code spans, so an asterisk inside a backtick span - where
+    // Markdown takes everything verbatim and the export escapes nothing -
+    // stays the character it already was.
+    .replace(/\\([\\*])/g, (_, char) => keep(escapeText(char)));
 
   out = escapeText(out)
     .replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>')
@@ -185,9 +220,55 @@ function markdownToHtml(rawMd, eol) {
   return `${eol}${rendered}${eol}    `;
 }
 
+/* ------------------------------------------------------------- self-check */
+
+// Inline shapes the round trip has to survive, kept here rather than left to
+// whatever the help text happens to say this month: the filter names that
+// broke it are one edit away from being reworded, and the escaping would then
+// go untested until the next passage needed it. Each must come back out of
+// inlineToHtml(inlineToMarkdown(x)) exactly as it went in.
+const INLINE_CASES = [
+  '<strong>Flagged **</strong> is narrowed to the <strong>**</strong> and <strong>*</strong> badges',
+  'One asterisk (<code>*</code>) means white space, two (<code>**</code>) means the words',
+  'a lone * in running text, and 2 * 3',
+  '<em>emphasis</em> beside <strong>bold</strong> beside <code>code</code>',
+  '<kbd>Ctrl</kbd>+<kbd>P</kbd> &mdash; entities &amp; arrows &darr;',
+];
+
+function checkInlineRoundTrip() {
+  for (const original of INLINE_CASES) {
+    const md = inlineToMarkdown(original);
+    const back = inlineToHtml(md);
+    if (back !== original) {
+      throw new Error(`The inline round trip is broken - Markdown cannot carry this:\n`
+        + `  in:   ${original}\n  as:   ${md}\n  back: ${back}`);
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ main */
 
+/** Where two versions of the help block first diverge, with a little either side. */
+function firstDifference(expected, actual) {
+  let at = 0;
+  while (at < expected.length && at < actual.length && expected[at] === actual[at]) at += 1;
+  const from = Math.max(0, at - 60);
+  const show = (text) => JSON.stringify(text.slice(from, at + 60));
+  return `  in the dialog: ${show(expected)}\n  from the doc:  ${show(actual)}`;
+}
+
 const mode = process.argv[2];
+
+// Before any mode, including import: if the conversion itself can't carry a
+// passage, writing with it is how a paragraph nobody was editing gets
+// rewritten.
+try {
+  checkInlineRoundTrip();
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
 const html = fs.readFileSync(HTML_FILE, 'utf8');
 const block = readHelpBlock(html);
 
@@ -203,7 +284,19 @@ if (mode === 'export' || mode === 'check') {
       console.error('docs/help.md is out of date - run: node scripts/help-doc.js export');
       process.exit(1);
     }
-    console.log('docs/help.md matches the Help dialog.');
+    // Matching isn't enough on its own: the Markdown also has to mean the
+    // same thing on the way back. A passage that exports cleanly but imports
+    // as something else would corrupt the dialog the next time anyone edited
+    // the doc - and corrupt a paragraph they weren't touching, which is how
+    // this goes unnoticed. Report it here instead.
+    const eol = html.includes('\r\n') ? '\r\n' : '\n';
+    const reimported = markdownToHtml(md, eol);
+    if (reimported !== block.inner) {
+      console.error('docs/help.md does not import back to the same Help dialog - `import` would corrupt it.');
+      console.error(firstDifference(block.inner, reimported));
+      process.exit(1);
+    }
+    console.log('docs/help.md matches the Help dialog, and imports back unchanged.');
   }
 } else if (mode === 'import') {
   const md = fs.readFileSync(MD_FILE, 'utf8');

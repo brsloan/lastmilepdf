@@ -23,7 +23,7 @@ A dotted red line marks where one page of the PDF ends and the next begins — b
 
 The dropdown beside the Tag Tree tab filters the tree to **Figures**, **Headings**, **Lists**, or **Tables** tags, or back to **All**. This is a view filter only — it doesn't change the document. In Proofread Mode it stacks on that mode's own list, narrowing the tags being read through rather than replacing them.
 
-Four further filters narrow the tree to tags worth a second look. **Alt Missing** shows the Figure and Formula tags with no alt text. **Flagged** shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or — once Tools > Show AT Changes has swept the document — Actual Text that no longer matches the content underneath. **Flagged **** is that same list narrowed to the ****** badges, where the words themselves differ, leaving out the ***** rows whose only change was white space. **Empty** shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.
+Four further filters narrow the tree to tags worth a second look. **Alt Missing** shows the Figure and Formula tags with no alt text. **Flagged** shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or — once Tools > Show AT Changes has swept the document — Actual Text that no longer matches the content underneath. **Flagged \*\*** is that same list narrowed to the **\*\*** badges, where the words themselves differ, leaving out the **\*** rows whose only change was white space. **Empty** shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.
 
 Figures, Lists and Tables keep each match's own contents browsable underneath it. The rest are flat lists, one row per match in page order, so there is nothing to expand and tags can't be dragged into a new place while one is on.
 
@@ -165,7 +165,7 @@ View > Proofread Mode switches to a focused layout for reading through the docum
 
 <kbd>Page Up</kbd>/<kbd>Page Down</kbd> jump to the previous/next tag's Actual Text from anywhere, including while that field is focused. Pressing <kbd>↑</kbd>/<kbd>↓</kbd> on the first/last line of Actual Text will also jump to adjacent tags.
 
-The filter dropdown moves under the Tag Tree tab here, and narrows that flat list rather than replacing it: set it to **Flagged **** to read through only the tags whose words an AI fix or a **Show AT Changes** sweep actually changed, still one tag at a time and still in document order. The Artifacts tab is hidden while proofreading — an artifact has no Actual Text to read.
+The filter dropdown moves under the Tag Tree tab here, and narrows that flat list rather than replacing it: set it to **Flagged \*\*** to read through only the tags whose words an AI fix or a **Show AT Changes** sweep actually changed, still one tag at a time and still in document order. The Artifacts tab is hidden while proofreading — an artifact has no Actual Text to read.
 
 That filter and **Show AT Changes** belong to Proofread Mode for as long as it is on. Turning the mode on sets both to whatever you left them at the last time you proofread — the first time, that means **Show AT Changes** on and the filter on **All** — and turning the mode off puts them back exactly as they were before, so the tree you were tagging in is waiting where you left it.
 
