@@ -60,7 +60,7 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 //
 // The filters split into two shapes, listed in NESTED_FILTERS /
 // STOP_AT_MATCH_FILTERS in tree-view.js.
-// "Headings", "Flagged", "Alt Missing" and "Empty" swap the nested tree for
+// "Headings", "Flagged", "Flagged **", "Alt Missing" and "Empty" swap the nested tree for
 // a flat, document-order list of just the matching tags (for Headings, any
 // level counts, ignoring how deep they're nested) - handy for skimming an
 // outline, or working down a list of tags needing attention, without wading
@@ -74,11 +74,13 @@ import { adjustWalkSpeed, startWalking, stopWalking } from './walk.js';
 // (rendered via renderTreeNode, same as the unfiltered tree). A match
 // nested inside another match of the same filter isn't listed again at the
 // top level; it just shows up as part of its parent's subtree.
-// The three "needs attention" filters are views over what the tree already
+// The four "needs attention" filters are views over what the tree already
 // draws as badges rather than new judgements of their own: "Flagged" lists
-// the tags carrying an AI-fix or AT-change badge, "Alt Missing" the ones
-// carrying a "no alt text" badge, and "Empty" the tags holding no page
-// content at all (which get no badge, having nothing to show one against).
+// the tags carrying an AI-fix or AT-change badge, "Flagged **" the subset of
+// those whose badge wears two asterisks (the words changed, not just the
+// white space), "Alt Missing" the ones carrying a "no alt text" badge, and
+// "Empty" the tags holding no page content at all (which get no badge,
+// having nothing to show one against).
 // Up/down arrow navigation keeps working unchanged, since it just walks
 // whatever `.tree-row.selectable` rows are currently in the DOM.
 

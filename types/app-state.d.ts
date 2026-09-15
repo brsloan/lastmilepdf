@@ -275,7 +275,7 @@ export interface AppState {
   /** Fixed point shift+click range-selects from. */
   artifactAnchorId: string | null;
   /** Which tags the tree shows - see renderFilteredTree(). */
-  filter: 'all' | 'headings' | 'figures' | 'lists' | 'table' | 'alt-missing' | 'empty' | 'flagged';
+  filter: 'all' | 'headings' | 'figures' | 'lists' | 'table' | 'alt-missing' | 'empty' | 'flagged' | 'flagged-substantive';
   /** nodeId -> explicit user toggle; absence means the role-based default. */
   collapseOverrides: Map<string, boolean>;
   /** The stored Appearance preference, which is why 'auto' is in here. The

@@ -23,7 +23,7 @@ A dotted red line marks where one page of the PDF ends and the next begins — b
 
 The dropdown beside the Tag Tree tab filters the tree to **Figures**, **Headings**, **Lists**, or **Tables** tags, or back to **All**. This is a view filter only — it doesn't change the document.
 
-Three further filters narrow the tree to tags worth a second look. **Alt Missing** shows the Figure and Formula tags with no alt text. **Flagged** shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or — once Tools > Show AT Changes has swept the document — Actual Text that no longer matches the content underneath. **Empty** shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.
+Four further filters narrow the tree to tags worth a second look. **Alt Missing** shows the Figure and Formula tags with no alt text. **Flagged** shows the tags carrying a badge in the tree: an AI fix already applied to their Actual Text, or — once Tools > Show AT Changes has swept the document — Actual Text that no longer matches the content underneath. **Flagged **** is that same list narrowed to the ****** badges, where the words themselves differ, leaving out the ***** rows whose only change was white space. **Empty** shows tags with no page content anywhere inside them, which are usually leftovers to delete; when empty tags are nested inside one another, only the outermost is listed.
 
 Figures, Lists and Tables keep each match's own contents browsable underneath it. The rest are flat lists, one row per match in page order, so there is nothing to expand and tags can't be dragged into a new place while one is on.
 

@@ -268,6 +268,7 @@ const STOP_AT_MATCH_FILTERS = new Set(['figures', 'table', 'lists', 'empty']);
 // produces half of those flags hasn't been run.
 const FILTER_EMPTY_MESSAGES = {
   flagged: 'No flagged tags. AI fixes appear here as they are applied; Actual Text changes only after Tools > Show AT Changes has swept the document.',
+  'flagged-substantive': 'No tags flagged ** - nothing here changed more than white space. Switch to Flagged for the * rows too; Actual Text changes only appear after Tools > Show AT Changes has swept the document.',
   'alt-missing': 'No Figure or Formula tags are missing alt text.',
   empty: 'No empty tags.',
 };
@@ -344,9 +345,18 @@ function nodeMatchesFilter(node) {
   // matches the content underneath it. atChangeFlags is emptied when the
   // toggle goes off, so the showAtChanges check is belt-and-braces - it's
   // there because the badge does the same, and the two should read alike.
-  if (state.filter === 'flagged') {
-    return state.aiProposals.has(node.id)
-      || (state.showAtChanges && state.atChangeFlags.has(node.id));
+  // 'flagged-substantive' is the same list narrowed to the ** badges, the
+  // ones where the words themselves differ - so a sweep that flagged a
+  // hundred tags can be worked through starting with the changes that
+  // aren't just white space. It reads the tag's own badge the way
+  // appendElementChipAndFlag() draws it, AI fix first, rather than taking
+  // whichever of the two happens to be the more severe: a row showing AI*
+  // must not turn up under a ** filter.
+  if (state.filter === 'flagged' || state.filter === 'flagged-substantive') {
+    const proposal = state.aiProposals.get(node.id)
+      || (state.showAtChanges ? state.atChangeFlags.get(node.id) : undefined);
+    if (!proposal) return false;
+    return state.filter === 'flagged' || proposalSeverity(proposal) === 2;
   }
   if (state.filter === 'empty') return emptyNodeIds.has(node.id);
   return true;
