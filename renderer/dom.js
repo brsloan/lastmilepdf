@@ -160,6 +160,7 @@ export const el = {
   agentLockDialog: asDialog('agent-lock-dialog'),
   agentLockDescription: asElement('agent-lock-description'),
   btnAgentStop: asButton('btn-agent-stop'),
+  btnShowAgentChanges: asButton('btn-show-agent-changes'),
   preferencesAgentJson: asTextarea('preferences-agent-json'),
   btnCopyAgentJson: asButton('btn-copy-agent-json'),
   btnSaveApiKey: asButton('btn-save-api-key'),

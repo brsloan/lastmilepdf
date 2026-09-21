@@ -146,7 +146,7 @@ async function runTests() {
       const names = tools.map((t) => t.name).sort();
       const expected = ['apply_tag_action', 'begin_editing', 'delete_nodes', 'end_editing', 'find_nodes', 'flatten_all',
         'get_app_status', 'get_nodes', 'get_page_image', 'get_tree_summary', 'get_view', 'go_to_page', 'move_nodes',
-        'scope_tables', 'screenshot_window', 'select_nodes', 'undo_last', 'update_nodes', 'verify_document'];
+        'scope_tables', 'screenshot_window', 'select_nodes', 'undo_session_edits', 'update_nodes', 'verify_document'];
       assertEqual(names.join(), expected.join(), 'the tool list has changed - update this test if that was meant');
       for (const tool of tools) assert(tool.description, `${tool.name} has no description`);
       await client.close();

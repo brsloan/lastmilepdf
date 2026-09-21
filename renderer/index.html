@@ -286,6 +286,10 @@
   <footer class="statusbar" id="status-bar">
     <span class="statusbar-mark" aria-hidden="true">/&gt;</span>
     <span id="status-bar-text">Ready.</span>
+    <!-- Offered after one of Claude's editing sessions - see offerChanges() in
+         agent.js. Names what it does in full because the status text beside it
+         moves on to other things while it stays. -->
+    <button type="button" id="btn-show-agent-changes" class="statusbar-action" hidden></button>
   </footer>
 
   <dialog id="table-preview-dialog" class="table-preview-dialog table-editor-dialog">

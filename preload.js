@@ -702,6 +702,14 @@ const api = {
    * @param {boolean} locked
    */
   setMenuLocked: (locked) => { menuLocked = locked === true; },
+  /**
+   * Makes every edit from now until it is cleared one undo step - Claude's
+   * editing session. Sent on the same ordered channel as the edits
+   * themselves, so an edit issued before this call is never grouped and one
+   * issued after it always is.
+   * @param {string | null} token null ends the group.
+   */
+  setUndoGroup: (token) => ipcRenderer.send('agent:set-undo-group', token),
   /** Called when a menu command was held back, so the renderer can say why nothing happened.
    * @param {() => void} callback */
   onMenuBlocked: (callback) => { menuBlockedCallback = callback; },

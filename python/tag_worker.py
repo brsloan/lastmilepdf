@@ -73,6 +73,12 @@ Scope / known limitations (read this before extending):
     edit - acceptable given every edit already rebuilds the whole tree, but
     worth knowing if this ever needs to scale to very large PDFs edited
     rapidly. `MAX_UNDO_DEPTH` bounds how many snapshots we hold onto.
+  - A request may carry an `undoGroup` token, and consecutive mutations
+    carrying the same one share a single snapshot - the state before the first
+    of them - so the whole run is one undo step. That is how an editing
+    session driven by Claude (see lib/agent-server.js) undoes with one Ctrl+Z
+    however many edits it made, and it is also what keeps such a run fast:
+    the snapshot is the expensive part of an edit. See _push_undo_snapshot().
 """
 
 import base64
@@ -100,6 +106,12 @@ sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
 MAX_UNDO_DEPTH = 50
+
+# The `undoGroup` of the request being handled right now, or None. Set by
+# main() around each dispatch rather than passed down, because
+# _push_undo_snapshot() is called from some forty mutations and none of them
+# should have to know grouping exists.
+_current_undo_group = None
 
 try:
     import pikepdf
@@ -2229,7 +2241,20 @@ def _push_undo_snapshot(doc):
 
     The content generation is stored with the bytes so undo can tell whether
     stepping back to them changes what the page paints, and hand the
-    renderer fresh bytes only when it does."""
+    renderer fresh bytes only when it does.
+
+    Grouping: when this request carries the same `undoGroup` token as the
+    request that pushed the snapshot now on top of the stack, that snapshot
+    already *is* the state before this run of edits, so nothing is pushed.
+    Deliberately stateless beyond remembering that one token - there is no
+    "begin"/"end" for a caller to leave open, so a session that dies
+    half-way can't go on swallowing the user's later edits into its step:
+    theirs carry no token, and a token that doesn't match always snapshots."""
+    group = _current_undo_group
+    if group is not None and doc.get("undo_group") == group and doc["undo_stack"]:
+        doc["redo_stack"].clear()
+        return
+    doc["undo_group"] = group
     doc["undo_stack"].append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
     if len(doc["undo_stack"]) > MAX_UNDO_DEPTH:
         doc["undo_stack"].pop(0)
@@ -5622,6 +5647,10 @@ def _step_history(doc_id, from_stack, to_stack):
     MCIDs then name different text than the restored tree does, so leaves
     come up empty and highlights land nowhere."""
     doc = documents[doc_id]
+    # Whatever is on top of the undo stack after this, it is no longer "the
+    # state before the current group's edits" - so a grouped edit that
+    # follows an undo has to snapshot afresh rather than ride on it.
+    doc["undo_group"] = None
     to_stack.append((_snapshot_bytes(doc["pdf"]), doc["content_gen"]))
     restored_bytes, restored_gen = from_stack.pop()
     doc["pdf"].close()
@@ -5761,6 +5790,7 @@ def _send(message):
 
 
 def main():
+    global _current_undo_group
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -5774,6 +5804,7 @@ def main():
 
         req_id = request.get("id")
         cmd = request.get("cmd")
+        _current_undo_group = request.get("undoGroup")
         try:
             if cmd == "open":
                 result = open_document(request["path"])

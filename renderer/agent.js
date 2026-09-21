@@ -413,24 +413,30 @@ const handlers = {
     }
     requireIdle('start editing');
     // Whatever the user had half-typed into the properties pane is theirs:
-    // commit it before the lock takes the field away from them.
+    // commit it before the lock takes the field away from them - and before
+    // the session's undo group opens, or their edit would become part of
+    // Claude's step and be taken back with it. Blurring fires the field's own
+    // 'change' commit now rather than when the session bar steals focus; its
+    // request goes out ahead of setUndoGroup()'s on the same ordered channel.
+    const focused = /** @type {HTMLElement | null} */ (document.activeElement);
+    if (focused && focused !== document.body) focused.blur();
     await flushPendingLiveApply();
     openSession(clip(description, 200));
     return {
       editing: true,
-      note: `The user's input is locked until you call end_editing, so don't hold the session open while you think or talk - begin, make the edits, end. It ends by itself after ${SESSION_IDLE_TIMEOUT_MS / 1000}s without a call from you.`,
+      note: `The user's input is locked until you call end_editing, so don't hold the session open while you think or talk - begin, make the edits, end. It ends by itself after ${SESSION_IDLE_TIMEOUT_MS / 1000}s without a call from you. Everything you change in this session is ONE undo step for the user.`,
     };
   },
 
   /** @param {{ summary?: string }} [params] */
   async endEditing({ summary } = {}) {
     if (!session) return { editing: false, note: 'No editing session was open.' };
-    const { editCount } = session;
+    const { editCount, touched, deletedCount } = session;
     const what = summary ? `Claude finished: ${clip(summary, 200).replace(/\.$/, '')}.` : 'Claude finished.';
     closeSession(editCount > 0
-      ? `${what} Ctrl+Z undoes its ${editCount === 1 ? 'edit' : `${editCount} edits, one at a time`}.`
+      ? `${what} ${UNDO_HINT}`
       : 'Claude finished without changing anything.');
-    return { editing: false, editCount, unsavedChanges: state.dirty };
+    return { editing: false, editCount, tagsChanged: touched.length, tagsDeleted: deletedCount, unsavedChanges: state.dirty };
   },
 
   /** @param {{ revision: number, updates: { nodeIds: string[], changes: Record<string, string> }[] }} params */
@@ -450,9 +456,10 @@ const handlers = {
       await commitEdit(current, await window.api.updateNodes(state.docId, nodeIds, changes));
       touched.push(...nodeIds);
     }
+    noteTouched(current, touched);
     showResult(touched);
     // Attribute changes never reshape the tree, so no id moved.
-    return { updated: touched.length, undoSteps: updates.length, idsUnchanged: true };
+    return { updated: touched.length, idsUnchanged: true };
   },
 
   /** @param {{ revision: number, nodeIds: string[], action: string }} params */
@@ -478,6 +485,8 @@ const handlers = {
     // "did the tree get replaced" is the only reliable sign one worked.
     if (state.tree === treeBefore) throw new Error(`Nothing changed. The app said: "${message}"`);
     current.editCount += 1;
+    // The app leaves its selection on whatever the action produced.
+    noteTouched(current, Array.from(state.selectedNodeIds));
     return { message, ...idReport(before, earliest), nowSelected: await selectedRows() };
   },
 
@@ -496,7 +505,11 @@ const handlers = {
     const ordered = [...nodeIds].sort((a, b) => before.index.get(a) - before.index.get(b));
     const slot = (parent.children || [])[index];
     const earliest = Math.min(earliestIndex(before, ordered), slot ? before.index.get(slot.id) : before.index.get(newParentId));
+    // Taken before the move: afterwards these ids may name other tags, but
+    // the content under them is the same content wherever it lands.
+    const keys = contentKeysFor(ordered);
     await commitEdit(current, await window.api.reorderMany(state.docId, ordered, newParentId, index));
+    current.touched.push(...keys);
     closeDetails();
     return { moved: ordered.length, ...idReport(before, earliest) };
   },
@@ -517,6 +530,7 @@ const handlers = {
     const before = shapeOf(state.tree);
     const earliest = earliestIndex(before, topLevel);
     await commitEdit(current, await window.api.deleteNodes(state.docId, topLevel));
+    current.deletedCount += topLevel.length;
     closeDetails();
     return { deleted: topLevel.length, ...idReport(before, earliest) };
   },
@@ -529,17 +543,22 @@ const handlers = {
     return runWholeDocumentAction(requireSession(), runScopeTables);
   },
 
-  async undoLast() {
+  async undoSessionEdits() {
     const current = requireSession();
     // Only ever Claude's own work: with none of its edits on the stack, the
-    // top of it is something the user did.
-    if (current.editCount === 0) throw new Error('You have made no edits in this session, so there is nothing of yours to undo.');
+    // top of it is something the user did. And all of its work, not the last
+    // piece - a session is one undo step (see the undo group below), so there
+    // is no smaller unit to step back by.
+    if (current.editCount === 0) throw new Error('You have changed nothing in this session, so there is nothing of yours to undo.');
     if (!state.canUndo) throw new Error('There is nothing to undo.');
     const treeBefore = state.tree;
     await performUndo();
     if (state.tree === treeBefore) throw new Error(`Undo did not go through. The app said: "${el.statusBar.textContent.trim()}"`);
-    current.editCount -= 1;
-    return { undone: true, yourEditsLeftToUndo: current.editCount, note: 'Tag ids may have changed - re-read before editing further.' };
+    const undone = current.editCount;
+    current.editCount = 0;
+    current.touched = [];
+    current.deletedCount = 0;
+    return { undone, note: 'The document is back to how it was when this session began, and the session is still open. Tag ids may have changed - re-read before editing further.' };
   },
 };
 
@@ -562,15 +581,29 @@ const handlers = {
 // A session that goes quiet ends itself. Claude can crash, be interrupted, or
 // simply forget end_editing, and none of those may leave the user locked out
 // of their own document.
+//
+// A session is also one undo step. For its duration every request to the
+// worker carries the session's token (main.js adds it - see setUndoGroup() in
+// preload.js), and the worker snapshots once for the lot: "fix these thirty
+// tables" is one Ctrl+Z, not thirty, and thirty fewer full copies of the PDF.
 
 const SESSION_IDLE_TIMEOUT_MS = 120000;
 
-/** @type {{ editCount: number, idleTimer: ReturnType<typeof setTimeout> | null } | null} */
+const UNDO_HINT = 'One Ctrl+Z undoes all of it.';
+
+/**
+ * @typedef {{ page: number, mcid: number, role: string | null }} ContentKey
+ * @type {{ editCount: number, touched: ContentKey[], deletedCount: number, idleTimer: ReturnType<typeof setTimeout> | null } | null}
+ */
 let session = null;
 let stoppedByUser = false;
+let sessionCounter = 0;
 
 function openSession(description) {
-  session = { editCount: 0, idleTimer: null };
+  session = { editCount: 0, touched: [], deletedCount: 0, idleTimer: null };
+  sessionCounter += 1;
+  hideChangesButton();
+  window.api.setUndoGroup(`claude-${Date.now()}-${sessionCounter}`);
   touchSession();
   el.agentLockDescription.textContent = description || '';
   window.api.setMenuLocked(true);
@@ -582,10 +615,13 @@ function openSession(description) {
 function closeSession(statusMessage) {
   if (!session) return;
   if (session.idleTimer) clearTimeout(session.idleTimer);
+  const { touched } = session;
   session = null;
+  window.api.setUndoGroup(null);
   window.api.setMenuLocked(false);
   el.agentLockDialog.close();
   setStatus(statusMessage);
+  offerChanges(touched);
 }
 
 /** Any call from Claude counts as a sign of life, reads included. */
@@ -593,7 +629,8 @@ function touchSession() {
   if (!session) return;
   if (session.idleTimer) clearTimeout(session.idleTimer);
   session.idleTimer = setTimeout(() => {
-    closeSession('Claude went quiet, so its editing session was ended. Your controls are back.');
+    const count = session ? session.editCount : 0;
+    closeSession(`Claude went quiet, so its editing session was ended. Your controls are back.${count > 0 ? ` ${UNDO_HINT}` : ''}`);
   }, SESSION_IDLE_TIMEOUT_MS);
 }
 
@@ -602,7 +639,7 @@ function stopSessionByUser() {
   const { editCount } = session;
   stoppedByUser = true;
   closeSession(editCount > 0
-    ? `Stopped Claude after ${editCount} edit${editCount === 1 ? '' : 's'}. Ctrl+Z undoes ${editCount === 1 ? 'it' : 'them, one at a time'}.`
+    ? `Stopped Claude after ${editCount} edit${editCount === 1 ? '' : 's'}. ${UNDO_HINT}`
     : 'Stopped Claude before it changed anything.');
 }
 
@@ -642,6 +679,112 @@ async function selectedRows() {
     if (entry) rows.push(await nodeRow(entry.node));
   }
   return rows;
+}
+
+// --- what Claude changed -----------------------------------------------------
+//
+// After a session the status bar offers to select every tag it touched, so a
+// batch can be reviewed rather than taken on trust. Ids are no use for
+// remembering them - the session's own later edits renumber them - so a tag
+// is remembered by the first piece of page content under it, which keeps its
+// (page, mcid) wherever the tag around it goes, plus the role it was left
+// with. Resolved only when asked for, against the tree as it is then - so the
+// offer stays good while the user goes on editing, and after an undo it shows
+// where the changes *were*. Tags with no content under them can't be
+// remembered this way and are left out; deleted ones are gone by definition.
+
+/** @type {{ docId: string, keys: ContentKey[] } | null} */
+let lastChanges = null;
+
+function firstContentLeaf(node) {
+  for (const child of node.children || []) {
+    if (child.type === 'content' && child.mcid !== null && child.mcid !== undefined
+        && child.page !== null && child.page !== undefined) return child;
+    const below = firstContentLeaf(child);
+    if (below) return below;
+  }
+  return null;
+}
+
+/** @returns {ContentKey[]} */
+function contentKeysFor(nodeIds) {
+  const keys = [];
+  for (const id of nodeIds) {
+    const node = state.nodesById.get(id)?.node;
+    const leaf = node && node.type === 'element' ? firstContentLeaf(node) : null;
+    if (leaf) keys.push({ page: leaf.page, mcid: leaf.mcid, role: node.role });
+  }
+  return keys;
+}
+
+function noteTouched(current, nodeIds) {
+  current.touched.push(...contentKeysFor(nodeIds));
+}
+
+/** The ids those keys name in the tree as it is now, in the order recorded, without repeats. */
+function resolveContentKeys(keys) {
+  const ids = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const ownerId = state.mcidIndex.get(key.page)?.get(key.mcid);
+    if (!ownerId) continue;
+    // The tag that was touched is the content's owner or something above it
+    // (a Table, for its first cell's text): climb to the nearest tag with the
+    // role it was left with, and settle for the owner if there isn't one.
+    let match = ownerId;
+    let cur = ownerId;
+    while (cur && cur !== 'root') {
+      const entry = state.nodesById.get(cur);
+      if (!entry) break;
+      if (entry.node.role === key.role) {
+        match = cur;
+        break;
+      }
+      cur = entry.parentId;
+    }
+    if (!seen.has(match) && match !== state.hiddenDocumentId) {
+      seen.add(match);
+      ids.push(match);
+    }
+  }
+  return ids;
+}
+
+function hideChangesButton() {
+  lastChanges = null;
+  el.btnShowAgentChanges.hidden = true;
+}
+
+function offerChanges(keys) {
+  const count = state.docId ? resolveContentKeys(keys).length : 0;
+  if (count === 0) {
+    hideChangesButton();
+    return;
+  }
+  lastChanges = { docId: state.docId, keys };
+  el.btnShowAgentChanges.textContent = `Show the ${count === 1 ? 'tag' : `${count} tags`} Claude changed`;
+  el.btnShowAgentChanges.hidden = false;
+}
+
+function showLastChanges() {
+  if (!lastChanges || lastChanges.docId !== state.docId) {
+    hideChangesButton();
+    return;
+  }
+  const reason = busyReason();
+  if (reason) {
+    setStatus(`Can't change the selection while ${reason}.`);
+    return;
+  }
+  const ids = resolveContentKeys(lastChanges.keys);
+  if (ids.length === 0) {
+    hideChangesButton();
+    setStatus('The tags Claude changed are no longer in the document.');
+    return;
+  }
+  if (ids.length === 1) selectNode(ids[0]);
+  else selectNodes(ids);
+  setStatus(`Selected the ${ids.length === 1 ? 'tag' : `${ids.length} tags`} Claude changed.`);
 }
 
 /** Flatten All and Scope Tables: no targets, a message back, and maybe no change at all. */
@@ -753,6 +896,7 @@ function syncRevision(earliestTouched) {
   if (!tracked || tracked.docId !== state.docId) {
     // A different document: nothing read before it means anything now.
     recordRenumbering(0);
+    if (lastChanges && lastChanges.docId !== state.docId) hideChangesButton();
   } else {
     const diff = firstDifference(tracked.shape, shape);
     if (diff !== null) {
@@ -857,6 +1001,7 @@ export function initAgentBridge() {
   window.api.onAgentRequest((_event, request) => { handleRequest(request); });
 
   el.btnAgentStop.addEventListener('click', stopSessionByUser);
+  el.btnShowAgentChanges.addEventListener('click', showLastChanges);
   // Escape on a modal dialog fires 'cancel' and then closes it. Closing the
   // bar without ending the session would leave the menu locked and Claude
   // still editing behind an unlocked window, so Escape means Stop.

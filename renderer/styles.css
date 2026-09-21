@@ -2980,6 +2980,28 @@ body.busy-cursor * {
   color: var(--text-dim);
 }
 
+/* The status bar's one control: "Show the N tags Claude changed". Pushed to
+   the far end so the message keeps the left, and drawn as a text link rather
+   than a .btn, which at this size would be taller than the bar it sits in. */
+.statusbar-action {
+  margin-left: auto;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.statusbar-action:hover {
+  color: var(--accent-strong);
+}
+
+.statusbar-action[hidden] {
+  display: none;
+}
+
 /* --- Claude editing session bar ---
    The modal that locks input while Claude edits (see #agent-lock-dialog in
    index.html). Pinned just above the status bar and kept to one line, with a

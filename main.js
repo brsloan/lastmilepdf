@@ -94,6 +94,13 @@ const WORKER_COMMAND = app.isPackaged
 
 let workerProcess = null;
 let requestCounter = 0;
+
+// The undo-group token of Claude's open editing session, or null - set and
+// cleared by the renderer (see 'agent:set-undo-group' below, and openSession()
+// / closeSession() in renderer/agent.js). Safe to leave set by accident only
+// in the sense that matters: the user's input is locked for exactly as long
+// as it is set, and a reloaded window clears it.
+let activeUndoGroup = null;
 const pendingRequests = new Map(); // id -> { resolve, reject }
 
 // Set when the worker reports an error with no id to match against a
@@ -204,7 +211,13 @@ function callWorker(cmd, params = {}) {
   const id = ++requestCounter;
   return new Promise((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });
-    const payload = JSON.stringify({ id, cmd, ...params }) + '\n';
+    // While Claude has an editing session open, every request carries its
+    // token, and the worker folds the session's edits into one undo step
+    // (see _push_undo_snapshot() in tag_worker.py). Added here rather than at
+    // each of the forty-odd call sites because the session can reach any of
+    // them - its edits go through the same window.api methods the user's do.
+    const group = activeUndoGroup ? { undoGroup: activeUndoGroup } : {};
+    const payload = JSON.stringify({ id, cmd, ...params, ...group }) + '\n';
     workerProcess.stdin.write(payload, (err) => {
       if (err) {
         pendingRequests.delete(id);
@@ -880,6 +893,11 @@ function createWindow() {
     win.webContents.send('menu:save-and-close');
   });
 
+  // A page that (re)loads has no editing session, whatever the last one was
+  // doing - so a token left behind by a renderer that died mid-session can't
+  // go on grouping the user's edits.
+  win.webContents.on('did-start-loading', () => { activeUndoGroup = null; });
+
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
@@ -1359,6 +1377,10 @@ function agentConfig() {
     error: agentServerError,
   };
 }
+
+ipcMain.on('agent:set-undo-group', (_event, token) => {
+  activeUndoGroup = typeof token === 'string' && token ? token : null;
+});
 
 ipcMain.handle('agent:get-config', async () => agentConfig());
 ipcMain.handle('agent:set-enabled', async (_event, { value }) => {

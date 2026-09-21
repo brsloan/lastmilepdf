@@ -32,7 +32,18 @@ they summarise each release rather than record every change as it landed.
   at once, and a session that goes quiet for two minutes ends by itself.
   Claude can't start while you are in the middle of something - a dialog, a
   Select Content rectangle - and its edits go through the same paths as
-  yours, so each is an ordinary undo step: Ctrl+Z takes them back.
+  yours.
+- **One Ctrl+Z undoes a whole session of Claude's.** However many edits it
+  made between starting and finishing - thirty tables, a hundred alt texts -
+  they are a single step in the undo history, so taking its work back is one
+  keystroke rather than thirty, and your own edits before and after stay
+  separate steps. It is quicker too: the app copies the whole PDF before
+  every edit so that it can be undone, and a session now makes that copy
+  once.
+- **See what it changed.** When a session ends, the status bar offers "Show
+  the N tags Claude changed", which selects them all in the Tag Tree so a
+  batch can be checked rather than taken on trust. The offer stays good while
+  you carry on editing.
 - **It cannot reach your files.** Claude can't open or save anything;
   nothing it does reaches disk until you save. It is off until you turn it
   on.

@@ -2100,6 +2100,112 @@ async function artifactTests(fixture) {
 
 // --- error handling --------------------------------------------------------
 
+// Undo groups - requests carrying the same `undoGroup` token share one undo
+// snapshot (see _push_undo_snapshot() in tag_worker.py). This is what makes a
+// whole editing session by Claude a single Ctrl+Z. The failure modes worth
+// guarding are the quiet ones: a group that swallows an edit of the user's
+// into its step, and a group that, after an undo, rides on a snapshot that is
+// no longer the state before its edits.
+async function undoGroupTests(fixture) {
+  const altOf = (tree, id) => findById(tree, id)?.alt ?? null;
+
+  await test('edits sharing an undo group are one undo step', () => withDoc(fixture, async (doc) => {
+    const figures = byRole(doc.tree, 'Figure');
+    if (figures.length < 2) skip('fewer than two Figures in this fixture');
+    const [a, b] = figures;
+    const before = [altOf(doc.tree, a.id), altOf(doc.tree, b.id)];
+
+    await worker.call('update_node', { docId: doc.docId, nodeId: a.id, changes: { alt: 'grouped one' }, undoGroup: 'g1' });
+    await worker.call('update_node', { docId: doc.docId, nodeId: b.id, changes: { alt: 'grouped two' }, undoGroup: 'g1' });
+    const last = await worker.call('set_role_or_wrap', { docId: doc.docId, nodeIds: [a.id], role: 'Formula', undoGroup: 'g1' });
+    assertEqual(altOf(last.tree, b.id), 'grouped two', 'the grouped edits did not apply');
+
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assertEqual(altOf(undone.tree, a.id), before[0], 'one undo did not take back the first edit of the group');
+    assertEqual(altOf(undone.tree, b.id), before[1], 'one undo did not take back the second edit of the group');
+    assertEqual(findById(undone.tree, a.id)?.role, 'Figure', 'one undo did not take back the last edit of the group');
+    assertEqual(undone.canUndo, false, 'the group left more than one step on the undo stack');
+
+    const redone = await worker.call('redo', { docId: doc.docId });
+    assertEqual(altOf(redone.tree, b.id), 'grouped two', 'redo did not bring the whole group back');
+  }));
+
+  await test('an edit with no group is never folded into the group before it', () => withDoc(fixture, async (doc) => {
+    // The user's own edit, made right after Claude's session: it must be its
+    // own step, or their Ctrl+Z would take Claude's whole batch with it.
+    const figure = firstByRole(doc.tree, 'Figure');
+    if (!figure) skip('no Figure in this fixture');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'from the group' }, undoGroup: 'g2' });
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'from the user' } });
+
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assertEqual(altOf(undone.tree, figure.id), 'from the group', 'undoing the user\'s edit also undid the group\'s');
+    assert(undone.canUndo, 'the group\'s own step is gone');
+  }));
+
+  await test('a different group token starts a new undo step', () => withDoc(fixture, async (doc) => {
+    const figure = firstByRole(doc.tree, 'Figure');
+    if (!figure) skip('no Figure in this fixture');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'session one' }, undoGroup: 'g3' });
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'session two' }, undoGroup: 'g4' });
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assertEqual(altOf(undone.tree, figure.id), 'session one', 'two sessions were folded into one step');
+  }));
+
+  await test('a grouped edit after an undo snapshots afresh', () => withDoc(fixture, async (doc) => {
+    // Claude takes back its session so far, then carries on in the same
+    // session. The snapshot on top of the stack now belongs to whatever came
+    // before the session - riding on it would make the next Ctrl+Z skip back
+    // past the user's own earlier edit.
+    const figure = firstByRole(doc.tree, 'Figure');
+    if (!figure) skip('no Figure in this fixture');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'the user, earlier' } });
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'claude, first try' }, undoGroup: 'g5' });
+    await worker.call('undo', { docId: doc.docId });
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'claude, second try' }, undoGroup: 'g5' });
+
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assertEqual(altOf(undone.tree, figure.id), 'the user, earlier', 'the undo skipped past the user\'s earlier edit');
+  }));
+
+  await test('a grouped run survives save and reopen',() => withDoc(fixture, async (doc) => {
+    // Skipping snapshots must not skip anything else an edit does.
+    const figure = firstByRole(doc.tree, 'Figure');
+    const para = firstByRole(doc.tree, 'P');
+    if (!figure || !para) skip('needs a Figure and a P');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'kept' }, undoGroup: 'g6' });
+    await worker.call('update_node', { docId: doc.docId, nodeId: para.id, changes: { actualText: 'kept too' }, undoGroup: 'g6' });
+    await saveAndReopen(doc.docId, 'undo-group', (reopened) => {
+      assertEqual(altOf(reopened.tree, figure.id), 'kept', 'the first grouped edit did not reach the file');
+      assertEqual(findById(reopened.tree, para.id)?.actualText, 'kept too', 'the second grouped edit did not reach the file');
+    });
+  }));
+
+  await test('grouped edits are not drastically slower than ungrouped ones',() => withDoc(fixture, async (doc) => {
+    // Not a benchmark - the fixture is small - but the snapshot is a full
+    // serialization of the PDF, so the printed figures are worth a glance.
+    const figure = firstByRole(doc.tree, 'Figure');
+    if (!figure) skip('no Figure in this fixture');
+    const RUNS = 12;
+    const time = async (group) => {
+      const started = process.hrtime.bigint();
+      for (let i = 0; i < RUNS; i += 1) {
+        await worker.call('update_node', {
+          docId: doc.docId, nodeId: figure.id, changes: { alt: `timing ${group} ${i}` }, ...(group ? { undoGroup: group } : {}),
+        });
+      }
+      return Number(process.hrtime.bigint() - started) / 1e6;
+    };
+    const ungrouped = await time(null);
+    const grouped = await time('g7');
+    console.log(`        ${RUNS} edits: ${ungrouped.toFixed(0)}ms ungrouped, ${grouped.toFixed(0)}ms grouped`);
+    // Wide on purpose: that the snapshot is skipped is proved exactly by the
+    // "one undo step" test above, so this only has to catch grouping making
+    // things drastically worse, without failing a run on a busy machine.
+    assert(grouped < ungrouped * 1.5, `grouped edits took ${grouped.toFixed(0)}ms against ${ungrouped.toFixed(0)}ms ungrouped`);
+  }));
+}
+
 async function errorTests(fixture) {
   await test('rejects an unknown node id instead of corrupting the document',
     () => withDoc(fixture, async (doc) => {
@@ -2424,6 +2530,7 @@ async function main() {
       await bookmarkTests(fixture);
       await figureTextTests(fixture);
       await artifactTests(fixture);
+      await undoGroupTests(fixture);
       await errorTests(fixture);
     }
 
