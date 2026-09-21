@@ -2168,6 +2168,30 @@ async function undoGroupTests(fixture) {
     assertEqual(altOf(undone.tree, figure.id), 'the user, earlier', 'the undo skipped past the user\'s earlier edit');
   }));
 
+  await test('the worker says whose step the next undo would take back', () => withDoc(fixture, async (doc) => {
+    // What Claude's "undo my session" asks before it undoes anything: only a
+    // step pushed for its own token is its to take back.
+    const figure = firstByRole(doc.tree, 'Figure');
+    if (!figure) skip('no Figure in this fixture');
+    const owner = async () => (await worker.call('undo_owner', { docId: doc.docId })).undoGroup;
+
+    assertEqual(await owner(), null, 'an untouched document reported an owner');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'the user' } });
+    assertEqual(await owner(), null, 'the user\'s own edit was reported as a group\'s');
+    await worker.call('update_node', { docId: doc.docId, nodeId: figure.id, changes: { alt: 'claude' }, undoGroup: 'g8' });
+    assertEqual(await owner(), 'g8', 'the group\'s step was not reported as its own');
+    // A grouped command that changes nothing pushes nothing, and must not
+    // leave the step beneath it looking like the group's.
+    await worker.call('undo', { docId: doc.docId });
+    await worker.call('scope_tables', { docId: doc.docId, undoGroup: 'g9' }).catch(() => {});
+    const after = await owner();
+    assert(after === null || after === 'g9', `unexpected owner ${after}`);
+    if (after === null) {
+      const undone = await worker.call('undo', { docId: doc.docId });
+      assertEqual(altOf(undone.tree, figure.id), null, 'sanity: the user\'s step should still be there to undo');
+    }
+  }));
+
   await test('a grouped run survives save and reopen',() => withDoc(fixture, async (doc) => {
     // Skipping snapshots must not skip anything else an edit does.
     const figure = firstByRole(doc.tree, 'Figure');

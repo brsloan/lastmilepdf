@@ -328,6 +328,37 @@ async function runScriptStep(step) {
 }
 
 /**
+ * The saved scripts, read fresh from settings, and which one the Run Script
+ * button is assigned - for the Claude connection's list_scripts (agent.js).
+ * @returns {Promise<{ scripts: import('../types/domain').Script[], activeScriptId: string | null }>}
+ */
+export async function listSavedScripts() {
+  await loadScripts();
+  return { scripts, activeScriptId };
+}
+
+/**
+ * Runs a script's steps in order and returns what each one reported. Throws
+ * at the first step that fails, leaving the ones before it applied - the
+ * same behaviour the Run Script button has, because it is the same code:
+ * runActiveScript() below is this plus the button's own status line.
+ * @param {import('../types/domain').Script} script
+ * @param {(index: number, label: string) => void} [onStep] Called as each step starts.
+ * @returns {Promise<{ step: string, message: string }[]>}
+ */
+export async function runScriptSteps(script, onStep) {
+  const results = [];
+  for (let i = 0; i < script.steps.length; i++) {
+    const step = script.steps[i];
+    const def = ACTION_DEFS.find((d) => d.type === step.type);
+    const label = def ? def.label : step.type;
+    if (onStep) onStep(i, label);
+    results.push({ step: label, message: await runScriptStep(step) });
+  }
+  return results;
+}
+
+/**
  * Runs every step of the script assigned to the Run Script button, in
  * order, stopping at the first step that throws (a script step reuses the
  * exact same worker calls a toolbar button does, so a failure here - e.g.
@@ -358,12 +389,9 @@ export async function runActiveScript() {
   el.btnRunScript.disabled = true;
   document.body.classList.add('busy');
   try {
-    for (let i = 0; i < script.steps.length; i++) {
-      const step = script.steps[i];
-      const def = ACTION_DEFS.find((d) => d.type === step.type);
-      setStatus(`Running "${script.name}" - step ${i + 1}/${script.steps.length}: ${def ? def.label : step.type}…`);
-      await runScriptStep(step);
-    }
+    await runScriptSteps(script, (i, label) => {
+      setStatus(`Running "${script.name}" - step ${i + 1}/${script.steps.length}: ${label}…`);
+    });
     setStatus(`Script "${script.name}" finished (${script.steps.length} step${script.steps.length === 1 ? '' : 's'}).`);
   } catch (err) {
     reportError(`Script "${script.name}" stopped`, err);

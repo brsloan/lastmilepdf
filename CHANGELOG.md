@@ -24,8 +24,12 @@ they summarise each release rather than record every change as it landed.
   change roles, alt text, Actual Text, language and table-cell attributes;
   apply any of the tagging shortcuts (headings, paragraph, list, list item,
   block quotation, table, row, cells, figure, caption, join); move tags;
-  delete tags; and run Flatten and Scope Tables. "Fix this table and the
-  others like it" is the kind of request it is for.
+  delete tags; wrap loose page content in a new tag; and run Flatten, Scope
+  Tables, or any script you have saved under Tools > Scripts… - "run my
+  cleanup" works. (A script containing Fix All Actual Text (AI) is left for
+  you to run: it spends your AI credit.) "Fix this table and the others like
+  it" is the kind of request it is for. Help has a new section, Working with
+  Claude, covering all of it.
 - **You take turns, visibly.** While Claude edits, a "Claude is editing" bar
   says what it is doing and your own input is locked, so an edit of yours
   can't land in the middle of its batch. Stop (or Escape) takes control back

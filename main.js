@@ -1724,6 +1724,10 @@ ipcMain.handle('tags:make-block-quote', async (_event, { docId, nodeIds }) => {
   return callWorker('make_block_quote', { docId, nodeIds });
 });
 
+ipcMain.handle('tags:undo-owner', async (_event, { docId }) => {
+  return callWorker('undo_owner', { docId });
+});
+
 ipcMain.handle('tags:undo', async (_event, { docId }) => {
   return callWorker('undo', { docId });
 });

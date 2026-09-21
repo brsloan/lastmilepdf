@@ -20,8 +20,9 @@ import { closeDetails, flushPendingLiveApply } from './details.js';
 import { el } from './dom.js';
 import { applyTagShortcutAction, performUndo } from './editing.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
-import { collectTargetMcids, getPageTextContent, hasDirectContentLeaf, pullContentText, pullDirectContentText } from './page-content.js';
+import { collectTargetMcids, getPageMcidTextMap, getPageTextContent, hasDirectContentLeaf, pullContentText, pullDirectContentText } from './page-content.js';
 import { cropNodeImages, renderRegionToPng } from './page-crop.js';
+import { ACTION_DEFS, listSavedScripts, runScriptSteps } from './scripts.js';
 import { TAG_SHORTCUT_ACTIONS, state } from './state.js';
 import { isDescendant, walkTree } from './tree-index.js';
 import { applyFreshTree, computeEmptyNodeIds, selectNode, selectNodes } from './tree-view.js';
@@ -229,8 +230,8 @@ const handlers = {
     };
   },
 
-  /** @param {{ nodeId?: string, depth?: number, maxNodes?: number, includeText?: boolean }} [params] */
-  async getNodes({ nodeId, depth = 3, maxNodes = 300, includeText = true } = {}) {
+  /** @param {{ nodeId?: string, depth?: number, maxNodes?: number, includeText?: boolean, includeLeaves?: boolean }} [params] */
+  async getNodes({ nodeId, depth = 3, maxNodes = 300, includeText = true, includeLeaves = false } = {}) {
     requireTree();
     const start = nodeId ? requireNode(nodeId).node : state.tree;
     let budget = maxNodes;
@@ -247,6 +248,25 @@ const handlers = {
       const elementKids = kids.filter((k) => k.type !== 'content');
       const leafCount = kids.length - elementKids.length;
       if (leafCount > 0) out.contentLeaves = leafCount;
+      // ...unless asked for, which is what wrap_content needs: the leaves'
+      // own ids, each with the text it paints, in the order they sit among
+      // this tag's children (`position`, since they are listed apart from
+      // the child tags they may be interleaved with).
+      if (includeLeaves && leafCount > 0) {
+        out.leaves = [];
+        for (let position = 0; position < kids.length; position += 1) {
+          const kid = kids[position];
+          if (kid.type !== 'content') continue;
+          budget -= 1;
+          /** @type {Record<string, any>} */
+          const leaf = { id: kid.id, position, page: pageOf(kid), mcid: kid.mcid ?? null };
+          if (includeText && kid.page !== null && kid.page !== undefined && kid.mcid !== null && kid.mcid !== undefined) {
+            const text = clip((await getPageMcidTextMap(kid.page + 1)).get(kid.mcid), SNIPPET_CHARS);
+            if (text) leaf.text = text;
+          }
+          out.leaves.push(leaf);
+        }
+      }
       if (includeText && node.type === 'element' && hasDirectContentLeaf(node)) {
         const text = clip(await pullDirectContentText(node.id), NODE_TEXT_CHARS);
         if (text) out.text = text;
@@ -535,6 +555,82 @@ const handlers = {
     return { deleted: topLevel.length, ...idReport(before, earliest) };
   },
 
+  /** @param {{ revision: number, leafIds: string[], role: string }} params */
+  async wrapContent({ revision: readAt, leafIds, role }) {
+    const current = requireSession();
+    requireFreshIds(readAt, leafIds);
+    // A list needs to know where each item starts and a table needs a grid -
+    // the app gets both from a rectangle drawn on the page, which Claude
+    // can't draw. Wrapping as paragraphs and grouping those is the same
+    // result by a route that needs neither.
+    if (role === 'L' || role === 'Table') {
+      throw new Error(`wrap_content can't build a ${role} directly. Wrap each item's or cell's content as P (or TD/TH) first, then group those with apply_tag_action ("list", or "tr" then "table").`);
+    }
+    for (const id of leafIds) {
+      const { node } = requireNode(id);
+      if (node.type !== 'content') throw new Error(`${id} is a ${node.type === 'element' ? `${node.role} tag` : node.type}, not a content leaf. To change a tag's role use update_nodes; get leaf ids from get_nodes with includeLeaves.`);
+    }
+    const before = shapeOf(state.tree);
+    const earliest = earliestIndex(before, leafIds);
+    const result = await window.api.wrapLeaves(state.docId, leafIds, role);
+    await commitEdit(current, result);
+    noteTouched(current, [result.newNodeId]);
+    showResult([result.newNodeId]);
+    return {
+      newNodeId: result.newNodeId,
+      // True when the leaves were the whole content of one tag, which was
+      // relabelled in place (keeping its alt text and so on) instead.
+      relabelledExistingTag: result.relabelled,
+      emptiedTagsRemoved: result.removedTagCount,
+      ...idReport(before, earliest),
+    };
+  },
+
+  async listScripts() {
+    const { scripts, activeScriptId } = await listSavedScripts();
+    return {
+      scripts: scripts.map((script) => ({
+        name: script.name,
+        assignedToRunScriptButton: script.id === activeScriptId,
+        runnableByClaude: !script.steps.some((step) => step.type === AI_STEP),
+        steps: script.steps.map((step) => describeScriptStep(step)),
+      })),
+      note: scripts.length === 0 ? 'The user has not saved any scripts (Tools > Scripts… in the app).' : undefined,
+    };
+  },
+
+  /** @param {{ name: string }} params */
+  async runScript({ name }) {
+    const current = requireSession();
+    const { scripts } = await listSavedScripts();
+    const wanted = name.trim().toLowerCase();
+    const script = scripts.find((s) => s.name.trim().toLowerCase() === wanted);
+    if (!script) {
+      throw new Error(`No saved script is called "${name}". The user's scripts: ${scripts.map((s) => `"${s.name}"`).join(', ') || 'none'}.`);
+    }
+    if (script.steps.length === 0) throw new Error(`Script "${script.name}" has no steps.`);
+    // That step sends the whole document's text to the AI provider on the
+    // user's own key and runs for minutes - their money and their wait, so
+    // theirs to start. It would also outlast the session's idle timeout.
+    if (script.steps.some((step) => step.type === AI_STEP)) {
+      throw new Error(`Script "${script.name}" includes Fix All Actual Text (AI), which spends the user's AI credit and can run for minutes. Ask them to run it themselves with the Run Script button.`);
+    }
+    const before = shapeOf(state.tree);
+    const treeBefore = state.tree;
+    let results;
+    try {
+      results = await runScriptSteps(script, (i, label) => {
+        setStatus(`Claude is running "${script.name}" - step ${i + 1}/${script.steps.length}: ${label}…`);
+      });
+    } finally {
+      // Counted even when a later step failed: the steps before it were
+      // applied, and they are part of this session's undo step.
+      if (state.tree !== treeBefore) current.editCount += 1;
+    }
+    closeDetails();
+    return { script: script.name, steps: results, ...idReport(before, 0) };
+  },
+
   async flattenAll() {
     return runWholeDocumentAction(requireSession(), runFlattenAll);
   },
@@ -545,12 +641,14 @@ const handlers = {
 
   async undoSessionEdits() {
     const current = requireSession();
-    // Only ever Claude's own work: with none of its edits on the stack, the
-    // top of it is something the user did. And all of its work, not the last
+    // Only ever Claude's own work, and the worker is asked rather than the
+    // edit count trusted: not everything counted here pushes an undo step (a
+    // Scope Tables that found nothing doesn't), and being wrong by one would
+    // take back something the user did. All of its work, too, not the last
     // piece - a session is one undo step (see the undo group below), so there
     // is no smaller unit to step back by.
-    if (current.editCount === 0) throw new Error('You have changed nothing in this session, so there is nothing of yours to undo.');
-    if (!state.canUndo) throw new Error('There is nothing to undo.');
+    const { undoGroup } = await window.api.getUndoOwner(state.docId);
+    if (undoGroup !== current.token) throw new Error('You have changed nothing in this session, so there is nothing of yours to undo.');
     const treeBefore = state.tree;
     await performUndo();
     if (state.tree === treeBefore) throw new Error(`Undo did not go through. The app said: "${el.statusBar.textContent.trim()}"`);
@@ -593,17 +691,17 @@ const UNDO_HINT = 'One Ctrl+Z undoes all of it.';
 
 /**
  * @typedef {{ page: number, mcid: number, role: string | null }} ContentKey
- * @type {{ editCount: number, touched: ContentKey[], deletedCount: number, idleTimer: ReturnType<typeof setTimeout> | null } | null}
+ * @type {{ token: string, editCount: number, touched: ContentKey[], deletedCount: number, idleTimer: ReturnType<typeof setTimeout> | null } | null}
  */
 let session = null;
 let stoppedByUser = false;
 let sessionCounter = 0;
 
 function openSession(description) {
-  session = { editCount: 0, touched: [], deletedCount: 0, idleTimer: null };
   sessionCounter += 1;
+  session = { token: `claude-${Date.now()}-${sessionCounter}`, editCount: 0, touched: [], deletedCount: 0, idleTimer: null };
   hideChangesButton();
-  window.api.setUndoGroup(`claude-${Date.now()}-${sessionCounter}`);
+  window.api.setUndoGroup(session.token);
   touchSession();
   el.agentLockDescription.textContent = description || '';
   window.api.setMenuLocked(true);
@@ -787,6 +885,18 @@ function showLastChanges() {
   setStatus(`Selected the ${ids.length === 1 ? 'tag' : `${ids.length} tags`} Claude changed.`);
 }
 
+// --- the user's saved scripts ---------------------------------------------------
+
+const AI_STEP = 'fix-actual-text-ai';
+
+function describeScriptStep(step) {
+  const def = ACTION_DEFS.find((d) => d.type === step.type);
+  const label = def ? def.label : step.type;
+  return step.type === 'find-replace'
+    ? `${label}: every /${step.findRole} becomes /${step.replaceRole}`
+    : `${label} - ${def ? def.hint : ''}`;
+}
+
 /** Flatten All and Scope Tables: no targets, a message back, and maybe no change at all. */
 async function runWholeDocumentAction(current, run) {
   const before = shapeOf(state.tree);
@@ -946,6 +1056,9 @@ function idReport(before, earliestTouched) {
   syncRevision(earliestTouched);
   if (revision === at) return { idsUnchanged: true };
   const from = renumberings[renumberings.length - 1].boundaryNum;
+  if (from === 0) {
+    return { idsUnchanged: false, renumberedFrom: 'the start', note: 'Every tag id may now name a different tag - look up again anything you still need.' };
+  }
   return {
     idsUnchanged: false,
     renumberedFrom: `n${from}`,

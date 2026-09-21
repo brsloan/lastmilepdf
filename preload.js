@@ -386,6 +386,15 @@ const api = {
     ipcRenderer.invoke('tags:make-block-quote', { docId, nodeIds }),
 
   /**
+   * The undo-group token the next Undo would take back, or null if that step
+   * is an ordinary edit (or there is none) - see undo_owner() in
+   * tag_worker.py. How Claude's "undo my session" makes sure the step on top
+   * really is its own before touching it.
+   * @param {string} docId
+   * @returns {Promise<{ undoGroup: string | null }>}
+   */
+  getUndoOwner: (docId) => ipcRenderer.invoke('tags:undo-owner', { docId }),
+  /**
    * @param {string} docId
    * @returns {Promise<UndoRedoResult>}
    */

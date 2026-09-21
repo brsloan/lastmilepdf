@@ -5669,6 +5669,20 @@ def _step_history(doc_id, from_stack, to_stack):
     return result
 
 
+def undo_owner(doc_id):
+    """Which undo group the step on top of the undo stack belongs to - the
+    token its snapshot was pushed for - or None when that step is an ordinary
+    ungrouped edit, or there is no step at all. Read-only.
+
+    Exists so that "undo what this session did" can be answered by the one
+    place that actually knows. The caller could keep its own count of edits,
+    but not every edit it triggers pushes a snapshot (a Scope Tables that
+    finds nothing to scope doesn't), and a count that is wrong by one undoes
+    something of the user's."""
+    doc = documents[doc_id]
+    return {"undoGroup": doc.get("undo_group") if doc["undo_stack"] else None}
+
+
 def undo_edit(doc_id):
     doc = documents[doc_id]
     if not doc["undo_stack"]:
@@ -5889,6 +5903,8 @@ def main():
                 result = make_tr(request["docId"], request["nodeIds"])
             elif cmd == "make_block_quote":
                 result = make_block_quote(request["docId"], request["nodeIds"])
+            elif cmd == "undo_owner":
+                result = undo_owner(request["docId"])
             elif cmd == "undo":
                 result = undo_edit(request["docId"])
             elif cmd == "redo":

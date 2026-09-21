@@ -181,6 +181,31 @@ View > Show AT Changes flags every tag whose Actual Text no longer matches the r
 
 The flag itself says how much changed. One asterisk (`*`) means only the white space moved — a line break pulled into a space, say — and two (`**`) means the words themselves differ, so `**` is the one worth reading. An `AI` prefix marks a change made by **Fix All Actual Text (AI)** or **Fix with AI** this session rather than one found by the sweep, and a trailing `↓` means the flagged tag is somewhere below this one rather than this one itself — `AI**↓` is an AI fix that rewrote the words of a tag inside a collapsed subtree.
 
+## Working with Claude
+
+LastMilePDF can let a Claude session running on the same computer work on the PDF you have open, alongside you: you keep the app on one screen and the chat on another, and ask for things like "what's wrong with the table I have selected?" or "fix this table, and the others like it". Claude sees the same document you do, can show you what it means by turning the page and selecting tags, and edits through the same actions you use.
+
+Turning it on
+: File > Settings > Preferences > **Claude connection** > *Allow Claude to connect to this app*. It is off until you turn it on. The panel then gives you what Claude needs to find the app: the contents of a file to save as `.mcp.json` in the folder you start your Claude session in (for the Claude desktop app), or a command to run once (for Claude Code in a terminal). Start a new Claude session afterwards. A client that can only launch local MCP servers can reach it through a bridge such as `mcp-remote`, using the address and code from the same panel.
+
+What Claude can see
+: The page you are on and the tags you have selected, a summary of the tag tree or any part of it in detail, a search by tag type, page or text, the Verify report, and a picture of any page or of just the region a tag covers.
+
+What Claude can change
+: Tag type, alt text, Actual Text, language and table-cell attributes; every tagging shortcut (headings, paragraph, list, list item, block quotation, table, row, cells, figure, caption, join); moving and deleting tags; wrapping loose page content in a new tag; Flatten and Scope Tables; and any script you have saved under Tools > Scripts…, except one containing Fix All Actual Text (AI), which spends your AI credit and is left for you to run.
+
+What Claude cannot do
+: Open, save or close a file. Nothing it changes reaches disk until you save. It also can't draw on the page, so cutting a piece of content in two is still a job for **Select Content**.
+
+While Claude is editing
+: A **Claude is editing** bar appears, saying what it is doing, and your own input is locked so that an edit of yours can't land in the middle of its batch. **Stop**, or <kbd>Esc</kbd>, takes control back at once; a session that goes quiet for two minutes ends by itself. Claude can't start editing while you are in the middle of something — a dialog, a Select Content rectangle.
+
+Undoing and reviewing
+: Everything Claude changes in one editing session is a single step in the undo history: one <kbd>Ctrl</kbd>+<kbd>Z</kbd> takes all of it back, and your own edits before and after stay separate steps. When a session ends, the status bar offers **Show the tags Claude changed**, which selects them in the Tag Tree so a batch can be checked rather than taken on trust.
+
+Keeping it private
+: Only programs on this computer can connect, and only with the code shown in the Preferences panel. Treat that code like a password, and keep `.mcp.json` out of anything you share — a project's `.gitignore` is the usual place to list it.
+
 ## Saving
 
 Every save is atomic — the new file is fully written before it replaces the old one, so a crash or power loss mid-save can't corrupt your PDF. Before that replacement, the previous version is copied to a backup in your system's temp folder. Backups older than 7 days are cleaned up automatically.
