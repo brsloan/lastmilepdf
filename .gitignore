@@ -14,4 +14,7 @@ build/quickstart-blocks.json
 .DS_Store
 *.log
 
+# Holds the Claude connection's bearer token (Preferences > Claude connection).
+.mcp.json
+
 pdfs/

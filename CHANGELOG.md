@@ -10,6 +10,22 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Added
+- **Claude can look at the PDF you have open.** Turning on File > Settings >
+  Preferences > Claude connection starts a small server that only programs on
+  this computer can reach, and gives you what Claude needs to find it: a file
+  to save for the Claude desktop app, or a command for Claude Code in a
+  terminal. From then on a Claude session running beside the app can see what
+  you see: which page you are on and which tags you have selected, a summary
+  of the tag tree or any part of it in detail, a search by role, page or
+  text, the Verify report, and a picture of any page or of just the region a
+  tag covers. It can also turn your page and select tags, which is how it
+  shows you what it means - "this table, here". It is off until you turn it
+  on, and this first version can only look: Claude cannot open, save or change
+  anything. It also steps aside while you are in the middle of something - a
+  dialog, a Select Content rectangle - rather than moving the view out from
+  under you.
+
 ## [0.6.0] - 2026-09-15
 
 ### Added

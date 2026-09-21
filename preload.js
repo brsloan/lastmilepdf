@@ -36,6 +36,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
  * @typedef {import('./types/domain').UpdateState} UpdateState
  * @typedef {import('./types/domain').UpdateInfo} UpdateInfo
  * @typedef {import('./types/domain').WhatsNew} WhatsNew
+ * @typedef {import('./types/domain').AgentConfig} AgentConfig
  */
 
 const api = {
@@ -651,6 +652,23 @@ const api = {
   getAutoCheckUpdates: () => ipcRenderer.invoke('settings:get-auto-check-updates'),
   /** @param {boolean} value @returns {Promise<void>} */
   setAutoCheckUpdates: (value) => ipcRenderer.invoke('settings:set-auto-check-updates', { value }),
+
+  // File > Settings > Preferences > Claude connection - the local MCP server
+  // in lib/agent-server.js. Both calls answer with the server's whole state,
+  // so the panel redraws from one shape whether it asked or changed it.
+  /** @returns {Promise<AgentConfig>} */
+  getAgentConfig: () => ipcRenderer.invoke('agent:get-config'),
+  /** @param {boolean} value @returns {Promise<AgentConfig>} */
+  setAgentEnabled: (value) => ipcRenderer.invoke('agent:set-enabled', { value }),
+  /**
+   * A tool call from Claude that needs the window to answer it - see
+   * renderer/agent.js. Every request must be answered with agentReply()
+   * carrying the same id, or main.js times it out.
+   * @param {(event: unknown, request: { id: number, method: string, params: object }) => void} callback
+   */
+  onAgentRequest: (callback) => ipcRenderer.on('agent:request', callback),
+  /** @param {{ id: number, result?: unknown, error?: string }} reply */
+  agentReply: (reply) => ipcRenderer.send('agent:reply', reply),
 
   // Help > About's update UI. getUpdateInfo() is what the dialog reads on
   // open (whether checking is even possible, portable vs. installed build,

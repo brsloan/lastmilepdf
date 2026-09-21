@@ -22,7 +22,7 @@
     "help:check": "node scripts/help-doc.js check",
     "quickstart": "node scripts/quickstart-doc.js import && node scripts/quickstart-doc.js blocks build/quickstart-blocks.json && python scripts/make-quickstart-pdf.py build/quickstart-blocks.json assets/quickstart.pdf",
     "quickstart:check": "node scripts/quickstart-doc.js check",
-    "test": "node scripts/contrast-check.js && node scripts/quickstart-doc.js check && node scripts/changelog-test.js && node scripts/table-seed-test.js && node scripts/smoke-test.js",
+    "test": "node scripts/contrast-check.js && node scripts/quickstart-doc.js check && node scripts/changelog-test.js && node scripts/table-seed-test.js && node scripts/agent-server-test.js && node scripts/smoke-test.js",
     "test:contrast": "node scripts/contrast-check.js",
     "build:worker": ".venv\\Scripts\\python.exe -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
     "build:worker:linux": ".venv/bin/python -m PyInstaller --onefile --noconsole --name tag_worker --distpath python-dist --workpath build/pyinstaller --specpath build --collect-all pikepdf python/tag_worker.py",
@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "electron-updater": "^6.8.9",
     "pdfjs-dist": "^4.6.82",
     "zod": "^4.5.4"

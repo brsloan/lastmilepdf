@@ -20,6 +20,7 @@ const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 const { z } = require('zod');
 const { autoUpdater } = require('electron-updater');
 const changelog = require('./lib/changelog');
+const { createAgentServer, MCP_PATH } = require('./lib/agent-server');
 
 // --- Diagnostic log ---------------------------------------------------------
 //
@@ -672,6 +673,36 @@ function setAutoCheckForUpdates(value) {
   writeSettingsFile(settings);
 }
 
+// Whether the local MCP server Claude connects to is running (File >
+// Settings > Preferences > Claude connection). Defaults off, for the same
+// reason autoSaveEnabled does and then some: it opens a port, so it should
+// be something the user turned on rather than something they discover.
+function getAgentServerEnabled() {
+  return readSettingsFile().agentServerEnabled === true; // default off
+}
+
+function setAgentServerEnabled(value) {
+  const settings = readSettingsFile();
+  settings.agentServerEnabled = value;
+  writeSettingsFile(settings);
+}
+
+// The bearer token the server demands, made once and kept, so the
+// `claude mcp add` command the user pasted keeps working across restarts.
+// Stored in the clear, unlike the API keys above: it guards a port only this
+// machine can reach, against other local processes - and any process that can
+// read this file is already running as the user, with nothing left to gain
+// from the token.
+function getAgentServerToken() {
+  const settings = readSettingsFile();
+  if (typeof settings.agentServerToken === 'string' && settings.agentServerToken.length >= 32) {
+    return settings.agentServerToken;
+  }
+  settings.agentServerToken = crypto.randomBytes(24).toString('base64url');
+  writeSettingsFile(settings);
+  return settings.agentServerToken;
+}
+
 // The version that ran last time, which is how the What's New dialog below
 // notices that an update has landed since. Written on every launch, so a
 // crash between installing and reading it costs at most one summary.
@@ -1186,6 +1217,139 @@ function prepareWhatsNew() {
   pendingWhatsNew = { current, previous, entries };
 }
 
+// --- Claude connection (local MCP server) -----------------------------------
+//
+// lib/agent-server.js speaks MCP on 127.0.0.1; this section is what it needs
+// from Electron. The important part is askRenderer(): tool calls are answered
+// by the window, not from here - see the header comment in agent-server.js
+// for why - so main needs a request/reply channel *to* the renderer, the
+// reverse of every other channel in this file. Same id-correlation shape as
+// callWorker() above, plus a timeout, since a renderer stuck behind a native
+// dialog would otherwise hold the HTTP request open forever.
+
+// Fixed rather than picked at random, so the command the user pasted into
+// Claude keeps pointing at the right place.
+// (Overridable when running from source, so a test instance can run beside
+// the user's own copy of the app - see the dev switches further down.)
+const AGENT_SERVER_PORT = (!app.isPackaged && Number(process.env.LASTMILEPDF_AGENT_PORT)) || 47821;
+
+// Generous: get_page_image on a large scan, or a text search across a long
+// document, is legitimately slow the first time a page's text is extracted.
+const AGENT_REQUEST_TIMEOUT_MS = 60000;
+
+let agentRequestCounter = 0;
+const pendingAgentRequests = new Map(); // id -> { resolve, reject, timer }
+let agentServerError = null;
+
+function agentWindow() {
+  return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || null;
+}
+
+function askRenderer(method, params = {}) {
+  const win = agentWindow();
+  if (!win) return Promise.reject(new Error('The app has no window open.'));
+  const id = ++agentRequestCounter;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingAgentRequests.delete(id);
+      reject(new Error('The app window did not answer in time - it may be showing a dialog that is waiting on the user.'));
+    }, AGENT_REQUEST_TIMEOUT_MS);
+    pendingAgentRequests.set(id, { resolve, reject, timer });
+    win.webContents.send('agent:request', { id, method, params });
+  });
+}
+
+ipcMain.on('agent:reply', (_event, reply) => {
+  const pending = pendingAgentRequests.get(reply?.id);
+  if (!pending) return; // already timed out
+  pendingAgentRequests.delete(reply.id);
+  clearTimeout(pending.timer);
+  if (reply.error) pending.reject(new Error(reply.error));
+  else pending.resolve(reply.result);
+});
+
+// Longest edge of a window screenshot - same figure, for the same reason, as
+// CROP_MAX_EDGE_PX in renderer/page-crop.js.
+const SCREENSHOT_MAX_EDGE_PX = 1568;
+
+async function captureAgentWindow() {
+  const win = agentWindow();
+  if (!win) throw new Error('The app has no window open.');
+  if (win.isMinimized()) throw new Error('The app window is minimized, so there is nothing to capture. Ask the user to restore it.');
+  let image = await win.webContents.capturePage();
+  if (image.isEmpty()) throw new Error('The window could not be captured (it may be hidden).');
+  const { width, height } = image.getSize();
+  if (Math.max(width, height) > SCREENSHOT_MAX_EDGE_PX) {
+    image = width >= height
+      ? image.resize({ width: SCREENSHOT_MAX_EDGE_PX })
+      : image.resize({ height: SCREENSHOT_MAX_EDGE_PX });
+  }
+  return { mediaType: 'image/png', data: image.toPNG().toString('base64') };
+}
+
+const agentServer = createAgentServer({
+  requestRenderer: askRenderer,
+  captureWindow: captureAgentWindow,
+  version: app.getVersion(),
+});
+
+// Running from source only: lets a test session switch the server on and
+// open a fixture without going through the Preferences dialog or touching
+// the real settings file. Ignored entirely in a packaged build.
+const AGENT_DEV_TOKEN = !app.isPackaged ? (process.env.LASTMILEPDF_AGENT_TOKEN || null) : null;
+const AGENT_DEV_OPEN = !app.isPackaged ? (process.env.LASTMILEPDF_OPEN || null) : null;
+
+function agentServerWanted() {
+  return AGENT_DEV_TOKEN !== null || getAgentServerEnabled();
+}
+
+function agentServerToken() {
+  return AGENT_DEV_TOKEN || getAgentServerToken();
+}
+
+async function syncAgentServer() {
+  agentServerError = null;
+  if (!agentServerWanted()) {
+    await agentServer.stop();
+    return;
+  }
+  try {
+    await agentServer.start({ port: AGENT_SERVER_PORT, token: agentServerToken() });
+  } catch (err) {
+    console.error('[agent-server] failed to start:', err);
+    agentServerError = err.code === 'EADDRINUSE'
+      ? `Port ${AGENT_SERVER_PORT} is already in use - is another copy of LastMilePDF running?`
+      : `Could not start: ${err.message}`;
+  }
+}
+
+/** @returns {import('./types/domain').AgentConfig} */
+function agentConfig() {
+  const url = `http://127.0.0.1:${AGENT_SERVER_PORT}${MCP_PATH}`;
+  return {
+    enabled: agentServerWanted(),
+    running: agentServer.isRunning(),
+    url,
+    command: `claude mcp add --transport http lastmilepdf ${url} --header "Authorization: Bearer ${agentServerToken()}"`,
+    // The same thing as a project config file, for the Claude desktop app -
+    // which runs Claude Code sessions but puts no `claude` command on PATH,
+    // so the line above is no use to someone who only has that.
+    mcpJson: JSON.stringify({
+      mcpServers: {
+        lastmilepdf: { type: 'http', url, headers: { Authorization: `Bearer ${agentServerToken()}` } },
+      },
+    }, null, 2),
+    error: agentServerError,
+  };
+}
+
+ipcMain.handle('agent:get-config', async () => agentConfig());
+ipcMain.handle('agent:set-enabled', async (_event, { value }) => {
+  setAgentServerEnabled(value === true);
+  await syncAgentServer();
+  return agentConfig();
+});
+
 app.whenReady().then(() => {
   // Before the menu is built and before the window exists: Windows only
   // takes the title bar's light/dark cue at window-creation time.
@@ -1196,6 +1360,13 @@ app.whenReady().then(() => {
   prepareWhatsNew();
   startWorker();
   createWindow();
+  syncAgentServer();
+  if (AGENT_DEV_OPEN) {
+    const win = agentWindow();
+    win?.webContents.once('did-finish-load', () => {
+      win.webContents.send('menu:open-recent', path.resolve(AGENT_DEV_OPEN));
+    });
+  }
 
   // Packaged builds only - there's no published feed to check against
   // when running from source, and electron-updater logs a noisy warning
@@ -1217,6 +1388,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (workerProcess) workerProcess.kill();
+  agentServer.stop();
   if (process.platform !== 'darwin') app.quit();
 });
 

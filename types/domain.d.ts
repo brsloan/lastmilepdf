@@ -626,6 +626,24 @@ export interface UpdateInfo {
   state: UpdateState;
 }
 
+/**
+ * The Claude connection's state, for File > Settings > Preferences - see
+ * lib/agent-server.js and the 'agent:*' handlers in main.js.
+ */
+export interface AgentConfig {
+  /** The saved preference. */
+  enabled: boolean;
+  /** Whether the server is actually listening - false with `enabled` true means it failed to start; see `error`. */
+  running: boolean;
+  url: string;
+  /** A ready-to-paste `claude mcp add` command carrying the URL and token. */
+  command: string;
+  /** The same connection as the contents of a `.mcp.json` project file, for the Claude desktop app, which has no `claude` command. */
+  mcpJson: string;
+  /** Why the server isn't running although enabled, or null. */
+  error: string | null;
+}
+
 /*
  * What the What's New dialog renders, parsed out of CHANGELOG.md by
  * lib/changelog.js. The three shapes below are re-exported from that module

@@ -846,6 +846,26 @@
         <span>Automatically check for updates on launch</span>
       </label>
 
+      <p class="settings-hint">Claude connection</p>
+      <label class="field field-checkbox">
+        <input type="checkbox" id="preferences-agent-enabled" />
+        <span>Allow Claude to connect to this app</span>
+      </label>
+      <p id="preferences-agent-status" class="settings-hint" role="status"></p>
+      <div id="preferences-agent-details" hidden>
+        <label class="field">
+          <span class="field-label">Claude desktop app: save this as a file named .mcp.json in the folder you start your Claude session in, then start a new session</span>
+          <textarea id="preferences-agent-json" rows="6" readonly autocomplete="off" spellcheck="false"></textarea>
+        </label>
+        <button type="button" id="btn-copy-agent-json" class="btn">Copy file contents</button>
+        <label class="field">
+          <span class="field-label">Claude Code in a terminal: run this once instead</span>
+          <input id="preferences-agent-command" type="text" readonly autocomplete="off" spellcheck="false" />
+        </label>
+        <button type="button" id="btn-copy-agent-command" class="btn">Copy command</button>
+      </div>
+      <p class="settings-hint">Lets a Claude session on this computer see the open PDF's tags and pages, and move your view to show you things. Only programs on this computer can connect, and only with the code shown above - treat it like a password, and keep .mcp.json out of anything you share. Claude cannot open, save or edit files through this.</p>
+
       <p class="settings-hint">Notifications</p>
       <label class="field field-checkbox">
         <input type="checkbox" id="preferences-notify-desktop" />
