@@ -2979,3 +2979,41 @@ body.busy-cursor * {
   background: none;
   color: var(--text-dim);
 }
+
+/* --- Claude editing session bar ---
+   The modal that locks input while Claude edits (see #agent-lock-dialog in
+   index.html). Pinned just above the status bar and kept to one line, with a
+   clear backdrop: the user is meant to watch the tree and the page change
+   behind it, so it must not dim or cover them the way every other dialog's
+   backdrop does. `display` is qualified on [open] for the same reason as
+   .shortcuts-dialog - an unqualified display would un-hide a closed dialog. */
+
+.agent-lock-dialog {
+  margin: auto auto 40px;
+  padding: 10px 12px 10px 16px;
+  max-width: min(720px, 90vw);
+  background: var(--panel);
+  color: var(--text);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.agent-lock-dialog[open] {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.agent-lock-dialog::backdrop {
+  background: transparent;
+}
+
+.agent-lock-text h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.agent-lock-text p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+}

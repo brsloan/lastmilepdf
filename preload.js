@@ -39,6 +39,33 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
  * @typedef {import('./types/domain').AgentConfig} AgentConfig
  */
 
+// Every menu event reaches the renderer through onMenu() rather than
+// ipcRenderer.on() directly, so that one switch can hold them all back while
+// Claude has an editing session open (see setMenuLocked() below and
+// renderer/agent.js). The window itself is locked by a modal dialog, but the
+// application menu lives outside the page and would walk straight past that:
+// Edit > Undo in the middle of a batch would renumber the tags Claude is
+// about to name. Save is let through - writing the file never changes the
+// tree, and the window-close "Save" answer has to be able to finish.
+let menuLocked = false;
+/** @type {(() => void) | null} */
+let menuBlockedCallback = null;
+const MENU_ALLOWED_WHILE_LOCKED = new Set(['menu:save', 'menu:save-and-close']);
+
+/**
+ * @param {string} channel
+ * @param {(...args: any[]) => void} callback
+ */
+function onMenu(channel, callback) {
+  ipcRenderer.on(channel, (...args) => {
+    if (menuLocked && !MENU_ALLOWED_WHILE_LOCKED.has(channel)) {
+      if (menuBlockedCallback) menuBlockedCallback();
+      return;
+    }
+    callback(...args);
+  });
+}
+
 const api = {
   /**
    * Shows the Open dialog and, if a file is picked, opens it in the worker.
@@ -410,26 +437,26 @@ const api = {
 
   // Fired when the user picks Open/Undo/Redo/Save/Save As/Close/Find-Replace/Shortcuts/Help Doc/About from the app menu - see main.js.
   /** @param {() => void} callback */
-  onMenuOpen: (callback) => ipcRenderer.on('menu:open', callback),
+  onMenuOpen: (callback) => onMenu('menu:open', callback),
   /** Fired when a File > Open Recent entry is clicked, with its path.
    * @param {(event: unknown, filePath: string) => void} callback */
-  onMenuOpenRecent: (callback) => ipcRenderer.on('menu:open-recent', callback),
+  onMenuOpenRecent: (callback) => onMenu('menu:open-recent', callback),
   /** @param {() => void} callback */
-  onMenuUndo: (callback) => ipcRenderer.on('menu:undo', callback),
+  onMenuUndo: (callback) => onMenu('menu:undo', callback),
   /** @param {() => void} callback */
-  onMenuRedo: (callback) => ipcRenderer.on('menu:redo', callback),
+  onMenuRedo: (callback) => onMenu('menu:redo', callback),
   /** @param {() => void} callback */
-  onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
+  onMenuSave: (callback) => onMenu('menu:save', callback),
   /** @param {() => void} callback */
-  onMenuSaveAs: (callback) => ipcRenderer.on('menu:save-as', callback),
+  onMenuSaveAs: (callback) => onMenu('menu:save-as', callback),
   /** @param {() => void} callback */
-  onMenuClose: (callback) => ipcRenderer.on('menu:close', callback),
+  onMenuClose: (callback) => onMenu('menu:close', callback),
   /** @param {() => void} callback */
-  onMenuFindReplace: (callback) => ipcRenderer.on('menu:find-replace', callback),
+  onMenuFindReplace: (callback) => onMenu('menu:find-replace', callback),
   /** @param {() => void} callback */
-  onMenuRepairOrphanedContent: (callback) => ipcRenderer.on('menu:repair-orphaned-content', callback),
+  onMenuRepairOrphanedContent: (callback) => onMenu('menu:repair-orphaned-content', callback),
   /** @param {(event: unknown, checked: boolean) => void} callback */
-  onMenuShowAtChanges: (callback) => ipcRenderer.on('menu:show-at-changes', callback),
+  onMenuShowAtChanges: (callback) => onMenu('menu:show-at-changes', callback),
   /**
    * Tells the main process the renderer has turned Show AT Changes on or off
    * by itself, so the View menu's checkbox follows - Proofread Mode does this
@@ -448,11 +475,11 @@ const api = {
    */
   setMenuProofreadChecked: (checked) => ipcRenderer.send('menu:proofread-state-changed', { checked }),
   /** @param {(event: unknown, checked: boolean) => void} callback */
-  onMenuProofread: (callback) => ipcRenderer.on('menu:proofread', callback),
+  onMenuProofread: (callback) => onMenu('menu:proofread', callback),
   /** @param {() => void} callback */
-  onMenuQuickstart: (callback) => ipcRenderer.on('menu:quickstart', callback),
+  onMenuQuickstart: (callback) => onMenu('menu:quickstart', callback),
   /** @param {() => void} callback */
-  onMenuOpenQuickstartPdf: (callback) => ipcRenderer.on('menu:open-quickstart-pdf', callback),
+  onMenuOpenQuickstartPdf: (callback) => onMenu('menu:open-quickstart-pdf', callback),
 
   // The bundled quick-start PDF. It ships read-only inside the app, so main.js
   // hands back a copy in the user data folder instead - a document that can be
@@ -466,11 +493,11 @@ const api = {
   /** @returns {Promise<string>} */
   getQuickstartPdf: () => ipcRenderer.invoke('quickstart:get-pdf'),
   /** @param {() => void} callback */
-  onMenuShortcuts: (callback) => ipcRenderer.on('menu:shortcuts', callback),
+  onMenuShortcuts: (callback) => onMenu('menu:shortcuts', callback),
   /** @param {() => void} callback */
-  onMenuHelpDoc: (callback) => ipcRenderer.on('menu:help-doc', callback),
+  onMenuHelpDoc: (callback) => onMenu('menu:help-doc', callback),
   /** @param {(event: unknown, data: { version: string }) => void} callback */
-  onMenuAbout: (callback) => ipcRenderer.on('menu:about', callback),
+  onMenuAbout: (callback) => onMenu('menu:about', callback),
 
   /**
    * Shows the Save As dialog and writes the document there.
@@ -541,10 +568,10 @@ const api = {
     ipcRenderer.invoke('settings:set-custom-provider-config', { providerId, baseUrl, model }),
 
   /** @param {() => void} callback */
-  onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
+  onMenuSettings: (callback) => onMenu('menu:settings', callback),
 
   /** @param {() => void} callback */
-  onMenuPreferences: (callback) => ipcRenderer.on('menu:preferences', callback),
+  onMenuPreferences: (callback) => onMenu('menu:preferences', callback),
 
   // File > Settings > Preferences > Appearance - the color theme. The stored
   // preference is 'auto' | 'dark' | 'light'; the *resolved* theme is one of
@@ -669,6 +696,15 @@ const api = {
   onAgentRequest: (callback) => ipcRenderer.on('agent:request', callback),
   /** @param {{ id: number, result?: unknown, error?: string }} reply */
   agentReply: (reply) => ipcRenderer.send('agent:reply', reply),
+  /**
+   * Holds back every menu command except Save while Claude is editing - see
+   * onMenu() above.
+   * @param {boolean} locked
+   */
+  setMenuLocked: (locked) => { menuLocked = locked === true; },
+  /** Called when a menu command was held back, so the renderer can say why nothing happened.
+   * @param {() => void} callback */
+  onMenuBlocked: (callback) => { menuBlockedCallback = callback; },
 
   // Help > About's update UI. getUpdateInfo() is what the dialog reads on
   // open (whether checking is even possible, portable vs. installed build,
@@ -701,10 +737,10 @@ const api = {
   /** @returns {Promise<WhatsNew>} */
   getWhatsNew: () => ipcRenderer.invoke('whats-new:get'),
   /** @param {() => void} callback */
-  onMenuWhatsNew: (callback) => ipcRenderer.on('menu:whats-new', callback),
+  onMenuWhatsNew: (callback) => onMenu('menu:whats-new', callback),
 
   /** @param {() => void} callback */
-  onMenuScripts: (callback) => ipcRenderer.on('menu:scripts', callback),
+  onMenuScripts: (callback) => onMenu('menu:scripts', callback),
 
   // Tools > Scripts… - saved scripts and which one (if any) the toolbar's
   // "Run Script" button currently triggers. Persisted in settings.json the
@@ -782,7 +818,7 @@ const api = {
    */
   confirmDiscard: (detail) => ipcRenderer.invoke('dialog:confirm-discard', { detail }),
   /** @param {() => void} callback */
-  onMenuSaveAndClose: (callback) => ipcRenderer.on('menu:save-and-close', callback),
+  onMenuSaveAndClose: (callback) => onMenu('menu:save-and-close', callback),
   /**
    * @param {boolean} saved Whether the save actually completed.
    * @returns {void}

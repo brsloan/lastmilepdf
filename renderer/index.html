@@ -864,7 +864,7 @@
         </label>
         <button type="button" id="btn-copy-agent-command" class="btn">Copy command</button>
       </div>
-      <p class="settings-hint">Lets a Claude session on this computer see the open PDF's tags and pages, and move your view to show you things. Only programs on this computer can connect, and only with the code shown above - treat it like a password, and keep .mcp.json out of anything you share. Claude cannot open, save or edit files through this.</p>
+      <p class="settings-hint">Lets a Claude session on this computer see the open PDF's tags and pages, move your view to show you things, and edit tags when you ask it to. While it edits, a "Claude is editing" bar appears and your own input is locked so the two of you can't collide - press Stop or Escape to take control back at any time, and Ctrl+Z undoes what it did. Claude can never open or save a file: nothing reaches disk until you save. Only programs on this computer can connect, and only with the code shown above - treat it like a password, and keep .mcp.json out of anything you share.</p>
 
       <p class="settings-hint">Notifications</p>
       <label class="field field-checkbox">
@@ -967,6 +967,20 @@
        the viewport, and nesting it inside the pane it covers would put it
        inside the scrolling region it is anchored to. Built on open, so it is
        empty here. -->
+  <!-- Shown for as long as Claude holds an editing session (see agent.js).
+       A modal <dialog> rather than an overlay div because modality is the
+       point: showModal() makes the rest of the window inert - no clicks, no
+       focus, no typing - which is the input lock, for free and without every
+       handler in the app having to ask "is Claude editing?". Its backdrop is
+       left clear and the bar kept small so the user can watch the edits land. -->
+  <dialog id="agent-lock-dialog" class="agent-lock-dialog" aria-labelledby="agent-lock-title" aria-describedby="agent-lock-description">
+    <div class="agent-lock-text">
+      <h2 id="agent-lock-title">Claude is editing</h2>
+      <p id="agent-lock-description"></p>
+    </div>
+    <button type="button" id="btn-agent-stop" class="btn btn-primary">Stop</button>
+  </dialog>
+
   <div id="tag-tree-context-menu" class="context-menu" role="menu" aria-label="Tag actions" hidden></div>
 
   <script type="module" src="renderer.js"></script>

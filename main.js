@@ -1307,10 +1307,26 @@ function agentServerToken() {
   return AGENT_DEV_TOKEN || getAgentServerToken();
 }
 
+// Chromium stops painting a window it decides nobody can see - minimised,
+// or merely covered by another - and pdf.js paces its page renders on those
+// paint callbacks. A render started then never finishes, and everything
+// awaiting it (an undo that has to redraw the page, a page turn, a crop for
+// get_page_image) hangs until the window is uncovered. For a person that is
+// invisible by definition; for Claude, working in an app the user has tucked
+// behind their chat window, it is the normal case. So while the connection is
+// on, the window keeps painting in the background.
+function syncBackgroundThrottling() {
+  const allowed = !agentServer.isRunning();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.setBackgroundThrottling(allowed);
+  }
+}
+
 async function syncAgentServer() {
   agentServerError = null;
   if (!agentServerWanted()) {
     await agentServer.stop();
+    syncBackgroundThrottling();
     return;
   }
   try {
@@ -1321,6 +1337,7 @@ async function syncAgentServer() {
       ? `Port ${AGENT_SERVER_PORT} is already in use - is another copy of LastMilePDF running?`
       : `Could not start: ${err.message}`;
   }
+  syncBackgroundThrottling();
 }
 
 /** @returns {import('./types/domain').AgentConfig} */
@@ -1382,7 +1399,10 @@ app.whenReady().then(() => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      syncBackgroundThrottling(); // a new window starts throttled
+    }
   });
 });
 

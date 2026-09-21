@@ -144,8 +144,9 @@ async function runTests() {
       const client = await connect(TEST_PORT, TEST_TOKEN);
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
-      const expected = ['find_nodes', 'get_app_status', 'get_nodes', 'get_page_image', 'get_tree_summary',
-        'get_view', 'go_to_page', 'screenshot_window', 'select_nodes', 'verify_document'];
+      const expected = ['apply_tag_action', 'begin_editing', 'delete_nodes', 'end_editing', 'find_nodes', 'flatten_all',
+        'get_app_status', 'get_nodes', 'get_page_image', 'get_tree_summary', 'get_view', 'go_to_page', 'move_nodes',
+        'scope_tables', 'screenshot_window', 'select_nodes', 'undo_last', 'update_nodes', 'verify_document'];
       assertEqual(names.join(), expected.join(), 'the tool list has changed - update this test if that was meant');
       for (const tool of tools) assert(tool.description, `${tool.name} has no description`);
       await client.close();
@@ -181,6 +182,43 @@ async function runTests() {
       }
       assert(refused, 'a string page number was accepted');
       assertEqual(seen.length, before, 'the bad call still reached the renderer');
+      await client.close();
+    });
+
+    await test('an edit with a misspelt attribute is refused before the renderer sees it', async () => {
+      // update_nodes' changes object is strict: "altText" for "alt" would
+      // otherwise be dropped silently and the edit reported as a success.
+      const client = await connect(TEST_PORT, TEST_TOKEN);
+      const before = seen.length;
+      let refused = false;
+      try {
+        const result = await client.callTool({
+          name: 'update_nodes',
+          arguments: { revision: 1, updates: [{ nodeIds: ['n1'], changes: { altText: 'a chart' } }] },
+        });
+        refused = result.isError === true;
+      } catch {
+        refused = true;
+      }
+      assert(refused, 'an unknown attribute name was accepted');
+      assertEqual(seen.length, before, 'the bad edit still reached the renderer');
+      await client.close();
+    });
+
+    await test('an edit that does not say which revision its ids came from is refused', async () => {
+      // The revision is what lets the renderer refuse a renumbered id; an
+      // edit allowed through without one would skip that check entirely.
+      const client = await connect(TEST_PORT, TEST_TOKEN);
+      const before = seen.length;
+      let refused = false;
+      try {
+        const result = await client.callTool({ name: 'delete_nodes', arguments: { nodeIds: ['n1'] } });
+        refused = result.isError === true;
+      } catch {
+        refused = true;
+      }
+      assert(refused, 'delete_nodes was accepted with no revision');
+      assertEqual(seen.length, before, 'it still reached the renderer');
       await client.close();
     });
 

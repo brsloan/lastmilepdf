@@ -11,20 +11,42 @@ they summarise each release rather than record every change as it landed.
 ## [Unreleased]
 
 ### Added
-- **Claude can look at the PDF you have open.** Turning on File > Settings >
-  Preferences > Claude connection starts a small server that only programs on
-  this computer can reach, and gives you what Claude needs to find it: a file
-  to save for the Claude desktop app, or a command for Claude Code in a
-  terminal. From then on a Claude session running beside the app can see what
-  you see: which page you are on and which tags you have selected, a summary
-  of the tag tree or any part of it in detail, a search by role, page or
-  text, the Verify report, and a picture of any page or of just the region a
-  tag covers. It can also turn your page and select tags, which is how it
-  shows you what it means - "this table, here". It is off until you turn it
-  on, and this first version can only look: Claude cannot open, save or change
-  anything. It also steps aside while you are in the middle of something - a
-  dialog, a Select Content rectangle - rather than moving the view out from
-  under you.
+- **Claude can work on the PDF you have open, alongside you.** Turning on
+  File > Settings > Preferences > Claude connection starts a small server that
+  only programs on this computer can reach, and gives you what Claude needs to
+  find it: a file to save for the Claude desktop app, or a command for Claude
+  Code in a terminal. From then on a Claude session running beside the app can
+  see what you see - which page you are on and which tags you have selected, a
+  summary of the tag tree or any part of it in detail, a search by role, page
+  or text, the Verify report, and a picture of any page or of just the region
+  a tag covers - and can turn your page and select tags, which is how it shows
+  you what it means: "this table, here". Ask it to fix something and it can:
+  change roles, alt text, Actual Text, language and table-cell attributes;
+  apply any of the tagging shortcuts (headings, paragraph, list, list item,
+  block quotation, table, row, cells, figure, caption, join); move tags;
+  delete tags; and run Flatten and Scope Tables. "Fix this table and the
+  others like it" is the kind of request it is for.
+- **You take turns, visibly.** While Claude edits, a "Claude is editing" bar
+  says what it is doing and your own input is locked, so an edit of yours
+  can't land in the middle of its batch. Stop (or Escape) takes control back
+  at once, and a session that goes quiet for two minutes ends by itself.
+  Claude can't start while you are in the middle of something - a dialog, a
+  Select Content rectangle - and its edits go through the same paths as
+  yours, so each is an ordinary undo step: Ctrl+Z takes them back.
+- **It cannot reach your files.** Claude can't open or save anything;
+  nothing it does reaches disk until you save. It is off until you turn it
+  on.
+- **It can't edit the wrong tag by mistake.** Tag ids are renumbered whenever
+  the tree changes shape, so an id read a moment ago can come to name a
+  different tag. Every edit says which version of the tree its ids came
+  from, and is refused outright if any of them has been renumbered since.
+
+### Changed
+- The app now keeps drawing while its window is covered or minimised, for as
+  long as the Claude connection is on. Chromium stops painting a window nobody
+  can see, which left any page redraw - and everything waiting on it, such as
+  an undo that has to refresh the page - hanging until the window was brought
+  back to the front.
 
 ## [0.6.0] - 2026-09-15
 
