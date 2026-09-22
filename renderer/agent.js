@@ -1198,6 +1198,32 @@ function drawAgentPreferences(config) {
   if (config.error) el.preferencesAgentStatus.textContent = config.error;
   else if (config.running) el.preferencesAgentStatus.textContent = `On - listening at ${config.url}`;
   else el.preferencesAgentStatus.textContent = 'Off.';
+  // Never while the user is typing in it: a save's answer arriving mid-word
+  // would put back the text as it was a moment ago.
+  if (document.activeElement !== el.preferencesAgentFixPrompt) {
+    el.preferencesAgentFixPrompt.value = config.fixPrompt;
+  }
+  el.btnResetAgentFixPrompt.disabled = !config.fixPromptCustomised;
+}
+
+// How long typing has to pause before the "Fix this PDF" text is saved.
+const FIX_PROMPT_SAVE_DELAY_MS = 600;
+let fixPromptSaveTimer = null;
+
+/**
+ * @param {string | null} value - null resets to the default
+ * @returns {Promise<boolean>} whether it was saved
+ */
+async function saveFixPrompt(value) {
+  clearTimeout(fixPromptSaveTimer);
+  fixPromptSaveTimer = null;
+  try {
+    drawAgentPreferences(await window.api.setAgentFixPrompt(value));
+    return true;
+  } catch (err) {
+    reportError('Could not save the "Fix this PDF" instructions', err);
+    return false;
+  }
 }
 
 /** Called as the Preferences dialog opens, so it shows the server's state now rather than at launch. */
@@ -1234,6 +1260,21 @@ export function initAgentBridge() {
   });
 
   el.preferencesAgentCommand.addEventListener('focus', () => el.preferencesAgentCommand.select());
+
+  el.preferencesAgentFixPrompt.addEventListener('input', () => {
+    clearTimeout(fixPromptSaveTimer);
+    fixPromptSaveTimer = setTimeout(() => saveFixPrompt(el.preferencesAgentFixPrompt.value), FIX_PROMPT_SAVE_DELAY_MS);
+  });
+  // Leaving the box saves at once, so closing the dialog straight after
+  // typing can't beat the timer. An emptied box goes back to the default
+  // rather than leaving Claude with no instructions at all.
+  el.preferencesAgentFixPrompt.addEventListener('blur', () => {
+    if (fixPromptSaveTimer !== null) saveFixPrompt(el.preferencesAgentFixPrompt.value);
+    else if (!el.preferencesAgentFixPrompt.value.trim()) refreshAgentPreferences();
+  });
+  el.btnResetAgentFixPrompt.addEventListener('click', async () => {
+    if (await saveFixPrompt(null)) setStatus('"Fix this PDF" instructions reset to the default.');
+  });
 
   const copyOnClick = (button, field, what) => {
     button.addEventListener('click', async () => {

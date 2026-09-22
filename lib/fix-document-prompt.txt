@@ -1,0 +1,60 @@
+Remediate the open PDF's tag tree so it is ready for final use. Work through
+these stages and report what you did and what you could not do.
+
+1. Survey first: get_tree_summary, then verify_document, then get_nodes for the
+whole tree and get_page_image for every page. Do not begin editing until you
+know the whole document. Before editing, list every Figure that sits inside a
+text tag (P, LBody, cell, heading) or has text tags inside it, and every Figure
+whose image is only a fragment of a larger drawn or handwritten region, and
+decide each one's treatment under stage 5.
+
+2. Use flatten_all to remove StyleSpan, Span, ParagraphSpan, Sub and other
+organisational wrappers. Run scope_tables after the table work in stage 4,
+once the right cells are TH - it does nothing on a table with two header rows.
+
+3. Headings: one consistent outline, no skipped levels. If the book title is included, it is H1 and a book chapter's title is H2, its sections H3, subsections H4. For a chapter with no book title, the chapter title is H1. A standalone document's title is H1.
+
+4. Lists and tables broken across a page boundary are one list or one table:
+join them. A table's caption goes inside the Table tag as its first child.
+Header rows are TH with scope; a first column of row labels, if bold, is TH with
+row scope. Unnest lists that are not really nested.
+
+5. Figures: every Figure gets alt text written from get_page_image of its
+region. A Figure is the whole drawn region, never a piece of one. If a scan has
+split a handwritten note, stamp, signature or drawing into image strips and an
+OCR text layer spread over several tags, or nested a Figure inside a P, treat
+the whole region as one thing and choose exactly one of two outcomes:
+  (a) preferred: make the entire region one Figure - apply_tag_action "figure"
+      on the outermost tag collapses everything inside it - move in any stray
+      image fragments of the same region, and write alt text that transcribes
+      what it shows;
+  (b) only if the region is typeset body text with an OCR layer: make it one P
+      and leave it for Fix All Actual Text (AI).
+Never leave a Figure inside a text tag, and never give alt text to a fragment.
+Legends to charts, etc., should be contained within the figure. Text placed
+after or before a figure that names it ("Figure 3.1 ...") is a Caption and
+should be kept as a sibling to the figure, not inside it. Purely decorative
+pieces are not figures; say so and tag them as "Artifact?" for the user to
+Artifact themselves.
+
+6. Isolated tags at the outer edge of the page containing gibberish should be tagged as "Artifact?" for user review. Anything tagged that should probably be artifacted, tag it as "Artifact?".
+
+7. Correct OCR mistakes you can see by setting actualText on that tag only.
+Do not retype whole paragraphs of typeset text; tell the user to run Fix All
+Actual Text (AI) instead. This does not apply to handwriting, stamps or
+signatures: those are figures under stage 5 and their alt text is a
+transcription.
+
+8. Document Title and Author should be set with info from the title page,
+usually the first page. If unsure, leave blank.
+
+9. Use the Generate Bookmarks tool once all headings are set.
+
+10. Work from the end of the document backwards so tag ids stay valid.
+Keep editing sessions short. Finish with verify_document and list
+anything that still needs Select Content or a human decision.
+
+11. If a tool refuses the clean fix for a tag, do not apply a fallback that
+makes the tag look finished. Leave it visibly unresolved, and put it at the
+top of the report as needing a human decision, with the fix you would have
+made and why it was refused.

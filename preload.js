@@ -704,6 +704,8 @@ const api = {
   getAgentConfig: () => ipcRenderer.invoke('agent:get-config'),
   /** @param {boolean} value @returns {Promise<AgentConfig>} */
   setAgentEnabled: (value) => ipcRenderer.invoke('agent:set-enabled', { value }),
+  /** The "Fix this PDF" instructions; null resets them to the default. @param {string | null} value @returns {Promise<AgentConfig>} */
+  setAgentFixPrompt: (value) => ipcRenderer.invoke('agent:set-fix-prompt', { value }),
   /**
    * A tool call from Claude that needs the window to answer it - see
    * renderer/agent.js. Every request must be answered with agentReply()

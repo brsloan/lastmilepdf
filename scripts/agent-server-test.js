@@ -126,6 +126,8 @@ async function runTests() {
 
   /** @type {{ method: string, params: any }[]} */
   const seen = [];
+  // Changed part-way through, to show the server asks for it on every use.
+  let fixPrompt = 'Remediate everything. (test prompt)';
   const server = createAgentServer({
     version: '0.0.0-test',
     requestRenderer: async (method, params) => {
@@ -136,6 +138,7 @@ async function runTests() {
       return { ok: true };
     },
     captureWindow: async () => ({ mediaType: 'image/png', data: TINY_PNG }),
+    getFixPrompt: () => fixPrompt,
   });
   await server.start({ port: TEST_PORT, token: TEST_TOKEN });
 
@@ -145,7 +148,8 @@ async function runTests() {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
       const expected = ['apply_tag_action', 'begin_editing', 'delete_nodes', 'end_editing', 'find_nodes', 'flatten_all',
-        'generate_bookmarks', 'get_app_status', 'get_nodes', 'get_page_image', 'get_tree_summary', 'get_view', 'go_to_page',
+        'generate_bookmarks', 'get_app_status', 'get_nodes', 'get_page_image', 'get_remediation_instructions',
+        'get_tree_summary', 'get_view', 'go_to_page',
         'list_scripts', 'move_nodes', 'run_script', 'scope_tables', 'screenshot_window', 'select_nodes',
         'set_document_properties', 'split_content', 'undo_session_edits', 'update_nodes', 'verify_document', 'wrap_content'];
       assertEqual(names.join(), expected.join(), 'the tool list has changed - update this test if that was meant');
@@ -240,6 +244,30 @@ async function runTests() {
       const result = await client.callTool({ name: 'go_to_page', arguments: { page: 2 } });
       assertEqual(result.isError, true, 'the refusal was not flagged as an error');
       assert(/** @type {any} */ (result.content)[0].text.includes('Table Editor'), 'the reason was lost');
+      await client.close();
+    });
+
+    await test('the "Fix this PDF" prompt is listed and carries the current text', async () => {
+      const client = await connect(TEST_PORT, TEST_TOKEN);
+      const { prompts } = await client.listPrompts();
+      assertEqual(prompts.map((p) => p.name).join(), 'fix_document', 'the prompt list has changed - update this test if that was meant');
+      assert(prompts[0].description, 'fix_document has no description');
+      const plain = await client.getPrompt({ name: 'fix_document', arguments: {} });
+      assertEqual(/** @type {any} */ (plain.messages[0].content).text, fixPrompt, 'the prompt text did not come through as set');
+      fixPrompt = 'Only fix tables. (edited test prompt)';
+      const withNotes = await client.getPrompt({ name: 'fix_document', arguments: { notes: 'A book chapter.' } });
+      const text = /** @type {any} */ (withNotes.messages[0].content).text;
+      assert(text.startsWith(fixPrompt), 'an edit to the prompt did not reach the next request');
+      assert(text.endsWith('A book chapter.'), 'the notes were not appended');
+      await client.close();
+    });
+
+    await test('get_remediation_instructions returns the same text without asking the renderer', async () => {
+      const client = await connect(TEST_PORT, TEST_TOKEN);
+      const before = seen.length;
+      const result = await client.callTool({ name: 'get_remediation_instructions', arguments: {} });
+      assertEqual(/** @type {any} */ (result.content)[0].text, fixPrompt, 'the tool returned something else');
+      assertEqual(seen.length, before, 'it went to the renderer, which it has no need to');
       await client.close();
     });
 

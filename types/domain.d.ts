@@ -653,6 +653,10 @@ export interface AgentConfig {
   mcpJson: string;
   /** Why the server isn't running although enabled, or null. */
   error: string | null;
+  /** The "Fix this PDF" instructions Claude is given: the user's own, or the default. */
+  fixPrompt: string;
+  /** Whether fixPrompt is the user's own text rather than the default. */
+  fixPromptCustomised: boolean;
 }
 
 /*

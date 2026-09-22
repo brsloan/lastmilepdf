@@ -34,6 +34,15 @@ they summarise each release rather than record every change as it landed.
   you to run: it spends your AI credit.) "Fix this table and the others like
   it" is the kind of request it is for. Help has a new section, Working with
   Claude, covering all of it.
+- **"Fix this PDF" in one request.** Ask Claude to fix the whole document and
+  it follows a standing set of remediation instructions: survey every page
+  first, strip organisational wrappers, set one heading outline, join lists
+  and tables broken across pages, place captions, write alt text for every
+  figure, flag likely artifacts for you as "Artifact?", set the title and
+  author, generate bookmarks, and report what it did and what still needs a
+  person. The instructions are yours to rewrite in Preferences > Claude
+  connection, with Reset to default to bring the original back. In Claude
+  Code they are also a command, /mcp__lastmilepdf__fix_document.
 - **You take turns, visibly.** While Claude edits, a "Claude is editing" bar
   says what it is doing and your own input is locked, so an edit of yours
   can't land in the middle of its batch. Stop (or Escape) takes control back

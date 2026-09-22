@@ -21,6 +21,7 @@ const { z } = require('zod');
 const { autoUpdater } = require('electron-updater');
 const changelog = require('./lib/changelog');
 const { createAgentServer, MCP_PATH } = require('./lib/agent-server');
+const { DEFAULT_FIX_PROMPT, normaliseFixPrompt } = require('./lib/fix-prompt');
 
 // --- Diagnostic log ---------------------------------------------------------
 //
@@ -716,6 +717,24 @@ function getAgentServerToken() {
   return settings.agentServerToken;
 }
 
+// The user's own "Fix this PDF" instructions (Preferences > Claude
+// connection), or null for the default in lib/fix-document-prompt.txt. Only
+// a text that differs from the default is stored, so a user who never
+// changed it - or reset it - picks up a revised default with the next update.
+function getAgentFixPrompt() {
+  const value = readSettingsFile().agentFixPrompt;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+/** @param {string | null} value */
+function setAgentFixPrompt(value) {
+  const settings = readSettingsFile();
+  const text = typeof value === 'string' ? normaliseFixPrompt(value) : '';
+  if (text && text !== DEFAULT_FIX_PROMPT) settings.agentFixPrompt = text;
+  else delete settings.agentFixPrompt;
+  writeSettingsFile(settings);
+}
+
 // The version that ran last time, which is how the What's New dialog below
 // notices that an update has landed since. Written on every launch, so a
 // crash between installing and reading it costs at most one summary.
@@ -1308,6 +1327,7 @@ async function captureAgentWindow() {
 const agentServer = createAgentServer({
   requestRenderer: askRenderer,
   captureWindow: captureAgentWindow,
+  getFixPrompt: () => getAgentFixPrompt() || DEFAULT_FIX_PROMPT,
   version: app.getVersion(),
 });
 
@@ -1375,6 +1395,8 @@ function agentConfig() {
       },
     }, null, 2),
     error: agentServerError,
+    fixPrompt: getAgentFixPrompt() || DEFAULT_FIX_PROMPT,
+    fixPromptCustomised: getAgentFixPrompt() !== null,
   };
 }
 
@@ -1386,6 +1408,11 @@ ipcMain.handle('agent:get-config', async () => agentConfig());
 ipcMain.handle('agent:set-enabled', async (_event, { value }) => {
   setAgentServerEnabled(value === true);
   await syncAgentServer();
+  return agentConfig();
+});
+// null (or the default's own text) goes back to the default.
+ipcMain.handle('agent:set-fix-prompt', async (_event, { value }) => {
+  setAgentFixPrompt(typeof value === 'string' ? value : null);
   return agentConfig();
 });
 

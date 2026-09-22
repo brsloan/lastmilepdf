@@ -163,6 +163,8 @@ export const el = {
   btnShowAgentChanges: asButton('btn-show-agent-changes'),
   preferencesAgentJson: asTextarea('preferences-agent-json'),
   btnCopyAgentJson: asButton('btn-copy-agent-json'),
+  preferencesAgentFixPrompt: asTextarea('preferences-agent-fix-prompt'),
+  btnResetAgentFixPrompt: asButton('btn-reset-agent-fix-prompt'),
   btnSaveApiKey: asButton('btn-save-api-key'),
   btnClearApiKey: asButton('btn-clear-api-key'),
   shortcutsDialog: asDialog('shortcuts-dialog'),
