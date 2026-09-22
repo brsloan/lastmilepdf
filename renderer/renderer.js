@@ -3,7 +3,7 @@ import { setShowAtChanges, updateActualTextReviewUI } from './actual-text.js';
 import { initAgentBridge, refreshAgentPreferences } from './agent.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { moveArtifactSelection, showArtifactsPanel, showTagTreePanel, tagSelectedArtifacts } from './artifacts.js';
-import { addBookmark, applyFreshOutline, collectHeadingsForBookmarks, deleteSelectedBookmark } from './bookmarks.js';
+import { addBookmark, deleteSelectedBookmark, regenerateBookmarksFromHeadings } from './bookmarks.js';
 import { applyDetailsChange, closeDetails, refreshDetailsForSelection, scheduleLiveApply, setActivePanel, updateActualTextLabel } from './details.js';
 import { performClose, performOpen, performSave, performSaveAs } from './doc-io.js';
 import { el, selectableRows } from './dom.js';
@@ -165,13 +165,9 @@ el.btnGenerateBookmarks.addEventListener('click', async () => {
   document.body.classList.add('busy');
   try {
     setStatus('Generating bookmarks from headings…');
-    const headings = await collectHeadingsForBookmarks();
-    const result = await window.api.generateBookmarks(state.docId, headings);
-    state.selectedBookmarkId = null;
-    applyFreshOutline(result.outline);
-    applyUndoState(result);
-    setStatus(headings.length > 0
-      ? `Generated ${headings.length} bookmark${headings.length === 1 ? '' : 's'} from headings.`
+    const count = await regenerateBookmarksFromHeadings();
+    setStatus(count > 0
+      ? `Generated ${count} bookmark${count === 1 ? '' : 's'} from headings.`
       : 'No headings found - bookmarks cleared.');
   } catch (err) {
     reportError('Could not generate bookmarks', err);

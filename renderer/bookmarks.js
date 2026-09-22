@@ -208,6 +208,19 @@ export async function deleteSelectedBookmark() {
   }
 }
 
+// What the Bookmarks panel's Generate button does, minus the status message:
+// replaces the whole outline with one built from the headings. Shared with
+// Claude's generate_bookmarks tool (agent.js) so the two can't drift apart.
+// Returns the number of headings the new outline was built from.
+export async function regenerateBookmarksFromHeadings() {
+  const headings = await collectHeadingsForBookmarks();
+  const result = await window.api.generateBookmarks(state.docId, headings);
+  state.selectedBookmarkId = null;
+  applyFreshOutline(result.outline);
+  applyUndoState(result);
+  return headings.length;
+}
+
 // Walks the tag tree for every H1-H6 node, in document order, collecting
 // what generate_bookmarks() (tag_worker.py) needs to rebuild a nested
 // outline matching the heading hierarchy: level (for nesting), page (from

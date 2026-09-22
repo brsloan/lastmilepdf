@@ -16,7 +16,8 @@
 // 1-based. Conversion happens here, at the edge, and nowhere else.
 
 import { runFlattenAll, runScopeTables } from './actions.js';
-import { closeDetails, flushPendingLiveApply } from './details.js';
+import { regenerateBookmarksFromHeadings } from './bookmarks.js';
+import { closeDetails, flushPendingLiveApply, refreshDetailsForSelection } from './details.js';
 import { el } from './dom.js';
 import { applyTagShortcutAction, performUndo } from './editing.js';
 import { applyUndoState, reportError, setStatus } from './shell.js';
@@ -159,6 +160,9 @@ const handlers = {
       tagged: state.hasStructTree,
       unsavedChanges: state.dirty,
       title: state.docInfo?.title ?? null,
+      author: state.docInfo?.author ?? null,
+      language: state.docInfo?.lang ?? null,
+      bookmarkCount: countBookmarks(state.outline),
     };
   },
 
@@ -631,6 +635,46 @@ const handlers = {
     return { script: script.name, steps: results, ...idReport(before, 0) };
   },
 
+  async generateBookmarks() {
+    const current = requireSession();
+    // The Generate button clears the outline when there are no headings. A
+    // user pressing it can see that happen; Claude asking for bookmarks on an
+    // untitled-heading document almost certainly didn't mean "delete them".
+    let hasHeadings = false;
+    walkTree(state.tree, (node) => {
+      if (node.type === 'element' && /^H[1-6]$/.test(node.role || '')) hasHeadings = true;
+    });
+    if (!hasHeadings) {
+      throw new Error('The document has no H1-H6 headings to build bookmarks from, so nothing was changed. Tag the headings first (apply_tag_action "h1"-"h6"), then generate.');
+    }
+    const replaced = countBookmarks(state.outline);
+    const count = await regenerateBookmarksFromHeadings();
+    current.editCount += 1;
+    setStatus(`Claude generated ${count} bookmark${count === 1 ? '' : 's'} from headings.`);
+    return { bookmarksGenerated: count, bookmarksReplaced: replaced, bookmarks: describeOutline(state.outline) };
+  },
+
+  /** @param {{ title?: string, author?: string, language?: string }} params */
+  async setDocumentProperties({ title, author, language }) {
+    const current = requireSession();
+    /** @type {import('../types/domain').DocInfoChanges} */
+    const changes = {};
+    if (title !== undefined) changes.title = title.trim();
+    if (author !== undefined) changes.author = author.trim();
+    if (language !== undefined) changes.lang = language.trim();
+    if (Object.keys(changes).length === 0) throw new Error('Give at least one of title, author or language.');
+    const result = await window.api.updateDocInfo(state.docId, changes);
+    state.docInfo = result.docInfo;
+    applyUndoState(result);
+    current.editCount += 1;
+    // The properties pane shows these fields when the document root is
+    // selected; redraw it so the user sees the new values land.
+    if (state.selectedNodeId === 'root') refreshDetailsForSelection({ allowPageJump: false });
+    setStatus('Claude updated the document properties.');
+    const { title: newTitle, author: newAuthor, lang } = state.docInfo;
+    return { title: newTitle ?? null, author: newAuthor ?? null, language: lang ?? null, idsUnchanged: true };
+  },
+
   async flattenAll() {
     return runWholeDocumentAction(requireSession(), runFlattenAll);
   },
@@ -883,6 +927,34 @@ function showLastChanges() {
   if (ids.length === 1) selectNode(ids[0]);
   else selectNodes(ids);
   setStatus(`Selected the ${ids.length === 1 ? 'tag' : `${ids.length} tags`} Claude changed.`);
+}
+
+// --- bookmarks ---------------------------------------------------------------
+
+function countBookmarks(outline) {
+  let count = 0;
+  for (const node of outline || []) count += 1 + countBookmarks(node.children);
+  return count;
+}
+
+const OUTLINE_REPORT_LIMIT = 300;
+
+/** The outline as nested {title, page}, 1-based pages, capped so a huge one stays readable. */
+function describeOutline(outline) {
+  let budget = OUTLINE_REPORT_LIMIT;
+  const visit = (nodes) => {
+    const out = [];
+    for (const node of nodes || []) {
+      if (budget <= 0) break;
+      budget -= 1;
+      /** @type {Record<string, any>} */
+      const item = { title: node.title, page: node.page === null || node.page === undefined ? null : node.page + 1 };
+      if (node.children && node.children.length) item.children = visit(node.children);
+      out.push(item);
+    }
+    return out;
+  };
+  return visit(outline);
 }
 
 // --- the user's saved scripts ---------------------------------------------------
