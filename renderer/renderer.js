@@ -1,6 +1,6 @@
 import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { setShowAtChanges, updateActualTextReviewUI } from './actual-text.js';
-import { initAgentBridge, refreshAgentPreferences } from './agent.js';
+import { initAgentBridge } from './agent.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
 import { moveArtifactSelection, showArtifactsPanel, showTagTreePanel, tagSelectedArtifacts } from './artifacts.js';
 import { addBookmark, deleteSelectedBookmark, regenerateBookmarksFromHeadings } from './bookmarks.js';
@@ -320,7 +320,7 @@ window.api.getAutoSaveEnabled().then((value) => { state.autoSaveEnabled = value;
 
 window.api.getAutoCheckUpdates().then((value) => { state.autoCheckUpdates = value; });
 
-// The Claude connection (File > Settings > Preferences) - answers tool calls
+// The Claude connection (File > Settings > Desktop Agents) - answers tool calls
 // main.js forwards from the local MCP server. Harmless while that is off:
 // nothing ever arrives.
 initAgentBridge();
@@ -618,7 +618,6 @@ window.api.onMenuPreferences(() => {
   el.preferencesAutoCheckUpdates.checked = state.autoCheckUpdates;
   el.preferencesNotifyDesktop.checked = state.notifyDesktop;
   el.preferencesNotifyChime.checked = state.notifyChime;
-  refreshAgentPreferences();
   renderShortcutRows(el.preferencesTagShortcutsList, TAG_SHORTCUT_ACTIONS, 'tagShortcuts');
   renderExtraDeleteKeyRow(el.preferencesTagShortcutsList);
   renderShortcutRows(el.preferencesProofreadShortcutsList, PROOFREAD_SHORTCUT_ACTIONS, 'proofreadShortcuts');

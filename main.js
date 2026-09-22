@@ -688,7 +688,7 @@ function setAutoCheckForUpdates(value) {
 }
 
 // Whether the local MCP server Claude connects to is running (File >
-// Settings > Preferences > Claude connection). Defaults off, for the same
+// Settings > Desktop Agents). Defaults off, for the same
 // reason autoSaveEnabled does and then some: it opens a port, so it should
 // be something the user turned on rather than something they discover.
 function getAgentServerEnabled() {
@@ -717,8 +717,8 @@ function getAgentServerToken() {
   return settings.agentServerToken;
 }
 
-// The user's own "Fix this PDF" instructions (Preferences > Claude
-// connection), or null for the default in lib/fix-document-prompt.txt. Only
+// The user's own "Fix this PDF" instructions (File > Settings > Desktop
+// Agents), or null for the default in lib/fix-document-prompt.txt. Only
 // a text that differs from the default is stored, so a user who never
 // changed it - or reset it - picks up a revised default with the next update.
 function getAgentFixPrompt() {
@@ -1037,6 +1037,7 @@ function buildAppMenu() {
             { label: 'API Key…', click: (_item, win) => sendToWindow(win, 'menu:settings') },
             { type: 'separator' },
             { label: 'Preferences…', click: (_item, win) => sendToWindow(win, 'menu:preferences') },
+            { label: 'Desktop Agents…', click: (_item, win) => sendToWindow(win, 'menu:desktop-agents') },
           ],
         },
         { type: 'separator' },

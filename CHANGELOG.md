@@ -12,7 +12,8 @@ they summarise each release rather than record every change as it landed.
 
 ### Added
 - **Claude can work on the PDF you have open, alongside you.** Turning on
-  File > Settings > Preferences > Claude connection starts a small server that
+  the Claude connection in the new File > Settings > Desktop Agents dialog
+  starts a small server that
   only programs on this computer can reach, and gives you what Claude needs to
   find it: a file to save for the Claude desktop app, or a command for Claude
   Code in a terminal. From then on a Claude session running beside the app can
@@ -40,8 +41,8 @@ they summarise each release rather than record every change as it landed.
   and tables broken across pages, place captions, write alt text for every
   figure, flag likely artifacts for you as "Artifact?", set the title and
   author, generate bookmarks, and report what it did and what still needs a
-  person. The instructions are yours to rewrite in Preferences > Claude
-  connection, with Reset to default to bring the original back. In Claude
+  person. The instructions are yours to rewrite in File > Settings > Desktop
+  Agents, with Reset to default to bring the original back. In Claude
   Code they are also a command, /mcp__lastmilepdf__fix_document.
 - **You take turns, visibly.** While Claude edits, a "Claude is editing" bar
   says what it is doing and your own input is locked, so an edit of yours

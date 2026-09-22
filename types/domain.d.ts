@@ -638,7 +638,7 @@ export interface UpdateInfo {
 }
 
 /**
- * The Claude connection's state, for File > Settings > Preferences - see
+ * The Claude connection's state, for File > Settings > Desktop Agents - see
  * lib/agent-server.js and the 'agent:*' handlers in main.js.
  */
 export interface AgentConfig {

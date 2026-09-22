@@ -590,6 +590,9 @@ const api = {
   /** @param {() => void} callback */
   onMenuPreferences: (callback) => onMenu('menu:preferences', callback),
 
+  /** @param {() => void} callback */
+  onMenuDesktopAgents: (callback) => onMenu('menu:desktop-agents', callback),
+
   // File > Settings > Preferences > Appearance - the color theme. The stored
   // preference is 'auto' | 'dark' | 'light'; the *resolved* theme is one of
   // the last two, with 'auto' collapsed against the OS setting in main.js.
@@ -697,7 +700,7 @@ const api = {
   /** @param {boolean} value @returns {Promise<void>} */
   setAutoCheckUpdates: (value) => ipcRenderer.invoke('settings:set-auto-check-updates', { value }),
 
-  // File > Settings > Preferences > Claude connection - the local MCP server
+  // File > Settings > Desktop Agents - the local MCP server
   // in lib/agent-server.js. Both calls answer with the server's whole state,
   // so the panel redraws from one shape whether it asked or changed it.
   /** @returns {Promise<AgentConfig>} */

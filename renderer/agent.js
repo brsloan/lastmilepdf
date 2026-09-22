@@ -1187,21 +1187,21 @@ async function handleRequest({ id, method, params }) {
   }
 }
 
-// --- File > Settings > Preferences > Claude connection ----------------------
+// --- File > Settings > Desktop Agents ---------------------------------------
 
 /** @param {import('../types/domain').AgentConfig} config */
-function drawAgentPreferences(config) {
-  el.preferencesAgentEnabled.checked = config.enabled;
-  el.preferencesAgentDetails.hidden = !config.running;
-  el.preferencesAgentCommand.value = config.running ? config.command : '';
-  el.preferencesAgentJson.value = config.running ? config.mcpJson : '';
-  if (config.error) el.preferencesAgentStatus.textContent = config.error;
-  else if (config.running) el.preferencesAgentStatus.textContent = `On - listening at ${config.url}`;
-  else el.preferencesAgentStatus.textContent = 'Off.';
+function drawAgentSettings(config) {
+  el.agentsEnabled.checked = config.enabled;
+  el.agentsDetails.hidden = !config.running;
+  el.agentsCommand.value = config.running ? config.command : '';
+  el.agentsJson.value = config.running ? config.mcpJson : '';
+  if (config.error) el.agentsStatus.textContent = config.error;
+  else if (config.running) el.agentsStatus.textContent = `On - listening at ${config.url}`;
+  else el.agentsStatus.textContent = 'Off.';
   // Never while the user is typing in it: a save's answer arriving mid-word
   // would put back the text as it was a moment ago.
-  if (document.activeElement !== el.preferencesAgentFixPrompt) {
-    el.preferencesAgentFixPrompt.value = config.fixPrompt;
+  if (document.activeElement !== el.agentsFixPrompt) {
+    el.agentsFixPrompt.value = config.fixPrompt;
   }
   el.btnResetAgentFixPrompt.disabled = !config.fixPromptCustomised;
 }
@@ -1218,7 +1218,7 @@ async function saveFixPrompt(value) {
   clearTimeout(fixPromptSaveTimer);
   fixPromptSaveTimer = null;
   try {
-    drawAgentPreferences(await window.api.setAgentFixPrompt(value));
+    drawAgentSettings(await window.api.setAgentFixPrompt(value));
     return true;
   } catch (err) {
     reportError('Could not save the "Fix this PDF" instructions', err);
@@ -1226,10 +1226,10 @@ async function saveFixPrompt(value) {
   }
 }
 
-/** Called as the Preferences dialog opens, so it shows the server's state now rather than at launch. */
-export async function refreshAgentPreferences() {
+/** Called as the Desktop Agents dialog opens, so it shows the server's state now rather than at launch. */
+async function refreshAgentSettings() {
   try {
-    drawAgentPreferences(await window.api.getAgentConfig());
+    drawAgentSettings(await window.api.getAgentConfig());
   } catch (err) {
     reportError('Could not read the Claude connection settings', err);
   }
@@ -1251,26 +1251,37 @@ export function initAgentBridge() {
     setStatus('Claude is editing - press Stop (or Escape) to take back control first.');
   });
 
-  el.preferencesAgentEnabled.addEventListener('change', async () => {
+  // Drawn before it opens, so the fix-prompt box is never shown empty -
+  // and never has focus when its text arrives, which would keep it out.
+  window.api.onMenuDesktopAgents(async () => {
+    await refreshAgentSettings();
+    el.desktopAgentsDialog.showModal();
+  });
+  el.btnCloseDesktopAgents.addEventListener('click', () => el.desktopAgentsDialog.close());
+  el.desktopAgentsDialog.addEventListener('click', (e) => {
+    if (e.target === el.desktopAgentsDialog) el.desktopAgentsDialog.close();
+  });
+
+  el.agentsEnabled.addEventListener('change', async () => {
     try {
-      drawAgentPreferences(await window.api.setAgentEnabled(el.preferencesAgentEnabled.checked));
+      drawAgentSettings(await window.api.setAgentEnabled(el.agentsEnabled.checked));
     } catch (err) {
       reportError('Could not change the Claude connection', err);
     }
   });
 
-  el.preferencesAgentCommand.addEventListener('focus', () => el.preferencesAgentCommand.select());
+  el.agentsCommand.addEventListener('focus', () => el.agentsCommand.select());
 
-  el.preferencesAgentFixPrompt.addEventListener('input', () => {
+  el.agentsFixPrompt.addEventListener('input', () => {
     clearTimeout(fixPromptSaveTimer);
-    fixPromptSaveTimer = setTimeout(() => saveFixPrompt(el.preferencesAgentFixPrompt.value), FIX_PROMPT_SAVE_DELAY_MS);
+    fixPromptSaveTimer = setTimeout(() => saveFixPrompt(el.agentsFixPrompt.value), FIX_PROMPT_SAVE_DELAY_MS);
   });
   // Leaving the box saves at once, so closing the dialog straight after
   // typing can't beat the timer. An emptied box goes back to the default
   // rather than leaving Claude with no instructions at all.
-  el.preferencesAgentFixPrompt.addEventListener('blur', () => {
-    if (fixPromptSaveTimer !== null) saveFixPrompt(el.preferencesAgentFixPrompt.value);
-    else if (!el.preferencesAgentFixPrompt.value.trim()) refreshAgentPreferences();
+  el.agentsFixPrompt.addEventListener('blur', () => {
+    if (fixPromptSaveTimer !== null) saveFixPrompt(el.agentsFixPrompt.value);
+    else if (!el.agentsFixPrompt.value.trim()) refreshAgentSettings();
   });
   el.btnResetAgentFixPrompt.addEventListener('click', async () => {
     if (await saveFixPrompt(null)) setStatus('"Fix this PDF" instructions reset to the default.');
@@ -1286,6 +1297,6 @@ export function initAgentBridge() {
       }
     });
   };
-  copyOnClick(el.btnCopyAgentCommand, el.preferencesAgentCommand, 'command');
-  copyOnClick(el.btnCopyAgentJson, el.preferencesAgentJson, 'file contents');
+  copyOnClick(el.btnCopyAgentCommand, el.agentsCommand, 'command');
+  copyOnClick(el.btnCopyAgentJson, el.agentsJson, 'file contents');
 }
