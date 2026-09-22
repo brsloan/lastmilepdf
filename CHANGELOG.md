@@ -24,7 +24,9 @@ they summarise each release rather than record every change as it landed.
   change roles, alt text, Actual Text, language and table-cell attributes;
   apply any of the tagging shortcuts (headings, paragraph, list, list item,
   block quotation, table, row, cells, figure, caption, join); move tags;
-  delete tags; wrap loose page content in a new tag; generate bookmarks from
+  delete tags; split content in two, as Split Content does (a list label
+  from its item, a run-in heading from its paragraph); wrap loose page
+  content in a new tag; generate bookmarks from
   the headings, as the Bookmarks panel's Generate button does; set the
   document's title, author and language; and run Flatten, Scope Tables, or
   any script you have saved under Tools > Scripts… - "run my

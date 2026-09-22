@@ -192,10 +192,10 @@ What Claude can see
 : The page you are on and the tags you have selected, a summary of the tag tree or any part of it in detail, a search by tag type, page or text, the Verify report, and a picture of any page or of just the region a tag covers.
 
 What Claude can change
-: Tag type, alt text, Actual Text, language and table-cell attributes; every tagging shortcut (headings, paragraph, list, list item, block quotation, table, row, cells, figure, caption, join); moving and deleting tags; wrapping loose page content in a new tag; Flatten and Scope Tables; generating bookmarks from the headings, as the Bookmarks panel's **Generate** button does (it replaces any bookmarks already there); the document's title, author and language; and any script you have saved under Tools > Scripts…, except one containing Fix All Actual Text (AI), which spends your AI credit and is left for you to run.
+: Tag type, alt text, Actual Text, language and table-cell attributes; every tagging shortcut (headings, paragraph, list, list item, block quotation, table, row, cells, figure, caption, join); moving and deleting tags; splitting a piece of content in two, as **Split Content** does — to separate a list label from its item, say, or a run-in heading from its paragraph; wrapping loose page content in a new tag; Flatten and Scope Tables; generating bookmarks from the headings, as the Bookmarks panel's **Generate** button does (it replaces any bookmarks already there); the document's title, author and language; and any script you have saved under Tools > Scripts…, except one containing Fix All Actual Text (AI), which spends your AI credit and is left for you to run.
 
 What Claude cannot do
-: Open, save or close a file. Nothing it changes reaches disk until you save. It also can't draw on the page, so cutting a piece of content in two is still a job for **Select Content**.
+: Open, save or close a file. Nothing it changes reaches disk until you save. It also can't draw on the page, so tagging by rectangle is still a job for **Select Content**.
 
 While Claude is editing
 : A **Claude is editing** bar appears, saying what it is doing, and your own input is locked so that an edit of yours can't land in the middle of its batch. **Stop**, or <kbd>Esc</kbd>, takes control back at once; a session that goes quiet for two minutes ends by itself. Claude can't start editing while you are in the middle of something — a dialog, a Select Content rectangle.

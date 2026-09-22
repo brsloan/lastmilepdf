@@ -577,6 +577,17 @@ export interface SplitLeafResult extends MutationResult {
 }
 
 /**
+ * `split_leaves()`'s result (Claude's split_content tool): for each leaf
+ * named, the pieces it was cut into, in order, with their new ids and the
+ * text each holds. Carries `pdfBase64` for the same reason split_leaf() does.
+ */
+export interface SplitLeavesResult extends MutationResult {
+  splits: { leafId: string, pieces: { nodeId: string | null, text: string }[] }[];
+  cutCount: number;
+  pdfBase64: string;
+}
+
+/**
  * One step in a Tools > Scripts… script (see renderer/scripts.js). `type`
  * picks which of the five toolbar actions this step runs; `findRole`/
  * `replaceRole` are only meaningful (and only shown in the builder) for a

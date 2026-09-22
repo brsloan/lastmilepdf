@@ -4795,6 +4795,128 @@ def split_leaf(doc_id, node_id, split_index):
     }
 
 
+def _find_cut_by_text(text, boundaries, cut_before, search_from):
+    """Where `cut_before` begins in `text`, at or after `search_from` - the
+    offset split_leaf() would be handed. Matched ignoring whitespace, since
+    the caller (Claude, via split_leaves()) has usually read the text through
+    pdf.js, whose spacing can differ from what the content stream decodes to;
+    the cut lands just before the match's first non-space character. Refuses
+    rather than guesses: a match that isn't unique in the rest of the leaf,
+    lands at either end of it, or falls inside a font code (a ligature)."""
+    squeezed = []
+    positions = []
+    for i, ch in enumerate(text):
+        if not ch.isspace():
+            squeezed.append(ch)
+            positions.append(i)
+    haystack = "".join(squeezed)
+    needle = "".join(ch for ch in cut_before if not ch.isspace())
+    if not needle:
+        raise ValueError("A cutBefore entry has no text in it")
+    start = next((j for j, pos in enumerate(positions) if pos >= search_from), len(positions))
+    found = haystack.find(needle, start)
+    if found == -1:
+        raise ValueError(f'"{cut_before}" does not occur in the rest of the leaf')
+    if haystack.find(needle, found + 1) != -1:
+        raise ValueError(f'"{cut_before}" occurs more than once in the rest of the leaf - give a longer piece of text')
+    index = positions[found]
+    if index <= search_from or index >= len(text):
+        raise ValueError(f'"{cut_before}" is where the leaf (or the previous piece) already starts - there is nothing to cut off before it')
+    if index not in boundaries:
+        raise ValueError(f'"{cut_before}" begins inside a single glyph (a ligature), so the leaf can\'t be cut there')
+    return index
+
+
+def split_leaves(doc_id, splits):
+    """Claude's split_content tool: cuts one or more content leaves into
+    pieces, each cut named by the text it goes before rather than by an
+    offset. `splits` is [{"nodeId", "cutBefore": [text, ...]}], the texts in
+    reading order within that leaf.
+
+    Everything is checked before anything changes - every leaf decoded, every
+    cut located - so a refusal leaves no trace, and the refusal carries the
+    leaf's exact decoded text for the caller to try again against. Then it is
+    one undo snapshot, one rebuild and one `pdfBase64` for the lot (the same
+    economy tag_rect_content() makes), where calling split_leaf() per cut
+    would pay for each of those every time.
+
+    Within a leaf the cuts go last to first: the first half of a cut keeps
+    the original MCID (see _cut_leaf()), so the text still to be cut stays
+    addressable by it. Each cut rewrites the page and re-decodes it, and
+    offsets are relative to the leaf's own text, so leaves don't disturb
+    each other's."""
+    doc = documents[doc_id]
+    if not splits:
+        raise ValueError("No splits given")
+
+    planned = []
+    seen = set()
+    for split in splits:
+        node_id = split["nodeId"]
+        if node_id in seen:
+            raise ValueError(f"{node_id} is named twice - give all of a leaf's cuts in one entry")
+        seen.add(node_id)
+        if doc["node_kind"].get(node_id) not in ("content-int", "content-dict"):
+            raise ValueError(f"{node_id} is not a content leaf")
+        if doc["parent_map"].get(node_id) is None:
+            raise ValueError(f"{node_id} has no parent tag to split it within")
+        try:
+            _, page_index, _, _, _, codes = _decode_leaf(doc, node_id)
+        except ValueError as exc:
+            raise ValueError(f"{node_id} can't be split: {exc}") from exc
+        text = "".join(c["text"] for c in codes)
+        boundaries = set()
+        offset = 0
+        for c in codes:
+            boundaries.add(offset)
+            offset += len(c["text"])
+        indices = []
+        search_from = 0
+        for cut_before in split.get("cutBefore") or []:
+            try:
+                index = _find_cut_by_text(text, boundaries, cut_before, search_from)
+            except ValueError as exc:
+                raise ValueError(f"{node_id}: {exc}. Its text, exactly: {json.dumps(text)}") from exc
+            indices.append(index)
+            search_from = index
+        if not indices:
+            raise ValueError(f"{node_id}: no cutBefore texts given")
+        edges = [0, *indices, len(text)]
+        planned.append({
+            "nodeId": node_id, "page": page_index,
+            "mcid": _leaf_page_and_mcid(doc, node_id)[1],
+            "indices": indices,
+            "texts": [text[a:b] for a, b in zip(edges, edges[1:])],
+        })
+
+    _push_undo_snapshot(doc)
+    cut_count = 0
+    for plan in planned:
+        new_mcids = []
+        for index in reversed(plan["indices"]):
+            node_id = _leaf_id_for_mcid(doc, plan["page"], plan["mcid"])
+            if node_id is None:
+                raise ValueError("Lost track of a content leaf while splitting it")
+            _, _, new_mcid, _, _ = _cut_leaf(doc, node_id, index)
+            new_mcids.insert(0, new_mcid)
+            cut_count += 1
+        plan["mcids"] = [plan["mcid"], *new_mcids]
+
+    tree = _rebuild_after_mutation(doc_id)
+    results = []
+    for plan in planned:
+        pieces = []
+        for mcid, text in zip(plan["mcids"], plan["texts"]):
+            pieces.append({"nodeId": _leaf_id_for_mcid(doc, plan["page"], mcid), "text": text})
+        results.append({"leafId": plan["nodeId"], "pieces": pieces})
+
+    return {
+        "tree": tree, "splits": results, "cutCount": cut_count,
+        "pdfBase64": base64.b64encode(_snapshot_bytes(doc["pdf"])).decode("ascii"),
+        **_undo_state(doc),
+    }
+
+
 # --- figure-from-rectangle tagging ----------------------------------------
 #
 # Backs the "Add Figure" draw tool: the renderer lets the user drag a
@@ -5863,6 +5985,8 @@ def main():
                 result = set_pdf_ua_identifier(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
+            elif cmd == "split_leaves":
+                result = split_leaves(request["docId"], request["splits"])
             elif cmd == "get_leaf_text":
                 result = get_leaf_text(request["docId"], request["nodeId"])
             elif cmd == "get_page_code_boxes":

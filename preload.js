@@ -294,6 +294,14 @@ const api = {
   splitLeaf: (docId, nodeId, splitIndex) =>
     ipcRenderer.invoke('tags:split-leaf', { docId, nodeId, splitIndex }),
   /**
+   * Claude's split_content: several leaves, each cut before the texts named.
+   * @param {string} docId
+   * @param {{ nodeId: string, cutBefore: string[] }[]} splits
+   * @returns {Promise<import('./types/domain').SplitLeavesResult>}
+   */
+  splitLeaves: (docId, splits) =>
+    ipcRenderer.invoke('tags:split-leaves', { docId, splits }),
+  /**
    * Tags a user-drawn rectangle as a new /Figure.
    * @param {string} docId
    * @param {number} pageIndex 0-based.

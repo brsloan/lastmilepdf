@@ -1484,6 +1484,85 @@ async function editTests(fixture) {
       assertEqual(reB.text, target.text.slice(target.at), 'second half is wrong in the saved file');
     });
   }));
+
+  // split_leaves() is Claude's split_content: cuts named by the text they go
+  // before, several to a leaf, one undo step and one rebuild for the lot.
+  // A leaf with at least three words, cut before the second and third - each
+  // named by everything from there to the end, which can only occur once.
+  async function leafWithThreeWords(doc) {
+    for (const leaf of contentLeaves(doc.tree)) {
+      const { text } = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: leaf.id });
+      if (!text) continue;
+      const starts = [];
+      for (let i = 1; i < text.length; i += 1) {
+        if (text[i - 1] === ' ' && text[i] !== ' ') starts.push(i);
+      }
+      if (starts.length >= 2) return { id: leaf.id, text, cuts: starts.slice(0, 2) };
+    }
+    return null;
+  }
+
+  await test('split_leaves cuts a leaf before the texts named, and survives save', () => withDoc(fixture, async (doc) => {
+    const target = await leafWithThreeWords(doc);
+    if (!target) skip('no content leaf with three words in this fixture');
+    const [c1, c2] = target.cuts;
+    const leavesBefore = contentLeaves(doc.tree).length;
+    // Whitespace is ignored in matching, so doubled spaces must still find it.
+    const result = await worker.call('split_leaves', {
+      docId: doc.docId,
+      splits: [{ nodeId: target.id, cutBefore: [target.text.slice(c1).replace(/ /g, '  '), target.text.slice(c2)] }],
+    });
+    assertEqual(result.cutCount, 2, 'expected two cuts');
+    assert(result.pdfBase64, 'no refreshed PDF bytes for the preview');
+    assertEqual(contentLeaves(result.tree).length, leavesBefore + 2, 'did not add exactly two leaves');
+    const expected = [target.text.slice(0, c1), target.text.slice(c1, c2), target.text.slice(c2)];
+    const pieces = result.splits[0].pieces;
+    assertEqual(pieces.map((p) => p.text).join('|'), expected.join('|'), 'reported pieces are wrong');
+    for (let i = 0; i < 3; i += 1) {
+      const { text } = await worker.call('get_leaf_text', { docId: doc.docId, nodeId: pieces[i].nodeId });
+      assertEqual(text, expected[i], `piece ${i + 1} does not hold the text reported for it`);
+    }
+    // One snapshot for the lot: a single undo restores the uncut leaf.
+    const undone = await worker.call('undo', { docId: doc.docId });
+    assertEqual(contentLeaves(undone.tree).length, leavesBefore, 'one undo did not take back both cuts');
+    const redone = await worker.call('redo', { docId: doc.docId });
+    assertEqual(contentLeaves(redone.tree).length, leavesBefore + 2, 'redo did not restore the cuts');
+
+    await saveAndReopen(doc.docId, 'split-leaves', async (reopened) => {
+      for (let i = 0; i < 3; i += 1) {
+        const { text } = await worker.call('get_leaf_text', { docId: reopened.docId, nodeId: pieces[i].nodeId });
+        assertEqual(text, expected[i], `piece ${i + 1} is wrong in the saved file`);
+      }
+    });
+  }));
+
+  await test('split_leaves refuses a cut it cannot find, quoting the text, and changes nothing', () => withDoc(fixture, async (doc) => {
+    const target = await leafWithThreeWords(doc);
+    if (!target) skip('no content leaf with three words in this fixture');
+    const good = { nodeId: target.id, cutBefore: [target.text.slice(target.cuts[0])] };
+    const bad = [
+      { label: 'text that is not there', splits: [{ nodeId: target.id, cutBefore: ['☃ not in this leaf ☃'] }] },
+      { label: 'a cut at the very start', splits: [{ nodeId: target.id, cutBefore: [target.text] }] },
+      { label: 'a tag instead of a leaf', splits: [{ nodeId: 'root', cutBefore: ['x'] }] },
+      // One good split beside a bad one: the good one must not land either.
+      { label: 'a good split batched with a bad one', splits: [good, { nodeId: 'root', cutBefore: ['x'] }] },
+    ];
+    for (const { label, splits } of bad) {
+      let message = null;
+      try {
+        await worker.call('split_leaves', { docId: doc.docId, splits });
+      } catch (err) {
+        message = String(err.message || err);
+      }
+      assert(message !== null, `${label} was accepted`);
+      if (label === 'text that is not there') {
+        assert(message.includes(JSON.stringify(target.text)), 'the refusal does not quote the leaf\'s exact text');
+      }
+    }
+    const after = await worker.call('undo', { docId: doc.docId }).catch(() => null);
+    assert(!after || contentLeaves(after.tree).length === contentLeaves(doc.tree).length,
+      'a refused split left an undo step behind');
+  }));
 }
 
 async function listAndTableTests(fixture) {

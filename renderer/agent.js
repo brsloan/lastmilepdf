@@ -590,6 +590,33 @@ const handlers = {
     };
   },
 
+  /** @param {{ revision: number, splits: { leafId: string, cutBefore: string[] }[] }} params */
+  async splitContent({ revision: readAt, splits }) {
+    const current = requireSession();
+    const leafIds = splits.map((s) => s.leafId);
+    requireFreshIds(readAt, leafIds);
+    for (const id of leafIds) {
+      const { node } = requireNode(id);
+      if (node.type !== 'content') throw new Error(`${id} is a ${node.type === 'element' ? `${node.role} tag` : node.type}, not a content leaf. Get leaf ids from get_nodes with includeLeaves.`);
+    }
+    const before = shapeOf(state.tree);
+    const earliest = earliestIndex(before, leafIds);
+    // Taken before the cut, by the tags holding the leaves: those are what
+    // the user will want to look at afterwards, and their content keys
+    // survive a split (the first piece keeps its mcid).
+    const parentKeys = contentKeysFor(leafIds.map((id) => state.nodesById.get(id)?.parentId).filter(Boolean));
+    const result = await window.api.splitLeaves(state.docId, splits.map((s) => ({ nodeId: s.leafId, cutBefore: s.cutBefore })));
+    await commitEdit(current, result);
+    current.touched.push(...parentKeys);
+    const pieceIds = result.splits.flatMap((s) => s.pieces.map((p) => p.nodeId)).filter(Boolean);
+    showResult(pieceIds);
+    return {
+      cutsMade: result.cutCount,
+      splits: result.splits.map((s) => ({ leaf: s.leafId, pieces: s.pieces.map((p) => ({ id: p.nodeId, text: clip(p.text, SNIPPET_CHARS) })) })),
+      ...idReport(before, earliest),
+    };
+  },
+
   async listScripts() {
     const { scripts, activeScriptId } = await listSavedScripts();
     return {

@@ -1676,6 +1676,10 @@ ipcMain.handle('tags:split-leaf', async (_event, { docId, nodeId, splitIndex }) 
   return callWorker('split_leaf', { docId, nodeId, splitIndex });
 });
 
+ipcMain.handle('tags:split-leaves', async (_event, { docId, splits }) => {
+  return callWorker('split_leaves', { docId, splits });
+});
+
 ipcMain.handle('tags:figure-from-rect', async (_event, { docId, pageIndex, rect }) => {
   return callWorker('figure_from_rect', { docId, pageIndex, rect });
 });
