@@ -32,6 +32,7 @@
       <nav class="nav-links">
         <a href="#why">Why It Exists</a>
         <a href="#features">Features</a>
+        <a href="#claude">With Claude</a>
         <a href="#screenshot">See It</a>
         <a href="#scope">Scope</a>
         <a href="https://github.com/brsloan/lastmilepdf">GitHub</a>
@@ -150,11 +151,15 @@
         </div>
         <div class="feature">
           <h3>✏️ Tag straight from the page</h3>
-          <p>Drag a rectangle over the page preview and press one key to tag what's underneath. It cuts text at the rectangle's edges, so a heading the auto-tagger swallowed into the paragraph below it comes out as a real heading &mdash; and a box drawn around a set of bullets &mdash; or around an academic reference list marked out by nothing but its hanging indents &mdash; becomes a properly structured list.</p>
+          <p>Drag a rectangle over the page and press one key to tag what's underneath. Text is cut at the rectangle's edges, so a heading swallowed into the paragraph below comes out as a real heading, and a box around bullets or a hanging-indent reference list becomes a properly structured list.</p>
         </div>
         <div class="feature">
           <h3><span class="tag-pill">/Table</span>Draw a table over a scan</h3>
-          <p>Drag a rectangle over a scanned table for automatic row/column detection, or mark them manually with line tools for more controlled automatic tagging.</p>
+          <p>Drag a rectangle over a scanned table and the rows and columns are guessed for you. Adjust the dividers, or let AI lay out the grid, then build the whole table in one step.</p>
+        </div>
+        <div class="feature">
+          <h3>✂️ Split content</h3>
+          <p>Cut a run of page content in two &mdash; a list label from its item, a run-in heading from its paragraph &mdash; so each half gets its own tag.</p>
         </div>
         <div class="feature">
           <h3>🔍 Find/Replace for tag types</h3>
@@ -170,7 +175,7 @@
         </div>
         <div class="feature">
           <h3>🤖 Optional AI-assisted OCR proofing</h3>
-          <p>Clean up OCR errors in Actual Text fields with any AI provider you configure, with every change highlighted for your approval before it's applied.</p>
+          <p>Fix OCR errors in Actual Text with any AI provider you choose, including one your university hosts. Every change is highlighted for review, with one-click revert.</p>
         </div>
         <div class="feature">
           <h3>🖼️ Catch missed figures</h3>
@@ -203,6 +208,49 @@
         <div class="feature">
           <h3>📍 Picks up where you left off</h3>
           <p>Reopen a document and it comes back to the tag, the expanded branches and the page you left it on.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="claude">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Works with Claude</span>
+        <h2>Let Claude take a pass while you watch</h2>
+        <p>
+          Turn on the Desktop Agents connection and a Claude session on the same computer,
+          in the Claude desktop app or Claude Code, can work on the PDF you have open. Ask
+          it to fix one table, every table like it, or the whole document.
+        </p>
+      </div>
+      <div class="why-grid">
+        <div class="why-card">
+          <div class="icon">👀</div>
+          <h3>Sees what you see</h3>
+          <p>
+            The page you're on, the tags you've selected, the whole tag tree, the Verify
+            report and pictures of any page. It turns the page and selects tags to show
+            you what it means.
+          </p>
+        </div>
+        <div class="why-card">
+          <div class="icon">🛠️</div>
+          <h3>"Fix this PDF"</h3>
+          <p>
+            One request runs a full remediation pass from instructions you can rewrite:
+            heading outline, lists and tables split across pages, captions, alt text,
+            bookmarks, title and author, then a report of what still needs a person.
+          </p>
+        </div>
+        <div class="why-card">
+          <div class="icon">↩️</div>
+          <h3>You stay in charge</h3>
+          <p>
+            You watch the edits land, Esc takes control back, and a whole session is one
+            undo. Claude can't open or save files, and only programs on your own computer
+            can connect.
+          </p>
         </div>
       </div>
     </div>
@@ -278,6 +326,7 @@
             <li>Table structure and scope review</li>
             <li>Bulk fixes via find/replace and saved scripts</li>
             <li>OCR proofreading with optional AI assistance you control</li>
+            <li>Handing a first pass, or a whole document, to Claude while you review</li>
           </ul>
         </div>
         <div class="scope-box limit">

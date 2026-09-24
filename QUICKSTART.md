@@ -91,3 +91,42 @@ Set up API access with your chosen AI service in File \> Settings.
 
 If it’s a clean scan with good OCR, you can skip the Fix All step and just use the individual AI button for problem tags.
 
+
+## Suggested Workflow With Desktop AI Agents
+
+If you use Claude, you can let it work on the PDF you have open while you watch. Think of it as an assistant sitting beside you: it sees the same page and tags you do, points things out by selecting them, and makes tag changes when you ask. It can’t open, save, or close files, so nothing is permanent until you click Save.
+
+This is separate from the AI service in File \> Settings. It uses your own Claude account, through the Claude desktop app or Claude Code.
+
+### Setting It Up (Once)
+
+1. Go to File \> Settings \> Desktop Agents and tick “Allow Claude to connect to this app.”  
+2. Make a folder to use for your PDF work with Claude. Any folder will do.  
+3. In the Desktop Agents window, click “Copy file contents.” Paste it into a new file in Notepad (or any plain-text editor) and save it in that folder, named exactly .mcp.json – a dot at the start, and no .txt at the end.  
+4. In the Claude desktop app, start a new session in that folder. (If you use Claude Code in a terminal, run the command shown in the same window instead.)  
+5. Ask Claude “Can you see the PDF I have open?” to check that it’s connected.
+
+The code in that file works like a password to the app, so don’t email or share the .mcp.json file.
+
+### Working With Claude
+
+Claude is best at the first step of the Suggested AI Workflow above: correcting the tag structure. A good routine:
+
+1. Open the PDF in LastMilePDF and ask Claude to “fix this PDF.” It looks at every page first, then works through headings, lists and tables that break across pages, captions, alt text, bookmarks, and the title and author. Long documents take a while, and you can watch the changes appear as it goes.  
+2. While it’s editing, a “Claude is editing” bar appears and the app ignores your own clicks and keys, so the two of you don’t trip over each other. Press Stop or Escape at any time to take back control.  
+3. Read its report. It says what it did and what still needs a person – often something only Select Content can fix, since Claude can’t draw on the page.  
+4. Check its work. When it finishes, the status bar offers “Show the tags Claude changed”; click it to select them all in the Tag Tree. Pay most attention to alt text and headings.  
+5. Handle the “Artifact?” tags. Claude doesn’t decide on its own what’s decoration; it tags anything it suspects as “Artifact?” for you. Use Tools \> Find/Replace, type Artifact? as the tag type, and click Find to step through them. Press DELETE on the ones that really are decoration, and give the rest their proper tag.  
+6. Carry on with steps 2–5 of the Suggested AI Workflow: Fix All Actual Text (AI) for OCR errors, then proofread. Claude leaves big OCR fixes to that tool.  
+7. Run Verify, then Save.
+
+Don’t like what it did? Claude works in batches, and CTRL+Z takes back a whole batch at once rather than one change at a time. Your own edits stay separate steps.
+
+### Tips
+
+- Talk to it the way you would to a colleague: “the list on page 4 should be one list, not two,” or “make every ‘Figure 3.1…’ line a Caption.”  
+- Select a tag and say “this one” – Claude can see what you have selected.  
+- Ask it to show you things: “select the tables you weren’t sure about.”  
+- It can run your saved scripts: “run my cleanup script.”  
+- Have house rules? Add them under File \> Settings \> Desktop Agents \> Instructions for “Fix this PDF” (for example, “chapter titles are always H1”). Reset to default brings back the original.  
+- Start small if you’re new to it: ask about one table or one page before handing over a whole document.
