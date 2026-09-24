@@ -2140,6 +2140,17 @@ function requireCustomProviderConfig(providerId) {
 }
 
 /**
+ * Accepts either the API root (the OpenAI SDK's "base URL" convention, e.g.
+ * https://api.openai.com/v1) or the full .../chat/completions endpoint, and
+ * returns the full endpoint - so both what other tools call a base URL and
+ * the full URL saved by earlier versions of this app keep working.
+ */
+function resolveChatCompletionsUrl(baseUrl) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '');
+  return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
+}
+
+/**
  * POSTs one OpenAI chat-completions-style request to a custom endpoint and
  * returns the reply text. `jsonMode` sets response_format: json_object as a
  * best-effort hint - endpoints that ignore unknown fields still work, since
@@ -2161,9 +2172,10 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
       { type: 'text', text: prompt },
       ...images.map((img) => ({ type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.data}` } })),
     ];
+  const url = resolveChatCompletionsUrl(baseUrl);
   let response;
   try {
-    response = await fetch(baseUrl, {
+    response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2182,7 +2194,7 @@ async function customChatCompletion({ apiKey, baseUrl, model, system, prompt, js
       }),
     });
   } catch (err) {
-    throw new Error(`Could not reach the custom AI endpoint (${baseUrl}): ${err.message}`);
+    throw new Error(`Could not reach the custom AI endpoint (${url}): ${err.message}`);
   }
 
   if (!response.ok) {
