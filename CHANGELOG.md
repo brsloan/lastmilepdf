@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-24
+
 ### Added
 - **Claude can work on the PDF you have open, alongside you.** Turning on
   the Claude connection in the new File > Settings > Desktop Agents dialog
@@ -76,6 +78,10 @@ they summarise each release rather than record every change as it landed.
   can see, which left any page redraw - and everything waiting on it, such as
   an undo that has to refresh the page - hanging until the window was brought
   back to the front.
+- A custom AI provider's Base URL can now be the API root (for example
+  `https://api.example.com/v1`), as the OpenAI SDK expects; the app adds
+  `/chat/completions` itself when it is missing. Full URLs saved by earlier
+  versions keep working unchanged, and a hint under the field says so.
 
 ## [0.6.0] - 2026-09-15
 
@@ -482,7 +488,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/brsloan/lastmilepdf/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/brsloan/lastmilepdf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/brsloan/lastmilepdf/compare/v0.4.2...v0.4.3
