@@ -10,6 +10,8 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-28
+
 ### Added
 - **Tools > Remove Links turns every link back into plain text.** OCR and
   autotagging often make URLs in the text into links, and those links fail
@@ -500,7 +502,8 @@ accessibility structure tree.
 - Opt-out auto-update, a Linux AppImage build, CI and release automation.
 - MIT license and community files.
 
-[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/brsloan/lastmilepdf/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/brsloan/lastmilepdf/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/brsloan/lastmilepdf/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/brsloan/lastmilepdf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brsloan/lastmilepdf/compare/v0.4.3...v0.5.0
