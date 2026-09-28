@@ -3,8 +3,8 @@
 // The operations shared between a toolbar button (or, for Repair Orphaned
 // Content, the Tools menu and the Verify panel's inline "Repair" button) and
 // a Tools > Scripts… script step (see scripts.js's runActiveScript()):
-// Smartifact, Repair Orphaned Content, Scope Tables, Flatten All,
-// Find/Replace, and Fix All Actual Text (AI). Kept in one place so every
+// Smartifact, Repair Orphaned Content, Remove Links, Scope Tables, Flatten
+// All, Find/Replace, and Fix All Actual Text (AI). Kept in one place so every
 // trigger for the same action does exactly the same thing - each function
 // here applies the mutation, updates `state`/the tree view/undo state, and
 // returns a status message; the caller decides where that message goes
@@ -107,6 +107,28 @@ export async function runRepairOrphanedContent() {
   return result.repairedCount > 0
     ? `Repaired ${result.repairedCount} orphaned marked-content region${result.repairedCount === 1 ? '' : 's'}.`
     : 'No orphaned marked content found.';
+}
+
+/**
+ * Turns every link in the document back into plain text: the link
+ * annotations come off the pages, and each Link tag's text goes back to the
+ * tag around it (see remove_links() in tag_worker.py). For URLs that OCR or
+ * an autotagger made into links nobody wanted, whose annotations fail the
+ * link checks however the tags are edited. Runs from Tools > Remove Links,
+ * the Verify panel's inline "Remove links" button on a failing link check,
+ * and a script's 'remove-links' step.
+ * @returns {Promise<string>}
+ */
+export async function runRemoveLinks() {
+  const result = await window.api.removeLinks(state.docId);
+  applyFreshTree(result.tree);
+  applyUndoState(result);
+  const { annotationsRemoved: annotations, tagsRemoved: tags } = result;
+  if (annotations === 0 && tags === 0) return 'No links found.';
+  const parts = [];
+  if (annotations > 0) parts.push(`${annotations} link annotation${annotations === 1 ? '' : 's'}`);
+  if (tags > 0) parts.push(`${tags} Link tag${tags === 1 ? '' : 's'}`);
+  return `Removed ${parts.join(' and ')}. The text stays as plain text.`;
 }
 
 /**

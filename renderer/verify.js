@@ -12,6 +12,7 @@
 // section of tag_worker.py) and countOrphanedContent().
 
 import {
+  runRemoveLinks,
   runRepairOrphanedContent,
   runSetPdfUaIdentifier,
   runSetStructureTabOrder,
@@ -549,6 +550,12 @@ function buildTablesGroup() {
 //
 // An untagged link has no tag to jump to, so its row names the page instead
 // of being clickable - see the null nodeId handling in renderVerifyResults().
+//
+// Either failure offers "Remove links": most failing links in an OCR'd scan
+// are URLs the tagger turned into links nobody wanted, and for those the fix
+// is plain text, not a Link tag with a description.
+const REMOVE_LINKS_FIX = { label: 'Remove links', run: runRemoveLinks };
+
 function buildLinksGroup(facts) {
   if (!facts) {
     return {
@@ -586,6 +593,7 @@ function buildLinksGroup(facts) {
         detail: untagged.length
           ? `${countLabel(untagged.length, 'link')} of ${links.length} ${untagged.length === 1 ? 'is' : 'are'} not inside a Link tag, so ${untagged.length === 1 ? 'it never reaches' : 'they never reach'} the reading order.`
           : `All ${countLabel(links.length, 'link')} sit inside a Link tag.`,
+        fix: untagged.length ? REMOVE_LINKS_FIX : null,
         instances: untagged.map((link) => ({
           nodeId: null,
           detail: `Link annotation on page ${link.page} has no Link tag`,
@@ -597,6 +605,7 @@ function buildLinksGroup(facts) {
         detail: undescribed.length
           ? `${countLabel(undescribed.length, 'link')} of ${links.length} ${undescribed.length === 1 ? 'has' : 'have'} no alternate description – a screen reader can only read out the destination.`
           : 'Every link carries an alternate description.',
+        fix: undescribed.length ? REMOVE_LINKS_FIX : null,
         instances: undescribed.map((link) => ({
           nodeId: link.nodeId,
           detail: link.nodeId
@@ -933,7 +942,7 @@ function buildStatusMarker(status) {
 }
 
 // A failing check can offer a one-click action (`fix`): repairing orphaned
-// marked content, setting tab order, or - once nothing else is failing -
+// marked content, setting tab order, removing links, or - once nothing else is failing -
 // writing the PDF/UA identifier. Each runs the same actions.js function its
 // other trigger(s) use, then re-renders the whole report in place so the
 // dialog shows the action having actually taken effect rather than leaving a

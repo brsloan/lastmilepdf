@@ -1093,6 +1093,7 @@ function buildAppMenu() {
         { label: 'Find/Replace…', accelerator: 'CmdOrCtrl+F', click: (_item, win) => sendToWindow(win, 'menu:find-replace') },
         { type: 'separator' },
         { label: 'Repair Orphaned Content', click: (_item, win) => sendToWindow(win, 'menu:repair-orphaned-content') },
+        { label: 'Remove Links', click: (_item, win) => sendToWindow(win, 'menu:remove-links') },
         { type: 'separator' },
         { label: 'Scripts…', click: (_item, win) => sendToWindow(win, 'menu:scripts') },
       ],
@@ -1658,6 +1659,10 @@ ipcMain.handle('tags:scope-tables', async (_event, { docId }) => {
 
 ipcMain.handle('tags:repair-orphaned-content', async (_event, { docId }) => {
   return callWorker('repair_orphaned_artifacts', { docId });
+});
+
+ipcMain.handle('tags:remove-links', async (_event, { docId }) => {
+  return callWorker('remove_links', { docId });
 });
 
 ipcMain.handle('tags:count-orphaned-content', async (_event, { docId }) => {

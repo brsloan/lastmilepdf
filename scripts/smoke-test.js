@@ -2582,6 +2582,29 @@ async function verifyTests(fixture) {
       assertEqual(facts.linkAnnotations.length, 3, 'writing XMP disturbed the annotations');
     });
   }));
+
+  await test('removing links leaves their text as plain text', () => withDoc(fixture, async (doc) => {
+    const contentBefore = contentFingerprint(doc.tree);
+    const result = await worker.call('remove_links', { docId: doc.docId });
+    assertEqual(result.annotationsRemoved, 3, 'every link annotation, tagged or not, should go');
+    assertEqual(result.tagsRemoved, 2, 'both Link tags should go');
+    assertEqual(contentFingerprint(result.tree), contentBefore, 'removing links moved or lost text');
+    assertEqual(allNodes(result.tree).filter((n) => n.role === 'Link').length, 0, 'a Link tag survived');
+    assertEqual(allNodes(result.tree).filter((n) => n.type === 'object-ref').length, 0,
+      'an /OBJR to a removed annotation was left in the tree');
+    assertEqual(ownerOfLeaf(result.tree, 0, 4).role, 'P', 'the link text should now belong to its paragraph');
+
+    const again = await worker.call('remove_links', { docId: doc.docId });
+    assertEqual(again.annotationsRemoved + again.tagsRemoved, 0, 'a second run still found links');
+
+    await saveAndReopen(doc.docId, 'remove-links', async (reopened) => {
+      const facts = await worker.call('verify_document_facts', { docId: reopened.docId });
+      assertEqual(facts.linkAnnotations.length, 0, 'the saved file still has link annotations');
+      assertEqual(contentFingerprint(reopened.tree), contentBefore, 'the saved file lost the link text');
+      const orphans = await worker.call('count_orphaned_artifacts', { docId: reopened.docId });
+      assertEqual(orphans.totalCount, 0, 'removing links left marked content no tag claims');
+    });
+  }));
 }
 
 // The same check against the main fixture, which has five Figures and no

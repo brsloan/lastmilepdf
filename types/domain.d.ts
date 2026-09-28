@@ -123,6 +123,18 @@ export interface RepairOrphanedContentResult extends MutationResult {
 }
 
 /**
+ * `remove_links()`'s result: how many link annotations came off the pages,
+ * and how many Link tags went (tagsRetagged of them kept as a P or Span
+ * rather than dissolved into their parent - see the "removing links"
+ * section of tag_worker.py).
+ */
+export interface RemoveLinksResult extends MutationResult {
+  annotationsRemoved: number;
+  tagsRemoved: number;
+  tagsRetagged: number;
+}
+
+/**
  * `count_orphaned_marked_content()`'s result: how many marked-content
  * regions `repair_orphaned_marked_content()` would fix right now, and how
  * many pages they're spread across. Read-only - see
@@ -596,7 +608,7 @@ export interface SplitLeavesResult extends MutationResult {
  */
 export interface ScriptStep {
   id: string;
-  type: 'smartifact' | 'scope-tables' | 'flatten-all' | 'find-replace' | 'fix-actual-text-ai' | 'repair-orphaned-content';
+  type: 'smartifact' | 'scope-tables' | 'flatten-all' | 'find-replace' | 'fix-actual-text-ai' | 'repair-orphaned-content' | 'remove-links';
   findRole?: string;
   replaceRole?: string;
 }

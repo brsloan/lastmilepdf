@@ -10,6 +10,18 @@ they summarise each release rather than record every change as it landed.
 
 ## [Unreleased]
 
+### Added
+- **Tools > Remove Links turns every link back into plain text.** OCR and
+  autotagging often make URLs in the text into links, and those links fail
+  the accessibility checks in ways editing the tags can't fix - artifacting a
+  Link tag hides its text but leaves the link itself on the page. Remove Links
+  takes the link annotations off every page, dissolves each Link tag into the
+  paragraph or reference around it, and renames the link marking in the page
+  content, so no checker finds a link left anywhere. The words keep their
+  place in the reading order, and one undo brings the links back. It is also
+  a Scripts step, and a **Remove links** button on the Verify panel's failing
+  link checks.
+
 ## [0.7.0] - 2026-09-24
 
 ### Added

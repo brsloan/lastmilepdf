@@ -60,7 +60,9 @@ Scope / known limitations (read this before extending):
     content already sitting in that same broken state - whether left there
     by a version of delete_nodes() that predates this fix, or never linked
     to the struct tree at all by whatever tool produced the PDF - and
-    applies the same `/Artifact BMC` rewrite. All three touch content
+    applies the same `/Artifact BMC` rewrite; and remove_links(), which
+    renames `/Link BDC` marked content to `/Span` (and also takes the link
+    annotations off the pages - see its section). All four touch content
     streams in a narrowly scoped, mechanically verified way - never a
     free-form rewrite. Two further commands touch neither the struct tree
     nor a content stream: set_structure_tab_order() writes /Tabs on page
@@ -5746,6 +5748,235 @@ def set_pdf_ua_identifier(doc_id):
     return {"pdfUaPart": _pdf_ua_part(doc), **_undo_state(doc)}
 
 
+# --- removing links ----------------------------------------------------------
+#
+# OCR and autotagging (Adobe's especially) turn anything in the text that looks
+# like a URL into a link annotation, and those links then fail checks in ways
+# nothing else in the app can repair: an annotation no Link tag claims, a Link
+# tag claiming no annotation, a link with no description. Artifacting the Link
+# tag only hides its text - the annotation itself is still on the page, so the
+# checks still fail. When the URL was never meant to be a link, the fix is to
+# make it plain text again, everywhere a checker looks for one:
+#
+#   - the /Link annotations themselves, taken out of every page's /Annots;
+#   - the /OBJR leaves that pointed the tag tree at them;
+#   - every Link struct element, its text handed back to the tag around it;
+#   - the `/Link BDC` marked-content tags in the page content streams, renamed
+#     /Span, so the raw content view no longer calls the text a link either.
+#
+# Everything else - the words, their MCIDs, the reading order - is untouched.
+
+# Where a Link can't simply dissolve into its parent, because content has to
+# sit in a block of its own there rather than loose among whole sections. The
+# Link is kept and retagged P instead.
+_LINK_GROUPING_PARENTS = frozenset([
+    "Document", "DocumentFragment", "Part", "Art", "Sect", "Div", "NonStruct", "Private",
+])
+
+
+def _link_roles(doc):
+    """The struct roles that mean Link in this document: Link itself, plus any
+    custom role the /RoleMap maps onto it, which a checker treats exactly the
+    same."""
+    roles = {"Link"}
+    role_map = doc["elements"]["root"].get("/RoleMap")
+    if isinstance(role_map, pikepdf.Dictionary):
+        for custom, standard in role_map.items():
+            if str(standard) == "/Link":
+                roles.add(str(custom).lstrip("/"))
+    return roles
+
+
+def _is_link_annotation(obj):
+    return (
+        isinstance(obj, pikepdf.Dictionary)
+        and str(obj.get("/Subtype")) == "/Link"
+    )
+
+
+def _is_link_objr(kid):
+    return (
+        isinstance(kid, pikepdf.Dictionary)
+        and str(kid.get("/Type")) == "/OBJR"
+        and _is_link_annotation(kid.get("/Obj"))
+    )
+
+
+def _count_link_tags(struct_obj, link_roles):
+    """(Link elements, /OBJRs pointing at link annotations) anywhere under
+    struct_obj."""
+    elements = 0
+    objrs = 0
+    for kid in _iter_kids(struct_obj):
+        if _is_link_objr(kid):
+            objrs += 1
+        elif isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            if _role_of(kid) in link_roles:
+                elements += 1
+            sub_elements, sub_objrs = _count_link_tags(kid, link_roles)
+            elements += sub_elements
+            objrs += sub_objrs
+    return elements, objrs
+
+
+def _unwrap_links(doc, struct_obj, inherited_page, link_roles, is_root=False):
+    """Removes every link from struct_obj's subtree, post-order so a Link
+    nested in a Link comes out too. Returns how many Link elements were
+    retagged rather than dissolved.
+
+    A Link /OBJR is simply dropped - its annotation is gone. A Link element
+    dissolves into its parent, its remaining kids spliced in where it stood
+    (through _rehome_flattened_kid, for the same inherited-/Pg reason Flatten
+    has), so the URL reads as ordinary text of the paragraph or reference it
+    sits in. Two cases keep the element and change its role instead:
+
+    - under the root or a grouping tag (see _LINK_GROUPING_PARENTS), where
+      loose content would be out of place: it becomes a P;
+    - carrying /ActualText, which dissolving would lose: it becomes a Span.
+
+    Either way its /Alt goes, since that described the link rather than the
+    text. A Link left holding nothing at all (only ever an /OBJR) is dropped."""
+    own_page = _resolve_page_index(doc, struct_obj.get("/Pg"))
+    if own_page is None:
+        own_page = inherited_page
+    parent_role = None if is_root else _role_of(struct_obj)
+    grouping_parent = is_root or parent_role in _LINK_GROUPING_PARENTS
+    retagged = 0
+    changed = False
+    new_kids = []
+    for kid in _iter_kids(struct_obj):
+        if _is_link_objr(kid):
+            changed = True
+            continue
+        if isinstance(kid, pikepdf.Dictionary) and "/S" in kid:
+            kid_page = _resolve_page_index(doc, kid.get("/Pg"))
+            if kid_page is None:
+                kid_page = own_page
+            retagged += _unwrap_links(doc, kid, kid_page, link_roles)
+            if _role_of(kid) in link_roles:
+                changed = True
+                grandkids = _iter_kids(kid)
+                if not grandkids:
+                    continue
+                if grouping_parent or "/ActualText" in kid:
+                    kid["/S"] = pikepdf.Name("/P" if grouping_parent else "/Span")
+                    if "/Alt" in kid:
+                        del kid["/Alt"]
+                    retagged += 1
+                    new_kids.append(kid)
+                    continue
+                for grandkid in grandkids:
+                    new_kids.append(
+                        _rehome_flattened_kid(doc, grandkid, struct_obj, kid_page, own_page)
+                    )
+                continue
+        new_kids.append(kid)
+    if changed:
+        if new_kids:
+            struct_obj["/K"] = pikepdf.Array(new_kids)
+        elif "/K" in struct_obj:
+            del struct_obj["/K"]
+    return retagged
+
+
+def _pages_with_link_marked_content(doc):
+    """{page_index: parsed instructions} for every page whose content stream
+    opens a `/Link` marked-content span. Parsed here once, so the rewrite
+    doesn't parse the same pages a second time. A page that won't parse is
+    left out, the same way every other content-stream reader here skips one."""
+    found = {}
+    for page_index, page in enumerate(doc["pdf"].pages):
+        try:
+            instructions = pikepdf.parse_content_stream(page)
+        except Exception:
+            continue
+        if any(
+            str(instr.operator) in ("BDC", "BMC")
+            and instr.operands
+            and str(instr.operands[0]) == "/Link"
+            for instr in instructions
+        ):
+            found[page_index] = instructions
+    return found
+
+
+def _rename_link_marked_content(doc, page_index, instructions):
+    """Renames every `/Link BDC`/`BMC` on the page to /Span, keeping its
+    property list (and so its MCID) exactly as it was. Nothing is painted
+    differently - only the tag name changes - so unlike the artifacting
+    rewrite this leaves content_gen alone, and the renderer's copy of the
+    page stays valid."""
+    page = doc["pdf"].pages[page_index]
+    rewritten = []
+    for instr in instructions:
+        if (str(instr.operator) in ("BDC", "BMC")
+                and instr.operands and str(instr.operands[0]) == "/Link"):
+            operands = [pikepdf.Name("/Span")] + list(instr.operands[1:])
+            instr = pikepdf.ContentStreamInstruction(operands, instr.operator)
+        rewritten.append(instr)
+    page.contents_coalesce()
+    page.obj.Contents.write(pikepdf.unparse_content_stream(rewritten))
+
+
+def remove_links(doc_id):
+    """Turns every link in the document back into plain text - see this
+    section's header. Backs Tools > Remove Links, the Verify panel's
+    "Remove links" button and a script's 'remove-links' step.
+
+    Returns {"tree", "annotationsRemoved", "tagsRemoved", "tagsRetagged",
+    ...undo state}. tagsRemoved counts Link elements (retagged ones
+    included); a document with nothing to remove comes back unchanged, with
+    no undo step pushed."""
+    doc = documents[doc_id]
+    pdf = doc["pdf"]
+    tagged = doc["elements"].get("root") is not None
+    link_roles = _link_roles(doc) if tagged else set()
+
+    annots_by_page = {}
+    for page_index, page in enumerate(pdf.pages):
+        annots = page.obj.get("/Annots")
+        if isinstance(annots, pikepdf.Array) and any(_is_link_annotation(a) for a in annots):
+            annots_by_page[page_index] = annots
+    annotations = sum(
+        sum(1 for a in annots if _is_link_annotation(a)) for annots in annots_by_page.values()
+    )
+    link_elements, link_objrs = (
+        _count_link_tags(doc["elements"]["root"], link_roles) if tagged else (0, 0)
+    )
+    marked_pages = _pages_with_link_marked_content(doc)
+
+    if not (annotations or link_elements or link_objrs or marked_pages):
+        return {
+            "tree": _rebuild_registry(doc_id), "annotationsRemoved": 0,
+            "tagsRemoved": 0, "tagsRetagged": 0, **_undo_state(doc),
+        }
+
+    _push_undo_snapshot(doc)
+
+    for page_index, annots in annots_by_page.items():
+        kept = [a for a in annots if not _is_link_annotation(a)]
+        page_obj = pdf.pages[page_index].obj
+        if kept:
+            page_obj["/Annots"] = pikepdf.Array(kept)
+        else:
+            del page_obj["/Annots"]
+
+    retagged = 0
+    if tagged:
+        retagged = _unwrap_links(doc, doc["elements"]["root"], None, link_roles, is_root=True)
+
+    for page_index, instructions in marked_pages.items():
+        _rename_link_marked_content(doc, page_index, instructions)
+
+    return {
+        "tree": _rebuild_after_mutation(doc_id),
+        "annotationsRemoved": annotations,
+        "tagsRemoved": link_elements,
+        "tagsRetagged": retagged,
+        **_undo_state(doc),
+    }
+
+
 def _reindex_pages(doc):
     """Rebuilds page_index_by_objgen against doc["pdf"]'s current page
     objects - qpdf renumbers objects on save/reload, so the mapping built at
@@ -5983,6 +6214,8 @@ def main():
                 result = set_structure_tab_order(request["docId"])
             elif cmd == "set_pdf_ua_identifier":
                 result = set_pdf_ua_identifier(request["docId"])
+            elif cmd == "remove_links":
+                result = remove_links(request["docId"])
             elif cmd == "join_tags":
                 result = join_tags(request["docId"], request["nodeIds"])
             elif cmd == "split_leaves":

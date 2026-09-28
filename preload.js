@@ -206,6 +206,11 @@ const api = {
     ipcRenderer.invoke('tags:repair-orphaned-content', { docId }),
   /**
    * @param {string} docId
+   * @returns {Promise<import('./types/domain').RemoveLinksResult>}
+   */
+  removeLinks: (docId) => ipcRenderer.invoke('tags:remove-links', { docId }),
+  /**
+   * @param {string} docId
    * @returns {Promise<import('./types/domain').OrphanedContentCount>}
    */
   countOrphanedContent: (docId) =>
@@ -472,6 +477,8 @@ const api = {
   onMenuFindReplace: (callback) => onMenu('menu:find-replace', callback),
   /** @param {() => void} callback */
   onMenuRepairOrphanedContent: (callback) => onMenu('menu:repair-orphaned-content', callback),
+  /** @param {() => void} callback */
+  onMenuRemoveLinks: (callback) => onMenu('menu:remove-links', callback),
   /** @param {(event: unknown, checked: boolean) => void} callback */
   onMenuShowAtChanges: (callback) => onMenu('menu:show-at-changes', callback),
   /**

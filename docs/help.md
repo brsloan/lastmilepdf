@@ -155,7 +155,7 @@ Fix All Actual Text (AI)
 : Sends every tag's Actual Text to your AI provider in one batch, for consistency across the document, and applies its fixes. Each fixed tag is flagged in the tree; select one to see its changes highlighted, with **Revert** to discard that fix.
 
 Verify
-: Runs common accessibility checks (tagging, title, language, tab order, PDF/UA identifier, headings, empty tags, lists, tables, links, alt text, bookmarks, orphaned content) and opens the results in their own window. Click an issue to jump to its tag. Three checks have a fix button: **Repair** for orphaned content, **Set tab order**, and **Set PDF/UA flag**. The last appears only once everything else passes, since it claims conformance rather than fixing anything. Verify re-runs after each fix and after every save, putting the fail/pass count in the status bar.
+: Runs common accessibility checks (tagging, title, language, tab order, PDF/UA identifier, headings, empty tags, lists, tables, links, alt text, bookmarks, orphaned content) and opens the results in their own window. Click an issue to jump to its tag. Four checks have a fix button: **Repair** for orphaned content, **Set tab order**, **Remove links** for failing links, and **Set PDF/UA flag**. The last appears only once everything else passes, since it claims conformance rather than fixing anything. Verify re-runs after each fix and after every save, putting the fail/pass count in the status bar.
 
 ## Tools menu
 
@@ -164,6 +164,9 @@ Find/Replace…
 
 Repair Orphaned Content
 : Artifacts invisible content that is neither tagged nor artifacted: formatting leftovers such as hyphenation or kerning glue, invisible joiners and background bands, often found around wrapped URLs in a reference list.
+
+Remove Links
+: Turns every link in the document into plain text. OCR and autotagging often make URLs into links that fail the link checks however they are tagged; this removes the link annotations and Link tags, and the words stay where they are in the reading order. Undo brings the links back.
 
 Scripts…
 : Opens the script builder. See "Scripts" below.

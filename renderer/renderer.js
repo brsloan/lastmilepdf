@@ -1,4 +1,4 @@
-import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
+import { runFindReplaceAll, runFixAllActualTextAi, runFlattenSelectionOrAll, runRemoveLinks, runRepairOrphanedContent, runScopeTables, runSmartifact } from './actions.js';
 import { setShowAtChanges, updateActualTextReviewUI } from './actual-text.js';
 import { initAgentBridge } from './agent.js';
 import { notifyAiBatchComplete } from './ai-batch.js';
@@ -1945,6 +1945,23 @@ window.api.onMenuRepairOrphanedContent(async () => {
     setStatus(await runRepairOrphanedContent());
   } catch (err) {
     reportError('Could not repair orphaned content', err);
+  } finally {
+    document.body.classList.remove('busy');
+  }
+});
+
+// --- Remove Links (Tools menu) --------------------------------------------
+//
+// A one-shot action like Repair Orphaned Content above, and the same
+// runRemoveLinks() the Verify panel's inline "Remove links" button calls.
+window.api.onMenuRemoveLinks(async () => {
+  if (!state.docId || !state.hasStructTree) return;
+  document.body.classList.add('busy');
+  try {
+    setStatus('Removing links…');
+    setStatus(await runRemoveLinks());
+  } catch (err) {
+    reportError('Could not remove links', err);
   } finally {
     document.body.classList.remove('busy');
   }
